@@ -208,7 +208,9 @@ async fn two_user_browser_journey_fences_admin_data_and_personal_credentials() {
         identity::bootstrap_admin(&database, "admin", "M006 strong admin password passphrase")
             .await
             .unwrap();
-    identity::enable_managed(&database).await.unwrap();
+    identity::enable_managed(&database, &admin.id)
+        .await
+        .unwrap();
 
     let process = ProcessRuntime::new(database.clone()).expect("process runtime");
     let mut config = Config::default();
@@ -694,10 +696,13 @@ async fn managed_server(
 async fn browser_sign_in_accepts_the_origin_and_referer_pair_a_real_browser_sends() {
     let (_directory, database) = database().await;
     identity::mark_fresh_uninitialized(&database).await.unwrap();
-    identity::bootstrap_admin(&database, "admin", "M011 strong admin password passphrase")
+    let (admin, _) =
+        identity::bootstrap_admin(&database, "admin", "M011 strong admin password passphrase")
+            .await
+            .unwrap();
+    identity::enable_managed(&database, &admin.id)
         .await
         .unwrap();
-    identity::enable_managed(&database).await.unwrap();
     let (address, handle, task) = managed_server(&database).await;
     let origin = format!("http://{address}");
     let form = "username=admin&password=M011+strong+admin+password+passphrase";

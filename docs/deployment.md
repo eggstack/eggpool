@@ -56,12 +56,16 @@ authentication behavior until an operator explicitly initializes local user
 access.
 
 Manage local identities from the machine that owns the data directory with
-`eggpool users list`, `eggpool users token USER`, `eggpool users revoke USER`,
-and `eggpool users reset-password USER`. Personal tokens are for inference,
+`eggpool users add USER --password-stdin`, `eggpool users show USER`,
+`eggpool users disable USER`, `eggpool users enable USER`,
+`eggpool users token USER`, `eggpool users revoke USER`, and
+`eggpool users reset-password USER`. Member passwords are read from a hidden TTY prompt or stdin; passwords
+are never accepted in argv. Add `--profile-id PROFILE` to assign the initial
+model policy in the same transaction. Personal tokens are for inference,
 model discovery, and the integration profile; they do not authorize dashboard
 or admin pages. The configured server API key remains a legacy shared
-inference credential during the staged migration. Do not share it with new
-users; issue an individual token instead.
+inference credential only while the database is `legacy_unmigrated`. Do not
+share it with new users; issue an individual token instead.
 
 With `[dashboard].enabled = true`, an administrator can manage users, profiles,
 budgets, tokens, and audit history in the embedded dashboard. New members
@@ -436,12 +440,17 @@ After the first local administrator is created, the shared key is no longer
 accepted; personal tokens authenticate agent surfaces, while dashboard and
 admin routes require a browser session regardless of `dashboard.public`.
 
-For managed operation, remove `[server].api_key` and unset its configured
-environment variable, then set `dashboard.public = false` and run
-`eggpool users enable-managed`. That command refuses the transition while the
-shared key or public-dashboard setting remains. Non-loopback listeners may
-then run without a shared server key because protected routes require a
-personal token or browser session.
+The first successful `eggpool users add USER` moves an initialized instance
+from `admin_initialized` to `managed` atomically with member creation, profile
+assignment, and audit. `eggpool users enable-managed` records that transition
+explicitly and requires an active local administrator. Both paths apply the
+same database transition rules. After identity initialization, EggPool
+rejects the configured legacy shared key and ignores `dashboard.public` for
+privileged routes. Remove `[server].api_key`/`api_key_env` and set
+`dashboard.public = false` as configuration hygiene; stale values do not
+restore legacy access or block the identity cutover. Non-loopback listeners
+can run without a shared key because protected routes require a personal token
+or browser session.
 
 Browser password login is allowed over loopback HTTP. For remote browser use,
 terminate TLS at an operator-managed proxy and add the proxy's literal peer IP

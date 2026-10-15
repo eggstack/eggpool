@@ -323,3 +323,35 @@ fn local_user_budget_commands_parse_with_bounded_windows() {
         .is_err()
     );
 }
+
+#[test]
+fn headless_member_lifecycle_commands_parse_with_secret_safe_inputs() {
+    assert!(
+        Cli::try_parse_from([
+            "eggpool",
+            "users",
+            "add",
+            "member-a",
+            "--password-stdin",
+            "--profile-id",
+            "restricted",
+            "--actor",
+            "admin",
+        ])
+        .is_ok()
+    );
+    assert!(Cli::try_parse_from(["eggpool", "users", "disable", "member-a"]).is_ok());
+    assert!(Cli::try_parse_from(["eggpool", "users", "enable", "member-a"]).is_ok());
+    assert!(Cli::try_parse_from(["eggpool", "users", "show", "member-a"]).is_ok());
+    assert!(
+        Cli::try_parse_from([
+            "eggpool",
+            "users",
+            "add",
+            "member-a",
+            "--password",
+            "plaintext-in-argv",
+        ])
+        .is_err()
+    );
+}

@@ -681,21 +681,15 @@ async fn open_operational_database(
 
 async fn users(path: &Path, command: crate::cli::UsersCommand) -> Result<(), BootstrapError> {
     let config = config::Config::from_toml(path)?;
-    if matches!(&command, crate::cli::UsersCommand::EnableManaged)
-        && (config.resolved_server_api_key().is_some() || config.dashboard.public)
-    {
-        return Err(command_error(
-            EXIT_VALIDATION,
-            "retire server.api_key/api_key_env and set dashboard.public = false before enabling managed access",
-        ));
-    }
     let database = open_operational_database(&config, false).await?;
     match command {
-        crate::cli::UsersCommand::EnableManaged => {
-            crate::identity::enable_managed(&database)
+        crate::cli::UsersCommand::EnableManaged(args) => {
+            let actor = policy_actor_id(&database, &args.actor).await?;
+            crate::identity::enable_managed(&database, &actor)
                 .await
                 .map_err(|error| command_error(EXIT_VALIDATION, error.to_string()))?;
             println!("Managed browser and personal-token access is enabled.");
+            warn_managed_config_hygiene(&config);
         }
         crate::cli::UsersCommand::List => {
             let users = crate::identity::list_users(&database)
@@ -713,7 +707,7 @@ async fn users(path: &Path, command: crate::cli::UsersCommand) -> Result<(), Boo
             }
         }
         crate::cli::UsersCommand::Bootstrap(args) => {
-            let password = read_user_password(args.password_stdin, true)?;
+            let password = read_user_password(args.password_stdin, true, "Administrator password")?;
             let (user, credential) =
                 crate::identity::bootstrap_admin(&database, &args.username, &password)
                     .await
@@ -721,8 +715,69 @@ async fn users(path: &Path, command: crate::cli::UsersCommand) -> Result<(), Boo
             println!("Administrator {} created.", user.username);
             print_one_time_secret(&credential.token, args.show_secret);
         }
+        crate::cli::UsersCommand::Add(args) => {
+            let actor = policy_actor_id(&database, &args.actor).await?;
+            let password =
+                read_user_password(args.password_stdin, false, "Temporary member password")?;
+            let user = crate::identity::create_member_with_profile(
+                &database,
+                &actor,
+                &args.username,
+                &password,
+                args.profile_id.as_deref(),
+            )
+            .await
+            .map_err(|error| command_error(EXIT_VALIDATION, error.to_string()))?;
+            println!(
+                "Member {} created; the user must change the temporary password at first login.",
+                user.username
+            );
+            println!(
+                "Issue a personal inference token with `eggpool users token {}`.",
+                user.username
+            );
+            warn_managed_config_hygiene(&config);
+        }
+        crate::cli::UsersCommand::Disable(args) => {
+            let actor = policy_actor_id(&database, &args.actor).await?;
+            let user = crate::identity::get_user_by_name(&database, &args.username)
+                .await
+                .map_err(|error| command_error(EXIT_VALIDATION, error.to_string()))?
+                .ok_or_else(|| command_error(EXIT_VALIDATION, "user was not found"))?;
+            crate::identity::set_user_enabled(&database, &actor, &user.id, false)
+                .await
+                .map_err(|error| command_error(EXIT_VALIDATION, error.to_string()))?;
+            println!(
+                "User {} disabled; browser sessions and personal tokens were revoked.",
+                user.username
+            );
+        }
+        crate::cli::UsersCommand::Enable(args) => {
+            let actor = policy_actor_id(&database, &args.actor).await?;
+            let user = crate::identity::get_user_by_name(&database, &args.username)
+                .await
+                .map_err(|error| command_error(EXIT_VALIDATION, error.to_string()))?
+                .ok_or_else(|| command_error(EXIT_VALIDATION, "user was not found"))?;
+            crate::identity::set_user_enabled(&database, &actor, &user.id, true)
+                .await
+                .map_err(|error| command_error(EXIT_VALIDATION, error.to_string()))?;
+            println!(
+                "User {} enabled. Previously revoked credentials stay revoked; issue a new token with `eggpool users token {}`.",
+                user.username, user.username
+            );
+        }
+        crate::cli::UsersCommand::Show(args) => {
+            let user = crate::identity::get_user_by_name(&database, &args.username)
+                .await
+                .map_err(|error| command_error(EXIT_VALIDATION, error.to_string()))?
+                .ok_or_else(|| command_error(EXIT_VALIDATION, "user was not found"))?;
+            println!("username: {}", user.username);
+            println!("role: {}", user.role);
+            println!("state: {}", user.state);
+            println!("must_change_password: {}", user.must_change_password);
+        }
         crate::cli::UsersCommand::ResetPassword(args) => {
-            let password = read_user_password(args.password_stdin, true)?;
+            let password = read_user_password(args.password_stdin, true, "Administrator password")?;
             crate::identity::reset_password(&database, &args.username, &password)
                 .await
                 .map_err(|error| command_error(EXIT_VALIDATION, error.to_string()))?;
@@ -939,7 +994,11 @@ async fn policy_actor_id(
         .ok_or_else(|| command_error(EXIT_VALIDATION, "active administrator was not found"))
 }
 
-fn read_user_password(from_stdin: bool, confirm: bool) -> Result<String, BootstrapError> {
+fn read_user_password(
+    from_stdin: bool,
+    confirm: bool,
+    prompt: &str,
+) -> Result<String, BootstrapError> {
     let password = if from_stdin {
         let mut value = String::new();
         io::stdin()
@@ -955,10 +1014,11 @@ fn read_user_password(from_stdin: bool, confirm: bool) -> Result<String, Bootstr
                 "password input requires a TTY or --password-stdin",
             ));
         }
-        let first = rpassword::prompt_password("Administrator password: ")
+        let first = rpassword::prompt_password(format!("{prompt}: "))
             .map_err(|error| command_error(EXIT_VALIDATION, error.to_string()))?;
         if confirm {
-            let second = rpassword::prompt_password("Confirm password: ")
+            let confirm_prompt = format!("Confirm {}: ", prompt.to_lowercase());
+            let second = rpassword::prompt_password(confirm_prompt)
                 .map_err(|error| command_error(EXIT_VALIDATION, error.to_string()))?;
             if first != second {
                 return Err(command_error(EXIT_VALIDATION, "passwords do not match"));
@@ -967,6 +1027,14 @@ fn read_user_password(from_stdin: bool, confirm: bool) -> Result<String, Bootstr
         first
     };
     Ok(password)
+}
+
+fn warn_managed_config_hygiene(config: &config::Config) {
+    if config.resolved_server_api_key().is_some() || config.dashboard.public {
+        eprintln!(
+            "Managed access is active and the legacy shared key is rejected. For configuration hygiene, remove server.api_key/api_key_env and set dashboard.public = false."
+        );
+    }
 }
 
 fn print_one_time_secret(secret: &str, explicitly_allowed: bool) {
@@ -2509,7 +2577,11 @@ async fn onboard(path: &Path, args: crate::cli::OnboardArgs) -> Result<(), Boots
     };
     let admin_password = if bootstrap_admin {
         println!("Create the local administrator for this new installation.");
-        Some(read_user_password(args.password_stdin, true)?)
+        Some(read_user_password(
+            args.password_stdin,
+            true,
+            "Administrator password",
+        )?)
     } else {
         None
     };

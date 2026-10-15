@@ -80,6 +80,88 @@ async fn bootstrap_is_atomic_and_personal_token_is_one_way() {
 }
 
 #[tokio::test]
+async fn managed_transition_requires_an_active_admin_and_audits_once() {
+    let database = database().await;
+    identity::mark_fresh_uninitialized(&database).await.unwrap();
+    let (admin, _) = identity::bootstrap_admin(&database, "admin", "M020 strong admin password")
+        .await
+        .unwrap();
+
+    assert!(matches!(
+        identity::enable_managed(&database, "missing-admin").await,
+        Err(IdentityError::AdministratorRequired)
+    ));
+    assert_eq!(
+        identity::access_state(&database).await.unwrap(),
+        "admin_initialized"
+    );
+
+    identity::enable_managed(&database, &admin.id)
+        .await
+        .unwrap();
+    identity::enable_managed(&database, &admin.id)
+        .await
+        .unwrap();
+    assert_eq!(identity::access_state(&database).await.unwrap(), "managed");
+    let audit = identity::admin_audit(&database, 10).await.unwrap();
+    assert_eq!(
+        audit
+            .iter()
+            .filter(|entry| entry.action == "enable_managed")
+            .count(),
+        1
+    );
+    database.close().await.unwrap();
+}
+
+#[tokio::test]
+async fn concurrent_first_member_creation_commits_one_transition_and_one_user() {
+    let database = database().await;
+    identity::mark_fresh_uninitialized(&database).await.unwrap();
+    let (admin, _) = identity::bootstrap_admin(&database, "admin", "M020 strong admin password")
+        .await
+        .unwrap();
+
+    let (first, second) = tokio::join!(
+        identity::create_member(
+            &database,
+            &admin.id,
+            "ConcurrentMember",
+            "M020 concurrent member password A"
+        ),
+        identity::create_member(
+            &database,
+            &admin.id,
+            "concurrentmember",
+            "M020 concurrent member password B"
+        )
+    );
+    assert!(matches!(
+        (&first, &second),
+        (Ok(_), Err(IdentityError::UsernameConflict))
+            | (Err(IdentityError::UsernameConflict), Ok(_))
+    ));
+    assert_eq!(identity::access_state(&database).await.unwrap(), "managed");
+    assert_eq!(identity::list_users(&database).await.unwrap().len(), 2);
+    let audit = identity::admin_audit(&database, 20).await.unwrap();
+    assert_eq!(
+        audit
+            .iter()
+            .filter(|entry| entry.action == "enable_managed")
+            .count(),
+        1
+    );
+    assert_eq!(
+        audit
+            .iter()
+            .filter(|entry| entry.action == "create_user")
+            .count(),
+        1
+    );
+    database.close().await.unwrap();
+}
+
+#[tokio::test]
 async fn simultaneous_bootstrap_commits_only_one_admin() {
     let database = database().await;
     let (first, second) = tokio::join!(

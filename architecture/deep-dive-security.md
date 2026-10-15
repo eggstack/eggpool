@@ -69,6 +69,18 @@ values fall back to the proxy peer. No other forwarded header establishes
 trust.
 `security.allow_insecure_web_auth` is an explicit development override and
 emits a startup warning.
+
+The local operator CLI uses the data-directory owner's filesystem authority.
+`users add` commits a member, optional initial profile, the transition from
+`admin_initialized` to `managed`, and audit entries in one transaction; a
+failed profile assignment leaves the original state intact. The explicit
+`users enable-managed` path uses the same transition helper and records its
+own audit event. A remaining configured shared key is rejected after
+identity initialization, and `dashboard.public` cannot expose managed routes;
+removing those stale config values is cleanup, not a precondition for the
+atomic cutover. Disabling a user revokes sessions and tokens and advances the
+auth epoch. Re-enabling does not un-revoke credentials, and the last active
+administrator remains protected.
 Session-authenticated responses carry `Cache-Control: no-store, max-age=0` so
 account and administration HTML containing identity, budget, or CSRF data is
 not retained by shared or browser caches. Privileged browser mutations also
