@@ -73,7 +73,7 @@ No new runtime, schema or performance claim lands with these plans.
 
 | Subsystem | Milestone | Status | Implementation plan | Handoff note |
 |---|---|---|---|---|
-| On-prem user access | M020 — managed transition and headless administration | active | `plans/implementation/on-prem-user-access/020-managed-transition-headless-admin.md` | Hard M017/M019 satisfied; align managed transition and local member lifecycle commands. |
+| On-prem user access | M020 — managed transition and headless administration | closing | `plans/implementation/on-prem-user-access/020-managed-transition-headless-admin.md` | State transition, headless lifecycle, atomic profile assignment and full local gates passed; closure audit in progress. |
 
 
 ## Blocked work
