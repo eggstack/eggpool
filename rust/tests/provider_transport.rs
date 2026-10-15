@@ -1617,6 +1617,33 @@ async fn direct_https_uses_hostname_verified_explicit_test_root() {
     );
 }
 
+#[tokio::test(flavor = "current_thread")]
+async fn direct_https_rejects_a_server_signed_by_an_untrusted_root() {
+    let server = FixtureServer::https(1);
+    let unrelated_server = FixtureServer::https(1);
+    let mut config = ProviderHttpConfig::new(&server.https_url()).expect("provider config");
+    config.additional_root_certificates.push(
+        unrelated_server
+            .tls_certificate
+            .clone()
+            .expect("unrelated TLS root"),
+    );
+    let client = ProviderHttpClient::new(config).expect("provider client");
+
+    assert_eq!(
+        client
+            .send(
+                Method::GET,
+                "/untrusted-root",
+                HeaderMap::new(),
+                Bytes::new(),
+            )
+            .await
+            .expect_err("untrusted server certificate"),
+        TransportError::Tls
+    );
+}
+
 #[test]
 fn transport_error_display_is_secret_free_and_uri_validation_is_fail_closed() {
     let marker = "provider-api-key-unique-marker";
