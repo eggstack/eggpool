@@ -11,6 +11,8 @@ pub struct StartupRecoveryReport {
     pub requests_interrupted: usize,
     pub reservations_released: usize,
     pub attempts_terminalized: usize,
+    pub user_budget_holds_released: usize,
+    pub instance_budget_holds_released: usize,
     pub last_classification: crate::coordinator::ReconciliationClassification,
     pub converged: bool,
 }
@@ -51,6 +53,8 @@ pub(crate) async fn reconcile(
         requests_interrupted: 0,
         reservations_released: 0,
         attempts_terminalized: 0,
+        user_budget_holds_released: 0,
+        instance_budget_holds_released: 0,
         last_classification: Default::default(),
         converged: false,
     };
@@ -66,6 +70,12 @@ pub(crate) async fn reconcile(
         aggregate.attempts_terminalized = aggregate
             .attempts_terminalized
             .saturating_add(report.attempts_terminalized);
+        aggregate.user_budget_holds_released = aggregate
+            .user_budget_holds_released
+            .saturating_add(report.user_budget_holds_released);
+        aggregate.instance_budget_holds_released = aggregate
+            .instance_budget_holds_released
+            .saturating_add(report.instance_budget_holds_released);
         aggregate.last_classification = report.classification;
         if !report.truncated && report.converged {
             aggregate.converged = true;

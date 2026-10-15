@@ -4,8 +4,10 @@ Back to [Architecture](README.md). See also the review index in
 [overview.md](overview.md) (§§3, 12): §3 is the birds-eye route topology,
 this file is the dashboard authority.
 
-`rust/src/server/dashboard/` is the dashboard subsystem (17 files: 8
-top-level plus 9 under `render/`). Its `mod.rs` is a
+`rust/src/server/dashboard/` is the dashboard subsystem (19 files: 9
+top-level plus 10 under `render/`). Its `admin.rs` owns bounded user,
+profile, usage, audit, and personal-token page handlers; `render/admin.rs`
+owns their pure HTML projections. Its `mod.rs` is a
 thin facade that preserves the route entry points consumed by
 `rust/src/server/mod.rs`. `routes.rs` owns page request parsing and bounded
 data gathering; `api.rs` owns dashboard JSON request parsing and projections;
@@ -48,7 +50,7 @@ unconditionally (inference at `/v1/chat/completions`, `/v1/messages`,
 `/static/dashboard.js`, `/static/chart.js` (served from
 `chart.umd.min.js`), `/static/favicon.svg`, `/static/theme.css`). The
 remaining dashboard surface below is dashboard-gated: it is registered
-only when `[dashboard].enabled`, for 14 pages + 8 JSON endpoints.
+only when `[dashboard].enabled`, for 17 dashboard-gated pages + 8 JSON endpoints.
 
 When `[dashboard].enabled`, the router additionally serves `/`, `/accounts`, `/models`,
 `/models/{*model_id}`, `/latency`, `/events`, `/timeseries`, `/bandwidth`,
@@ -98,6 +100,18 @@ responses, and rendering escapes operator/provider-controlled values. Runtime
 and generation views distinguish active and retiring ownership without exposing
 raw prompts, credentials, cache keys, or provider bodies.
 
+The admin/member surface is owned by `dashboard/admin.rs` and the pure
+`render/admin.rs` renderer. `/users`, `/profiles`, and `/admin/audit` are
+registered only with the dashboard. `/my-account`, `/my-account/models`, and
+`/usage` are browser-session routes; all remain private after identity
+initialization even when `dashboard.public = true`. Admin handlers require an
+active admin browser principal and every mutation checks same-origin plus the
+session-bound CSRF token. Agent credentials cannot enter this surface.
+Personal credential plaintext is rendered only in the creation response,
+which is `no-store`; subsequent account reads contain only bounded labels and
+metadata. The persistent audit projection stores actor, action, target kind,
+target ID, and time, without request content or secrets.
+
 ## Rendering and themes
 
 Pages share one layout (`render_dashboard_layout`) with period/theme
@@ -118,11 +132,14 @@ the embedded `rust/assets/dashboard/themes/*.toml` set parsed into CSS
 variables. Static assets carry explicit cache headers; failures to read
 dashboard data never block inference.
 
-Default auth posture: `[dashboard].public` defaults to `true`, so ordinary
-pages and non-sensitive stats data render without an API key. Inference
-(`/v1/*`), integration (`/api/integrations/*`), and runtime/update/status
-endpoints never inherit that exemption and stay authenticated;
-`eggpool dashboard public --off` restores key auth on ordinary pages and data.
+Legacy auth posture: `[dashboard].public` defaults to `true`, so ordinary
+pages and non-sensitive stats data in `legacy_unmigrated` deployments render
+without an API key. After identity initialization, dashboard pages and every
+`/api/*` route require a browser session regardless of this setting; agent
+tokens remain limited to inference, model discovery, and the integration
+profile. `eggpool dashboard public --off` retains its legacy behavior, while
+`eggpool users enable-managed` requires `dashboard.public = false` before the
+managed transition.
 
 ## Safety invariants
 
@@ -199,12 +216,31 @@ remain unavailable rather than being inferred by page rendering.
 The milestone evidence and source-to-panel review are recorded in
 `plans/closure/dashboard/004-status.md`.
 
+## On-prem admin and member browser qualification
+
+The frozen Python oracle in `scripts/dashboard_parity/` only ever implemented the
+historical M001-M012 pages. It is therefore the reference for those routes alone
+and is never reopened as evidence for the on-prem user-access pages. Those pages
+are owned by EggPool and are qualified by `scripts/dashboard_parity/on_prem.py`,
+which starts one managed instance, bootstraps an administrator through
+`eggpool users bootstrap`, and drives a real browser through both roles against
+a Rust-owned approved reference at
+`tests/fixtures/dashboard-on-prem-browser/reference.json`.
+
+Browser sign-in is gated by `server::auth::same_origin`. A same-origin browser
+form POST sends `Origin` and `Referer` together, so every provenance header that
+is present must agree with the request `Host`; duplicated or userinfo-bearing
+provenance still fails closed. Accepting only a lone `Origin` would have rejected
+every real browser while still admitting a bare `Referer`.
+
 ## Verification
 
 ```bash
 cargo test --manifest-path rust/Cargo.toml --test server_transport -- --test-threads=1
 cargo test --manifest-path rust/Cargo.toml --test status_command -- --test-threads=1
 cargo test --manifest-path rust/Cargo.toml --lib server::dashboard::tests -- --test-threads=1
+cargo test --manifest-path rust/Cargo.toml --test on_prem_admin_ui -- --test-threads=1
 uv run python scripts/qualification_dashboard_parity.py --screenshots
 uv run python scripts/qualification_dashboard_parity.py --shutdown-restart
+uv run python scripts/qualification_dashboard_parity.py --skip-build --on-prem
 ```

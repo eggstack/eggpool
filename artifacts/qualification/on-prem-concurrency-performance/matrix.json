@@ -1,0 +1,177 @@
+{
+  "schema_version": "on-prem-concurrency-matrix.v1",
+  "plan": "on-prem-concurrency-performance M001",
+  "candidate": {
+    "repository_commit_sha": "d2c0830acaeff90c45bffa393453cf0500c4fa64",
+    "sha256": "8609119a7f0494c8541b7a47ddbbe86be45ce3f84096b5ee87c228c71513a538",
+    "rust_toolchain": "rustc 1.99.0 (b940084d7 2026-09-28)",
+    "binary_size_bytes": 34984648,
+    "reported_origin": "q005-qualified-aarch64-copy",
+    "provenance_note": "The runner default origin was not overridden on the six benchmark invocations. The same-hash binary was built on-device by the preceding recorded locked release-build command; this metadata mismatch is retained and disclosed rather than editing raw reports."
+  },
+  "target": {
+    "board_model": "Raspberry Pi 5 Model B Rev 1.0",
+    "architecture": "aarch64",
+    "os": "Ubuntu 24.04.4 LTS",
+    "kernel": "6.8.0-1065-raspi",
+    "filesystem": "ext4",
+    "root_storage_device_class": "mmc",
+    "attestation": "Linux aarch64 plus device-tree board model"
+  },
+  "thresholds": {
+    "source": "On-prem user-access M012 G3, preserved unchanged",
+    "g3_p95_ms": 1000,
+    "g3_max_ms": 3000
+  },
+  "workload": {
+    "config_fixture": "tests/tooling/fixtures/qualification/sbc-benchmark.toml",
+    "provider": "deterministic loopback fixture",
+    "wire": "native OpenAI Responses finite",
+    "request_count_per_run": 32,
+    "concurrency": 4,
+    "sample_count": 30,
+    "warmup_count": 5,
+    "configured_provider_accounts": 1,
+    "named_principal": "one synthetic administrator personal token",
+    "hard_user_or_global_budgets_enabled": false,
+    "other_bounded_benchmarks": "30 each of native finite, native streaming, and translated Messages streaming",
+    "convergence": "all requests completed; pending_requests=0; active_reservations=0"
+  },
+  "scope_limits": {
+    "tested_concurrency_levels": [4],
+    "tested_named_user_count": 1,
+    "hard_user_or_global_budgets_enabled": false
+  },
+  "conditions": {
+    "mmc": {
+      "database_storage": "runner temporary root under /tmp on root ext4/MMC",
+      "runs": [
+        "mmc-run-1.json",
+        "mmc-run-2.json",
+        "mmc-run-3.json"
+      ],
+      "concurrent_native_responses_finite": [
+        {"p50_ms": 10, "p95_ms": 7599, "max_ms": 7599, "batch_ms": 13220},
+        {"p50_ms": 11, "p95_ms": 12058, "max_ms": 12058, "batch_ms": 18524},
+        {"p50_ms": 11, "p95_ms": 8579, "max_ms": 8579, "batch_ms": 15132}
+      ],
+      "concurrent_medians": {"p50_ms": 11, "p95_ms": 8579, "max_ms": 8579, "batch_ms": 15132},
+      "native_finite_medians": {"p50_ms": 4, "p95_ms": 6780, "max_ms": 8381}
+    },
+    "tmpfs": {
+      "database_storage": "runner temporary root under /dev/shm (tmpfs); qualification output remains on MMC",
+      "runs": [
+        "tmpfs-run-1.json",
+        "tmpfs-run-2.json",
+        "tmpfs-run-3.json"
+      ],
+      "concurrent_native_responses_finite": [
+        {"p50_ms": 10, "p95_ms": 10, "max_ms": 11, "batch_ms": 80},
+        {"p50_ms": 10, "p95_ms": 10, "max_ms": 10, "batch_ms": 81},
+        {"p50_ms": 9, "p95_ms": 13, "max_ms": 13, "batch_ms": 82}
+      ],
+      "concurrent_medians": {"p50_ms": 10, "p95_ms": 10, "max_ms": 11, "batch_ms": 81},
+      "native_finite_medians": {"p50_ms": 4, "p95_ms": 4, "max_ms": 4}
+    }
+  },
+  "supplemental_runs": {
+    "persistent_nvme_single_run": {
+      "artifact": "ssd-c4-u5-user-global-run-1.json",
+      "repeat_count": 1,
+      "database_storage": {
+        "filesystem": "ext4",
+        "storage_medium_class": "non-rotational",
+        "device_class": "nvme"
+      },
+      "workload": {
+        "concurrency": 4,
+        "request_count": 1000,
+        "sample_count": 30,
+        "principal_count": 5,
+        "budget_mode": "user-global",
+        "competing_io": false
+      },
+      "concurrent_native_responses_finite": {
+        "p50_ms": 13,
+        "p95_ms": 30,
+        "p99_ms": 32,
+        "max_ms": 33,
+        "completed": 1000,
+        "failed": 0,
+        "batch_ms": 4444
+      },
+      "interpretation": "Exploratory out-of-scope media run; SSD/NVMe is not required by M001 and this is not a paired media comparison."
+    },
+    "microsd_user_global_budget_smoke": {
+      "artifact": "microsd-c4-u5-user-global-minimal-run-1.json",
+      "repeat_count": 1,
+      "database_storage": {
+        "filesystem": "ext4",
+        "storage_medium_class": "non-rotational",
+        "device_class": "mmc"
+      },
+      "workload": {
+        "concurrency": 4,
+        "request_count": 4,
+        "sample_count": 1,
+        "principal_count": 5,
+        "budget_mode": "user-global",
+        "competing_io": false
+      },
+      "concurrent_native_responses_finite": {
+        "p50_ms": 10,
+        "p95_ms": 13,
+        "max_ms": 13,
+        "completed": 4,
+        "failed": 0,
+        "batch_ms": 16
+      },
+      "interpretation": "Functional budget-path smoke only; four latency observations are not suitable for percentile or capacity inference."
+    }
+  },
+  "commands": [
+    "CARGO_BUILD_JOBS=1 cargo build --manifest-path rust/Cargo.toml --locked --release",
+    "uv run python scripts/qualification_sbc.py --binary rust/target/release/eggpool --config-fixture tests/tooling/fixtures/qualification/sbc-benchmark.toml --output artifacts/qualification/on-prem-concurrency-performance/functional.json",
+    "uv run python scripts/qualification_sbc.py --binary rust/target/release/eggpool --config-fixture tests/tooling/fixtures/qualification/sbc-benchmark.toml --benchmark-samples 30 --output artifacts/qualification/on-prem-concurrency-performance/mmc-run-1.json",
+    "uv run python scripts/qualification_sbc.py --binary rust/target/release/eggpool --config-fixture tests/tooling/fixtures/qualification/sbc-benchmark.toml --benchmark-samples 30 --output artifacts/qualification/on-prem-concurrency-performance/mmc-run-2.json",
+    "uv run python scripts/qualification_sbc.py --binary rust/target/release/eggpool --config-fixture tests/tooling/fixtures/qualification/sbc-benchmark.toml --benchmark-samples 30 --output artifacts/qualification/on-prem-concurrency-performance/mmc-run-3.json",
+    "TMPDIR=/dev/shm uv run python scripts/qualification_sbc.py --binary rust/target/release/eggpool --config-fixture tests/tooling/fixtures/qualification/sbc-benchmark.toml --benchmark-samples 30 --output artifacts/qualification/on-prem-concurrency-performance/tmpfs-run-1.json",
+    "TMPDIR=/dev/shm uv run python scripts/qualification_sbc.py --binary rust/target/release/eggpool --config-fixture tests/tooling/fixtures/qualification/sbc-benchmark.toml --benchmark-samples 30 --output artifacts/qualification/on-prem-concurrency-performance/tmpfs-run-2.json",
+    "TMPDIR=/dev/shm uv run python scripts/qualification_sbc.py --binary rust/target/release/eggpool --config-fixture tests/tooling/fixtures/qualification/sbc-benchmark.toml --benchmark-samples 30 --output artifacts/qualification/on-prem-concurrency-performance/tmpfs-run-3.json",
+    "TMPDIR=/mnt/qualification-ssd/eggpool-m001-2026-10-14 uv run python scripts/qualification_sbc.py --binary rust/target/release/eggpool --config-fixture tests/tooling/fixtures/qualification/sbc-benchmark.toml --expected-sha256 8609119a7f0494c8541b7a47ddbbe86be45ce3f84096b5ee87c228c71513a538 --candidate-origin on-device-release-build --benchmark-samples 30 --concurrency-workers 4 --concurrency-requests 1000 --benchmark-principals 5 --benchmark-budget-mode user-global --output artifacts/qualification/on-prem-concurrency-performance/ssd-c4-u5-user-global-run-1.json",
+    "TMPDIR=/tmp/eggpool-m001-microsd-2026-10-14 uv run python scripts/qualification_sbc.py --binary rust/target/release/eggpool --config-fixture tests/tooling/fixtures/qualification/sbc-benchmark.toml --expected-sha256 8609119a7f0494c8541b7a47ddbbe86be45ce3f84096b5ee87c228c71513a538 --candidate-origin on-device-release-build --benchmark-samples 30 --concurrency-workers 4 --concurrency-requests 1000 --benchmark-principals 5 --benchmark-budget-mode user-global --output artifacts/qualification/on-prem-concurrency-performance/microsd-c4-u5-user-global-run-1.json",
+    "TMPDIR=/tmp/eggpool-m001-microsd-c4-2026-10-15 uv run python scripts/qualification_sbc.py --binary rust/target/release/eggpool --config-fixture tests/tooling/fixtures/qualification/sbc-benchmark.toml --expected-sha256 8609119a7f0494c8541b7a47ddbbe86be45ce3f84096b5ee87c228c71513a538 --candidate-origin on-device-release-build --benchmark-samples 1 --concurrency-workers 4 --concurrency-requests 4 --benchmark-principals 5 --benchmark-budget-mode user-global --output artifacts/qualification/on-prem-concurrency-performance/microsd-c4-u5-user-global-minimal-run-1.json"
+  ],
+  "limitations": [
+    "The 1/2/8 concurrency levels and 5/49 named-principal cases were not run; this corpus isolates the already-reproduced four-way tail.",
+    "Hard user/global budget policies were disabled in this fixture and were not varied.",
+    "One supplemental persistent NVMe run was recorded as exploratory evidence only; SSD/NVMe is not required by M001. No controlled competing-I/O trial is available. Ambient host I/O was not controlled and varied during the MMC runs.",
+    "The original Q008 matrix emits p50/p95/max; the supplemental 1000-request run also emits p99, but no p99 acceptance threshold has been frozen.",
+    "tmpfs is a diagnostic control only and is not a durability recommendation."
+  ],
+  "root_storage_medium": "microSD (SD card on MMC interface; root /dev/mmcblk0p2, ext4)",
+  "attempted_runs": {
+    "microsd_c4_u5_user_global_aborted": {
+      "command": "TMPDIR=/tmp/eggpool-m001-microsd-2026-10-14 uv run python scripts/qualification_sbc.py --binary rust/target/release/eggpool --config-fixture tests/tooling/fixtures/qualification/sbc-benchmark.toml --expected-sha256 8609119a7f0494c8541b7a47ddbbe86be45ce3f84096b5ee87c228c71513a538 --candidate-origin on-device-release-build --benchmark-samples 30 --concurrency-workers 4 --concurrency-requests 1000 --benchmark-principals 5 --benchmark-budget-mode user-global --output artifacts/qualification/on-prem-concurrency-performance/microsd-c4-u5-user-global-run-1.json",
+      "status": "aborted_by_plan_stop_condition",
+      "target_storage": "microSD (SD card via MMC interface)",
+      "observed_io_pressure_percent": {"some_avg10": 76.31, "full_avg10": 72.21, "some_avg60": 59.67, "full_avg60": 56.82},
+      "report_artifact": "not produced",
+      "result_interpretation": "The run was interrupted after sustained system I/O pressure crossed the plan stop condition; no performance result is claimed."
+    },
+    "microsd_c4_u5_user_global_c64_aborted": {
+      "command": "TMPDIR=/tmp/eggpool-m001-microsd-c64-2026-10-14 uv run python scripts/qualification_sbc.py --binary rust/target/release/eggpool --config-fixture tests/tooling/fixtures/qualification/sbc-benchmark.toml --expected-sha256 8609119a7f0494c8541b7a47ddbbe86be45ce3f84096b5ee87c228c71513a538 --candidate-origin on-device-release-build --benchmark-samples 30 --concurrency-workers 4 --concurrency-requests 64 --benchmark-principals 5 --benchmark-budget-mode user-global --output artifacts/qualification/on-prem-concurrency-performance/microsd-c4-u5-user-global-c64-run-1.json",
+      "status": "aborted_by_plan_stop_condition",
+      "observed_io_pressure_percent": {"some_avg10": 76.62, "full_avg10": 71.59, "some_avg60": 59.67, "full_avg60": 50.80},
+      "report_artifact": "not produced",
+      "result_interpretation": "The 64-request attempt was interrupted as sustained microSD I/O pressure approached the plan stop condition."
+    },
+    "microsd_c4_u5_user_global_c16_aborted": {
+      "command": "TMPDIR=/tmp/eggpool-m001-microsd-c16-2026-10-14 uv run python scripts/qualification_sbc.py --binary rust/target/release/eggpool --config-fixture tests/tooling/fixtures/qualification/sbc-benchmark.toml --expected-sha256 8609119a7f0494c8541b7a47ddbbe86be45ce3f84096b5ee87c228c71513a538 --candidate-origin on-device-release-build --benchmark-samples 30 --concurrency-workers 4 --concurrency-requests 16 --benchmark-principals 5 --benchmark-budget-mode user-global --output artifacts/qualification/on-prem-concurrency-performance/microsd-c4-u5-user-global-c16-run-1.json",
+      "status": "aborted_by_plan_stop_condition",
+      "observed_io_pressure_percent": {"some_avg10": 73.78, "full_avg10": 70.56, "some_avg60": 47.94, "full_avg60": 45.70},
+      "report_artifact": "not produced",
+      "result_interpretation": "The 16-request attempt was interrupted as sustained microSD I/O pressure approached the plan stop condition."
+    }
+  }
+}

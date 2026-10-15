@@ -12,7 +12,7 @@ Command list verified against `eggpool help` (0.8.2).
 | `eggpool stop` | Stop the running server |
 | `eggpool restart` | Fully restart the server (stop then start) |
 | `eggpool rehash` | Apply supported config changes live without restart (`--json` for structured output) |
-| `eggpool onboard` | Interactive onboarding wizard |
+| `eggpool onboard` | Interactive onboarding wizard; a fresh database prompts for an initial administrator |
 | `eggpool ensure-running` | Ensure server is running (no full runtime snapshot) |
 | `eggpool croncheck` | Fast-path cron watchdog check (no server connection) |
 
@@ -54,8 +54,33 @@ Command list verified against `eggpool help` (0.8.2).
 | `eggpool edit` | Edit config in $EDITOR |
 | `eggpool getkey` | Print the server API key |
 | `eggpool newkey` | Generate and write a new server API key (`--show-old`, `--show-secrets`) |
+| `eggpool users bootstrap` | Create the initial local administrator (`--password-stdin` for unattended input) |
+| `eggpool users list` | List local usernames, role and status |
+| `eggpool users token USER` | Issue a personal inference/discovery token (`--label` optional; `--show-secret` allows non-TTY output) |
+| `eggpool users revoke USER` | Revoke all personal API tokens for a user |
+| `eggpool users reset-password USER` | Reset a local password and revoke that user's API tokens and browser sessions (`--password-stdin` supported) |
+| `eggpool users enable-managed` | Retire the legacy key path after clearing `[server].api_key`/`api_key_env` and setting `dashboard.public = false` |
+| `eggpool users policy create ID NAME allow\|deny` | Create an exact-rule model profile |
+| `eggpool users policy rule PROFILE MODEL allow\|deny` | Add or replace one exact model or `model/provider` rule |
+| `eggpool users policy assign USER PROFILE` | Assign a profile to a local user |
+| `eggpool users policy prefer PROFILE [MODEL]` | Set or clear a profile's allowed client recommendation |
+| `eggpool users budget set USER --window day\|month` | Set daily/monthly request, token, microdollar, and concurrency limits (`--model-id` scopes an exact model; `--enforcement hard\|estimated`, default `estimated`) |
+| `eggpool users budget remove USER --window day\|month` | Remove the matching user/model budget rule |
+| `eggpool users global-budget set --window day\|month` | Set an instance-wide ceiling intersected with every per-user rule (`--model-id` scopes an exact model; `--enforcement hard\|estimated`, default `estimated`) |
+| `eggpool users global-budget remove --window day\|month` | Remove the matching instance-wide ceiling |
 | `eggpool init-config` | Initialize config from template |
 | `eggpool dashboard public --on\|--off` | Toggle dashboard key requirement (default public) |
+
+Policy commands remain available as a local operator setup path alongside the
+admin dashboard. They write SQLite policy state directly; model IDs are exact
+and wildcards are rejected. `--actor ADMIN` records the active administrator
+responsible for each change. Restricted profiles should use `deny` as their
+default and add explicit allowed models.
+
+Budget commands are local operator controls. At least one positive limit is
+required; each rule is keyed by user, optional exact model, and UTC calendar
+window. Cost limits apply to estimated microdollars, not provider invoices.
+Rule changes are written to the SQLite audit table.
 
 ## Maintenance
 
@@ -77,6 +102,15 @@ Command list verified against `eggpool help` (0.8.2).
 | `eggpool deploy all` | Print every deployment snippet in sequence |
 
 Full deploy commands reference: [deployment.md](deployment.md#deploy-commands-reference)
+
+Personal tokens are stored as digests and can authenticate inference,
+`/v1/models`, and the integration profile; they do not grant dashboard or
+administrative access. The shared `[server].api_key` authenticates only legacy
+`legacy_unmigrated` installations and stops working after local identity
+initialization. Browser sessions use HttpOnly cookies and protect logout and
+password changes with same-origin checks plus a session-bound CSRF token.
+Passwords are never accepted as command-line arguments. Local CLI access is
+the recovery authority; password reset revokes API credentials and sessions.
 
 ## Agents & updates
 

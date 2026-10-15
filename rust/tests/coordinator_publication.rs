@@ -17,6 +17,7 @@ use eggpool::{
         PublicationStage,
     },
     db::{Account, Database, DatabaseConfig, MigrationRunner},
+    identity::{AttributedRequestKind, AuthenticatedPrincipal, PrincipalKind},
     quota::{AccountQuota, QuotaEstimator},
     routing::{EligibilityPolicy, RoutingRequestFacts, RoutingRouter},
 };
@@ -177,6 +178,248 @@ async fn publication_commits_all_rows_and_converts_the_claim_once() {
 }
 
 #[tokio::test]
+async fn publication_persists_owner_and_rejects_cross_user_request_id_replay() {
+    let fixture = fixture().await;
+    fixture
+        .database
+        .call(|connection| {
+            for (user_id, username, credential_id) in [
+                ("user-a", "user-a", "credential-a"),
+                ("user-b", "user-b", "credential-b"),
+            ] {
+                connection.execute(
+                    "INSERT INTO users\
+                     (id, username, normalized_username, role, password_hash)\
+                     VALUES (?1, ?2, ?2, 'member', 'test-hash')",
+                    (user_id, username),
+                )?;
+                connection.execute(
+                    "INSERT INTO user_credentials\
+                     (id, user_id, label, selector, digest)\
+                     VALUES (?1, ?2, 'test', ?1, 'test-digest')",
+                    (credential_id, user_id),
+                )?;
+            }
+            Ok(())
+        })
+        .await
+        .unwrap();
+    let service = PublicationService::new(fixture.database.clone());
+    let attribution = AuthenticatedPrincipal {
+        user_id: Some("user-a".into()),
+        credential_id: Some("credential-a".into()),
+        role: Some("agent".into()),
+        scopes: vec!["inference".into()],
+        auth_epoch: Some(1),
+        kind: PrincipalKind::AgentToken,
+    }
+    .request_attribution();
+    let outcome = service
+        .publish_attributed(claim(&fixture).await, input(1), Some(attribution))
+        .await
+        .expect("attributed publication succeeds");
+    let PublicationOutcome::Published(published) = outcome else {
+        panic!("expected a new publication");
+    };
+    assert_eq!(published.identity.user_id.as_deref(), Some("user-a"));
+    assert_eq!(
+        published.identity.credential_id.as_deref(),
+        Some("credential-a")
+    );
+    assert_eq!(published.identity.auth_epoch, Some(1));
+    assert_eq!(
+        published.identity.request_kind,
+        AttributedRequestKind::Logical
+    );
+
+    let persisted = fixture
+        .database
+        .call(|connection| {
+            connection.query_row(
+                "SELECT user_id, credential_id, auth_epoch, principal_kind, request_kind \
+                 FROM requests WHERE proxy_request_id = 'proxy-c002'",
+                [],
+                |row| {
+                    Ok((
+                        row.get::<_, Option<String>>(0)?,
+                        row.get::<_, Option<String>>(1)?,
+                        row.get::<_, Option<i64>>(2)?,
+                        row.get::<_, String>(3)?,
+                        row.get::<_, String>(4)?,
+                    ))
+                },
+            )
+        })
+        .await
+        .unwrap();
+    assert_eq!(
+        persisted,
+        (
+            Some("user-a".into()),
+            Some("credential-a".into()),
+            Some(1),
+            "agent_token".into(),
+            "logical".into()
+        )
+    );
+
+    let other_user = AuthenticatedPrincipal {
+        user_id: Some("user-b".into()),
+        credential_id: Some("credential-b".into()),
+        role: Some("agent".into()),
+        scopes: vec!["inference".into()],
+        auth_epoch: Some(1),
+        kind: PrincipalKind::AgentToken,
+    }
+    .request_attribution();
+    let replay = service
+        .publish_attributed(claim(&fixture).await, input(1), Some(other_user))
+        .await;
+    assert!(matches!(
+        replay,
+        Err(PublicationError::DuplicateConflict { .. })
+    ));
+
+    published
+        .claim
+        .release_active_claim()
+        .expect("claim release succeeds");
+    fixture.database.close().await.unwrap();
+}
+
+#[tokio::test]
+async fn selector_publication_keeps_user_owner_and_parent_link() {
+    let fixture = fixture().await;
+    fixture
+        .database
+        .call(|connection| {
+            connection.execute(
+                "INSERT INTO users\
+                 (id, username, normalized_username, role, password_hash)\
+                 VALUES ('user-a', 'user-a', 'user-a', 'member', 'test-hash')",
+                [],
+            )?;
+            connection.execute(
+                "INSERT INTO user_credentials\
+                 (id, user_id, label, selector, digest)\
+                 VALUES ('credential-a', 'user-a', 'test', 'selector-a', 'test-digest')",
+                [],
+            )?;
+            Ok(())
+        })
+        .await
+        .unwrap();
+    let attribution = AuthenticatedPrincipal {
+        user_id: Some("user-a".into()),
+        credential_id: Some("credential-a".into()),
+        role: Some("agent".into()),
+        scopes: vec!["inference".into()],
+        auth_epoch: Some(1),
+        kind: PrincipalKind::AgentToken,
+    }
+    .selector_attribution("parent-proxy-id");
+    let outcome = PublicationService::new(fixture.database.clone())
+        .publish_attributed(claim(&fixture).await, input(1), Some(attribution))
+        .await
+        .expect("selector publication succeeds");
+    let PublicationOutcome::Published(published) = outcome else {
+        panic!("expected a new publication");
+    };
+    assert_eq!(published.identity.user_id.as_deref(), Some("user-a"));
+    assert_eq!(
+        published.identity.request_kind,
+        AttributedRequestKind::InternalSelector
+    );
+    assert_eq!(
+        published.identity.parent_proxy_request_id.as_deref(),
+        Some("parent-proxy-id")
+    );
+    let persisted = fixture
+        .database
+        .call(|connection| {
+            connection.query_row(
+                "SELECT user_id, request_kind, parent_proxy_request_id \
+                 FROM requests WHERE proxy_request_id = 'proxy-c002'",
+                [],
+                |row| {
+                    Ok((
+                        row.get::<_, Option<String>>(0)?,
+                        row.get::<_, String>(1)?,
+                        row.get::<_, Option<String>>(2)?,
+                    ))
+                },
+            )
+        })
+        .await
+        .unwrap();
+    assert_eq!(
+        persisted,
+        (
+            Some("user-a".into()),
+            "internal_selector".into(),
+            Some("parent-proxy-id".into())
+        )
+    );
+    published
+        .claim
+        .release_active_claim()
+        .expect("claim release");
+    fixture.database.close().await.unwrap();
+}
+
+#[tokio::test]
+async fn principal_epoch_or_credential_revocation_before_publication_fails_closed() {
+    let fixture = fixture().await;
+    fixture
+        .database
+        .call(|connection| {
+            connection.execute(
+                "INSERT INTO users\
+                 (id, username, normalized_username, role, password_hash)\
+                 VALUES ('user-a', 'user-a', 'user-a', 'member', 'test-hash')",
+                [],
+            )?;
+            connection.execute(
+                "INSERT INTO user_credentials\
+                 (id, user_id, label, selector, digest)\
+                 VALUES ('credential-a', 'user-a', 'test', 'selector-a', 'test-digest')",
+                [],
+            )?;
+            Ok(())
+        })
+        .await
+        .unwrap();
+    let attribution = AuthenticatedPrincipal {
+        user_id: Some("user-a".into()),
+        credential_id: Some("credential-a".into()),
+        role: Some("agent".into()),
+        scopes: vec!["inference".into()],
+        auth_epoch: Some(1),
+        kind: PrincipalKind::AgentToken,
+    }
+    .request_attribution();
+    let claim = claim(&fixture).await;
+    fixture
+        .database
+        .call(|connection| {
+            connection.execute(
+                "UPDATE user_credentials SET revoked_at = CURRENT_TIMESTAMP \
+                 WHERE id = 'credential-a'",
+                [],
+            )?;
+            Ok(())
+        })
+        .await
+        .unwrap();
+    let result = PublicationService::new(fixture.database.clone())
+        .publish_attributed(claim, input(1), Some(attribution))
+        .await;
+    assert!(matches!(result, Err(PublicationError::PrincipalChanged)));
+    assert_eq!(row_counts(&fixture.database).await, (0, 0, 0, 0));
+    fixture.database.close().await.unwrap();
+}
+
+#[tokio::test]
 async fn every_precommit_failure_rolls_back_the_complete_publication() {
     for stage in [
         PublicationStage::Validation,
@@ -227,7 +470,7 @@ async fn duplicate_attempt_observes_existing_identity_without_row_fanout() {
     let PublicationOutcome::AlreadyPublished(identity) = second else {
         panic!("second publication must observe the first");
     };
-    assert_eq!(identity, first.identity);
+    assert_eq!(*identity, first.identity);
     assert_eq!(row_counts(&fixture.database).await, (1, 1, 1, 1));
     assert_eq!(fixture.router.active_request_count("account-a"), 0);
     fixture.database.close().await.expect("database closes");

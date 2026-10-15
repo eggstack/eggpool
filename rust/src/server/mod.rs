@@ -6,38 +6,55 @@
 //! Handlers invoke one coordinator entry point; routing/retry/finalization
 //! live in the coordinator, not here.
 
+mod auth;
 mod dashboard;
 mod health;
 mod inference;
 mod middleware;
 
+use auth::{account_page, login_page, login_submit, logout_submit, password_change};
 use dashboard::{
-    accounts_page, bandwidth_page, cache_page, events_page, grouped_timeseries_api, latency_page,
-    model_detail_page, models_page, overview, pings_page, reliability_page, routing_page,
-    runtime_page, static_chart_js, static_css, static_favicon, static_js,
-    stats_cache_observability, stats_cache_stability, stats_request_segmentation,
-    stats_request_shaping, stats_transcoding, summary, sync_accounts, theme_css, timeseries_api,
-    timeseries_page, traces_page,
+    accounts_page, assign_user_profile, audit_page, bandwidth_page, cache_page,
+    create_personal_token, create_profile, create_user, delete_profile, events_page,
+    grouped_timeseries_api, issue_admin_token, latency_page, model_detail_page, models_page,
+    my_account_page, my_models_page, overview, pings_page, profiles_page, reliability_page,
+    remove_instance_budget, remove_profile_rule, remove_user_override, reset_user_password,
+    revoke_personal_token, revoke_user_tokens, routing_page, runtime_page, set_instance_budget,
+    set_profile_preference, set_profile_rule, set_user_budget, set_user_override, set_user_state,
+    static_chart_js, static_css, static_favicon, static_js, stats_cache_observability,
+    stats_cache_stability, stats_request_segmentation, stats_request_shaping, stats_transcoding,
+    summary, sync_accounts, theme_css, timeseries_api, timeseries_page, traces_page,
+    update_profile, usage_page, users_page,
 };
 use health::{
     healthz, integration_profile, models_api, readyz, runtime_status, status_api, update_status,
+    user_budget_api,
 };
 use inference::{chat_completions, messages, responses, responses_compact};
 use middleware::{
-    admit_inference_body, authenticate, is_loopback_host, map_generation_error, validate_server_key,
+    admit_inference_body, authenticate, is_loopback_host, map_generation_error,
+    validate_server_access, validate_server_key,
 };
 
-/// Loud startup warning when running without an API key (loopback dev mode
-/// only). Non-loopback without a key is already a startup error via
-/// `validate_server_key`; loopback without a key is wide open by design and
-/// must be operator-visible. See `docs/deployment.md`.
-fn warn_if_unauthenticated_loopback(config: &Config) {
-    if config.resolved_server_api_key().is_none() && is_loopback_host(&config.server.host) {
+/// Loud startup warning while a legacy loopback instance remains keyless.
+fn warn_if_unauthenticated_loopback(config: &Config, access_state: &str) {
+    if access_state == "legacy_unmigrated"
+        && config.resolved_server_api_key().is_none()
+        && is_loopback_host(&config.server.host)
+    {
         tracing::warn!(
             host = config.server.host.as_str(),
             "server.api_key is not configured: loopback listener is UNAUTHENTICATED (dev convenience). \
              Set [server].api_key (or api_key_env) before binding a non-loopback host; \
              see docs/deployment.md"
+        );
+    }
+}
+
+fn warn_if_insecure_web_auth(config: &Config) {
+    if config.security.allow_insecure_web_auth {
+        tracing::warn!(
+            "security.allow_insecure_web_auth is enabled: remote browser passwords and session cookies may travel over plaintext HTTP"
         );
     }
 }
@@ -79,6 +96,8 @@ use std::{path::Path, sync::Arc, time::Instant};
 pub enum ServerError {
     #[error("{0}")]
     Database(#[from] db::DatabaseError),
+    #[error("{0}")]
+    Identity(#[from] crate::identity::IdentityError),
     #[error("cannot bind listener: {0}")]
     Bind(#[from] std::io::Error),
     #[error("invalid server API key configuration")]
@@ -653,6 +672,8 @@ pub struct ServerState {
     dashboard_refresh_interval_s: u64,
     configured_server_threads: u32,
     database_path: String,
+    trusted_proxy_ips: Vec<String>,
+    allow_insecure_web_auth: bool,
     started_at: Instant,
 }
 
@@ -668,6 +689,8 @@ impl ServerState {
             database_path: Config::runtime_path(&config.database.path)
                 .to_string_lossy()
                 .into_owned(),
+            trusted_proxy_ips: config.security.trusted_proxies.clone(),
+            allow_insecure_web_auth: config.security.allow_insecure_web_auth,
             started_at: Instant::now(),
         }
     }
@@ -769,7 +792,6 @@ pub async fn run_with_digest(
     config_path: Option<std::path::PathBuf>,
 ) -> Result<(), ServerError> {
     validate_server_key(&config)?;
-    warn_if_unauthenticated_loopback(&config);
     ensure_start_state(&config).await?;
     if config.server.threads != 1 {
         tracing::warn!(
@@ -786,10 +808,29 @@ pub async fn run_with_digest(
         .map_err(crate::operations::process::ProcessError::Path)?;
     database_config.path = database_path.to_string_lossy().into_owned();
     let database = db::Database::open(database_config).await?;
-    if let Err(error) = db::MigrationRunner::new(&database).run().await {
+    let migration_state = match db::MigrationRunner::new(&database).run().await {
+        Ok(state) => state,
+        Err(error) => {
+            let _ = database.close().await;
+            return Err(error.into());
+        }
+    };
+    if migration_state.applied_this_run.len() == db::MigrationRunner::migrations().len()
+        && let Err(error) = crate::identity::mark_fresh_uninitialized(&database).await
+    {
         let _ = database.close().await;
         return Err(error.into());
     }
+    let access_state = crate::identity::access_state(&database).await?;
+    if config.resolved_server_api_key().is_none() && access_state == "fresh_uninitialized" {
+        let _ = database.close().await;
+        return Err(ServerError::StartupConflict {
+            detail: "fresh database requires `eggpool onboard` or `eggpool users bootstrap` before serving".to_owned(),
+        });
+    }
+    validate_server_access(&config, &access_state)?;
+    warn_if_unauthenticated_loopback(&config, &access_state);
+    warn_if_insecure_web_auth(&config);
     if let Err(error) = sync_accounts(&config, &database).await {
         let _ = database.close().await;
         return Err(error);
@@ -942,7 +983,6 @@ pub async fn serve_listener(
     listener: TcpListener,
 ) -> Result<(), ServerError> {
     validate_server_key(&config)?;
-    warn_if_unauthenticated_loopback(&config);
     let process = match ProcessRuntime::new_with_config(database.clone(), &config) {
         Ok(process) => process,
         Err(error) => {
@@ -950,10 +990,27 @@ pub async fn serve_listener(
             return Err(error.into());
         }
     };
-    if let Err(error) = db::MigrationRunner::new(&database).run().await {
-        let _ = database.close().await;
-        return Err(error.into());
+    let migration_state = match db::MigrationRunner::new(&database).run().await {
+        Ok(state) => state,
+        Err(error) => {
+            let _ = database.close().await;
+            return Err(error.into());
+        }
+    };
+    if migration_state.applied_this_run.len() == db::MigrationRunner::migrations().len() {
+        crate::identity::mark_fresh_uninitialized(&database).await?;
     }
+    let access_state = crate::identity::access_state(&database).await?;
+    if config.resolved_server_api_key().is_none() && access_state == "fresh_uninitialized" {
+        let _ = database.close().await;
+        return Err(ServerError::StartupConflict {
+            detail: "fresh database requires local administrator bootstrap before serving"
+                .to_owned(),
+        });
+    }
+    validate_server_access(&config, &access_state)?;
+    warn_if_unauthenticated_loopback(&config, &access_state);
+    warn_if_insecure_web_auth(&config);
     if let Err(error) = sync_accounts(&config, &database).await {
         let _ = database.close().await;
         return Err(error);
@@ -1010,7 +1067,10 @@ pub async fn serve_listener_with_inference(
     listener: TcpListener,
 ) -> Result<(), ServerError> {
     validate_server_key(&config)?;
-    warn_if_unauthenticated_loopback(&config);
+    let access_state = crate::identity::access_state(&database).await?;
+    validate_server_access(&config, &access_state)?;
+    warn_if_unauthenticated_loopback(&config, &access_state);
+    warn_if_insecure_web_auth(&config);
     let process = match ProcessRuntime::new_with_config(database.clone(), &config) {
         Ok(process) => process,
         Err(error) => {
@@ -1052,6 +1112,7 @@ pub fn build_router(state: AppState) -> Router {
         .route("/api/stats/runtime", get(runtime_status))
         .route("/api/stats/update", get(update_status))
         .route("/api/status", get(status_api))
+        .route("/api/user-budget", get(user_budget_api))
         .route("/v1/chat/completions", post(chat_completions))
         .route("/v1/messages", post(messages))
         .route("/v1/responses", post(responses))
@@ -1061,6 +1122,17 @@ pub fn build_router(state: AppState) -> Router {
         .route("/static/chart.js", get(static_chart_js))
         .route("/static/favicon.svg", get(static_favicon))
         .route("/static/theme.css", get(theme_css));
+
+    router = router
+        .route("/login", get(login_page).post(login_submit))
+        .route("/account", get(account_page))
+        .route("/account/password", post(password_change))
+        .route("/my-account", get(my_account_page))
+        .route("/my-account/models", get(my_models_page))
+        .route("/account/tokens", post(create_personal_token))
+        .route("/account/tokens/revoke", post(revoke_personal_token))
+        .route("/usage", get(usage_page))
+        .route("/logout", post(logout_submit));
 
     if dashboard {
         router = router
@@ -1078,6 +1150,29 @@ pub fn build_router(state: AppState) -> Router {
             .route("/traces", get(traces_page))
             .route("/runtime", get(runtime_page))
             .route("/cache", get(cache_page))
+            .route("/users", get(users_page))
+            .route("/profiles", get(profiles_page))
+            .route("/admin/audit", get(audit_page))
+            .route("/admin/users/create", post(create_user))
+            .route("/admin/users/state", post(set_user_state))
+            .route("/admin/users/password", post(reset_user_password))
+            .route("/admin/users/token", post(issue_admin_token))
+            .route("/admin/users/revoke-tokens", post(revoke_user_tokens))
+            .route("/admin/users/profile", post(assign_user_profile))
+            .route("/admin/users/override", post(set_user_override))
+            .route("/admin/users/override/remove", post(remove_user_override))
+            .route("/admin/users/budget", post(set_user_budget))
+            .route("/admin/budget/instance", post(set_instance_budget))
+            .route(
+                "/admin/budget/instance/remove",
+                post(remove_instance_budget),
+            )
+            .route("/admin/profiles/create", post(create_profile))
+            .route("/admin/profiles/update", post(update_profile))
+            .route("/admin/profiles/delete", post(delete_profile))
+            .route("/admin/profiles/rule", post(set_profile_rule))
+            .route("/admin/profiles/rule/remove", post(remove_profile_rule))
+            .route("/admin/profiles/prefer", post(set_profile_preference))
             .route("/api/stats/summary", get(summary))
             .route("/api/stats/transcoding", get(stats_transcoding))
             .route(
@@ -1160,6 +1255,8 @@ mod tests {
             dashboard_refresh_interval_s: 60,
             configured_server_threads: 1,
             database_path: ":memory:".to_owned(),
+            trusted_proxy_ips: Vec::new(),
+            allow_insecure_web_auth: false,
             started_at: Instant::now(),
         }
     }
@@ -1174,12 +1271,15 @@ mod tests {
             "/latency",
             "/runtime",
             "/api/stats/summary",
-            "/api/stats/accounts",
+            "/api/stats/transcoding",
             "/static/dashboard.css",
             "/v1/healthz",
             "/v1/readyz",
         ] {
-            assert!(!requires_auth(path, &public), "{path} is public");
+            assert!(
+                !requires_auth(path, &http::Method::GET, &public),
+                "{path} is public"
+            );
         }
         for path in [
             "/v1/models",
@@ -1188,11 +1288,15 @@ mod tests {
             "/v1/responses",
             "/v1/responses/compact",
             "/api/integrations/v1/profile",
+            "/api/user-budget",
             "/api/stats/runtime",
             "/api/stats/update",
             "/api/status",
         ] {
-            assert!(requires_auth(path, &public), "{path} stays authenticated");
+            assert!(
+                requires_auth(path, &http::Method::GET, &public),
+                "{path} stays authenticated"
+            );
         }
     }
 
@@ -1204,21 +1308,31 @@ mod tests {
             "/accounts",
             "/models",
             "/api/stats/summary",
-            "/api/stats/accounts",
+            "/api/stats/transcoding",
         ] {
-            assert!(requires_auth(path, &private), "{path} requires a key");
+            assert!(
+                requires_auth(path, &http::Method::GET, &private),
+                "{path} requires a key"
+            );
         }
         for path in ["/static/dashboard.css", "/v1/healthz", "/v1/readyz"] {
-            assert!(!requires_auth(path, &private), "{path} stays exempt");
+            assert!(
+                !requires_auth(path, &http::Method::GET, &private),
+                "{path} stays exempt"
+            );
         }
         for path in [
             "/v1/models",
             "/api/integrations/v1/profile",
+            "/api/user-budget",
             "/api/stats/runtime",
             "/api/stats/update",
             "/api/status",
         ] {
-            assert!(requires_auth(path, &private), "{path} stays authenticated");
+            assert!(
+                requires_auth(path, &http::Method::GET, &private),
+                "{path} stays authenticated"
+            );
         }
     }
 

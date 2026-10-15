@@ -1,4 +1,5 @@
 use std::{
+    collections::BTreeSet,
     fs,
     path::PathBuf,
     process::Command,
@@ -39,8 +40,8 @@ async fn fresh_database_migrates_idempotently_and_preserves_pragmas() {
         .run()
         .await
         .expect("migrations apply");
-    assert_eq!(first.applied_versions.len(), 54);
-    assert_eq!(first.applied_this_run.len(), 54);
+    assert_eq!(first.applied_versions.len(), 62);
+    assert_eq!(first.applied_this_run.len(), 62);
     database
         .quick_check()
         .await
@@ -258,7 +259,7 @@ async fn python_historical_fixture_upgrades_and_repositories_round_trip() {
         .await
         .expect("current migrations apply");
     assert_eq!(state.applied_this_run.first(), Some(&12));
-    assert_eq!(state.applied_this_run.last(), Some(&54));
+    assert_eq!(state.applied_this_run.last(), Some(&62));
 
     let account = AccountRepository::new(&database)
         .get_by_name("historical-account")
@@ -502,5 +503,526 @@ async fn current_database_can_be_opened_read_only_without_writes() {
         .expect_err("read-only connection rejects writes");
     assert!(matches!(error, eggpool::db::DatabaseError::ReadOnly));
     read_only.close().await.expect("read-only database closes");
+    fs::remove_file(&path).expect("temporary database removed");
+}
+
+// ---------------------------------------------------------------------------
+// M010: an independent byte-valid schema-54 image restores, migrates
+// forward, and recovers identity/policy/budgets without fabricating
+// history. The frozen image is `tests/fixtures/database/schema54-
+// pre-upgrade.sql` (SHA-256 recorded in the M010 closure); tests never run
+// migrations 1..54 themselves — only the production 55..62 upgrade path.
+// ---------------------------------------------------------------------------
+
+use eggpool::{
+    Config,
+    accounts::{AccountRegistry, CredentialStore},
+    catalog::{ModelCatalogCache, ModelInput, ProtocolResolutionStatus},
+    coordinator::{
+        CrashReconciler, DurableFinalizer, FinalizationData, FinalizationOutcome, PublicationInput,
+        PublicationOutcome, PublicationService,
+    },
+    db::Account,
+    identity::{
+        AuthenticatedPrincipal, PrincipalKind, access_state, admin_reset_password, bootstrap_admin,
+        create_member, issue_personal_api_token, revoke_user_api_tokens, verify_api_token,
+        verify_password,
+    },
+    instance_budget::InstanceBudgetService,
+    model_policy::ModelPolicyService,
+    operations::backup::BackupService,
+    quota::{AccountQuota, QuotaEstimator},
+    routing::{EligibilityPolicy, RoutingRequestFacts, RoutingRouter},
+    user_budget::{BudgetLimits, BudgetWindow, UserBudgetService},
+};
+
+async fn load_schema54_image(path: &std::path::Path) -> Database {
+    let database = open_database(path).await;
+    database
+        .call(|connection| {
+            connection.execute_batch(include_str!(
+                "../../tests/fixtures/database/schema54-pre-upgrade.sql"
+            ))
+        })
+        .await
+        .expect("frozen schema-54 image loads");
+    database
+}
+
+async fn table_count(database: &Database, table: &str) -> i64 {
+    let query = format!("SELECT COUNT(*) FROM {table}");
+    database
+        .call(move |connection| connection.query_row(&query, [], |row| row.get::<_, i64>(0)))
+        .await
+        .expect("count reads")
+}
+
+async fn prove_schema54_source(database: &Database) {
+    // Source identity: the ledger names exactly migrations 1..54, the
+    // embedded checksums validate, and the image is internally consistent.
+    let ledger: Vec<(i64, String)> = database
+        .call(|connection| {
+            connection
+                .prepare("SELECT version, name FROM _migrations ORDER BY version")?
+                .query_map([], |row| Ok((row.get(0)?, row.get(1)?)))?
+                .collect::<Result<Vec<_>, _>>()
+        })
+        .await
+        .expect("ledger reads");
+    assert_eq!(ledger.len(), 54);
+    assert_eq!(ledger.first().map(|row| row.0), Some(1));
+    assert_eq!(ledger.last().map(|row| row.0), Some(54));
+    assert!(
+        ledger
+            .iter()
+            .all(|row| { row.1.starts_with(&format!("{:04}_", row.0)) && row.1.ends_with(".sql") }),
+        "every ledger entry carries its historical migration filename"
+    );
+    MigrationRunner::validate_embedded_checksums().expect("canonical checksums validate");
+    let integrity: String = database
+        .call(|connection| connection.query_row("PRAGMA integrity_check", [], |row| row.get(0)))
+        .await
+        .expect("integrity_check runs");
+    assert_eq!(integrity, "ok");
+    // Audited legacy content: upstream accounts, request/token-usage
+    // history, and quarantine state — and no post-54 user/policy tables.
+    assert_eq!(table_count(database, "accounts").await, 3);
+    assert_eq!(table_count(database, "requests").await, 2);
+    assert_eq!(table_count(database, "reservations").await, 2);
+    assert_eq!(table_count(database, "model_quarantine").await, 2);
+    assert_eq!(table_count(database, "catalog_refresh_state").await, 2);
+    let modern: Vec<String> = database
+        .call(|connection| {
+            connection
+                .prepare(
+                    "SELECT name FROM sqlite_master WHERE type = 'table' AND name IN \
+                     ('users', 'user_budget_rules', 'instance_budget_rules', 'policy_profiles')",
+                )?
+                .query_map([], |row| row.get(0))?
+                .collect::<Result<Vec<_>, _>>()
+        })
+        .await
+        .expect("modern tables absent");
+    assert!(modern.is_empty(), "pre-user image has no identity tables");
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn schema54_image_upgrades_with_legacy_state_preserved() {
+    let path = temporary_database_path("schema54-upgrade");
+    let database = load_schema54_image(&path).await;
+    prove_schema54_source(&database).await;
+
+    // The protected matching backup is captured before the upgrade: old
+    // binary rollback uses this archive, never a down-migration.
+    let backup_root = tempfile::tempdir().expect("backup root");
+    let config_path = backup_root.path().join("config.toml");
+    let mut config = Config::default();
+    config.database.path = path.to_string_lossy().into_owned();
+    fs::write(&config_path, toml::to_string(&config).expect("config TOML")).expect("config writes");
+    let backup = BackupService::from_config(&config_path, &config)
+        .with_output_dir(backup_root.path().join("backups"));
+    let archive = backup
+        .create(&database)
+        .await
+        .expect("pre-upgrade backup")
+        .archive;
+    BackupService::validate_archive(&archive).expect("pre-upgrade archive validates");
+
+    // Forward-only production upgrade: exactly migrations 55..62.
+    let state = MigrationRunner::new(&database)
+        .run()
+        .await
+        .expect("production upgrade applies");
+    assert_eq!(state.applied_this_run.first(), Some(&55));
+    assert_eq!(state.applied_this_run.last(), Some(&62));
+    assert_eq!(state.applied_this_run.len(), 8);
+    database
+        .quick_check()
+        .await
+        .expect("upgraded image is valid");
+
+    // Legacy history survives byte-identical: upstream accounts, the
+    // completed request with its token/cost usage, quarantine, catalog.
+    let legacy = database
+        .call(|connection| {
+            Ok((
+                connection.query_row(
+                    "SELECT status, input_tokens, output_tokens, cost_microdollars \
+                     FROM requests WHERE id = 1",
+                    [],
+                    |row| {
+                        Ok((
+                            row.get::<_, String>(0)?,
+                            row.get::<_, i64>(1)?,
+                            row.get::<_, i64>(2)?,
+                            row.get::<_, i64>(3)?,
+                        ))
+                    },
+                )?,
+                connection.query_row(
+                    "SELECT enabled FROM accounts WHERE name = 'account-a'",
+                    [],
+                    |row| row.get::<_, i64>(0),
+                )?,
+                connection.query_row("SELECT COUNT(*) FROM model_quarantine", [], |row| {
+                    row.get::<_, i64>(0)
+                })?,
+                connection.query_row("SELECT COUNT(*) FROM catalog_refresh_state", [], |row| {
+                    row.get::<_, i64>(0)
+                })?,
+            ))
+        })
+        .await
+        .expect("legacy rows read");
+    assert_eq!(legacy.0, ("success".to_owned(), 100, 50, 700));
+    assert_eq!(legacy.1, 1);
+    assert_eq!(legacy.2, 2);
+    assert_eq!(legacy.3, 2);
+
+    // No fabricated human identity: historical shared-key inference stays
+    // unattributed under the legacy principal kind.
+    let attribution: (Option<String>, String) = database
+        .call(|connection| {
+            connection.query_row(
+                "SELECT user_id, principal_kind FROM requests WHERE id = 1",
+                [],
+                |row| Ok((row.get(0)?, row.get(1)?)),
+            )
+        })
+        .await
+        .expect("legacy attribution reads");
+    assert_eq!(attribution, (None, "legacy_shared_key".to_owned()));
+    // Legacy shared-key state is distinct from fresh init: the upgraded
+    // image reports legacy_unmigrated with zero users.
+    assert_eq!(
+        access_state(&database).await.expect("state reads"),
+        "legacy_unmigrated"
+    );
+    assert_eq!(table_count(&database, "users").await, 0);
+
+    database.close().await.expect("database closes");
+    fs::remove_file(&path).expect("temporary database removed");
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn upgraded_schema54_database_recovers_identity_policy_and_budgets() {
+    // The database lives in a private directory: restore hardens its
+    // parent directory permissions, which a shared temp root must never
+    // receive.
+    let work_root = tempfile::tempdir().expect("work root");
+    let path = work_root.path().join("schema54-recover.sqlite3");
+    let database = load_schema54_image(&path).await;
+    prove_schema54_source(&database).await;
+    MigrationRunner::new(&database)
+        .run()
+        .await
+        .expect("production upgrade applies");
+
+    // Identity recovery: bootstrap, login, member, personal-token
+    // issue/revoke, password reset — all against the upgraded schema.
+    let (admin, admin_credential) = bootstrap_admin(&database, "legacy-admin", "correct-horse-47")
+        .await
+        .expect("admin bootstraps on upgraded schema");
+    assert_eq!(
+        access_state(&database).await.expect("state reads"),
+        "admin_initialized"
+    );
+    assert!(
+        verify_password(&database, "legacy-admin", "correct-horse-47")
+            .await
+            .expect("login verifies")
+            .is_some(),
+        "bootstrap password logs in"
+    );
+    assert!(
+        verify_password(&database, "legacy-admin", "wrong-password")
+            .await
+            .expect("login rejects")
+            .is_none(),
+        "wrong password does not log in"
+    );
+    let member = create_member(&database, &admin.id, "legacy-member", "temporary-99")
+        .await
+        .expect("member is created");
+    let personal = issue_personal_api_token(&database, &admin.id, &member.id, "laptop")
+        .await
+        .expect("personal token issues");
+    assert!(
+        verify_api_token(&database, &personal.token)
+            .await
+            .expect("token verifies")
+    );
+    let revoked = revoke_user_api_tokens(&database, &admin.id, &member.id)
+        .await
+        .expect("personal tokens revoke");
+    assert_eq!(revoked, 1);
+    assert!(
+        !verify_api_token(&database, &personal.token)
+            .await
+            .expect("revoked token rejects")
+    );
+    admin_reset_password(&database, &admin.id, &member.id, "rotated-1000")
+        .await
+        .expect("admin resets member password");
+    assert!(
+        verify_password(&database, "legacy-member", "rotated-1000")
+            .await
+            .expect("rotated password logs in")
+            .is_some()
+    );
+    assert_eq!(admin_credential.user_id, admin.id);
+
+    // Profile editing: create, rule, assign, edit, enforce.
+    let policies = ModelPolicyService::new(database.clone());
+    policies
+        .create_profile("legacy-profile", "Legacy Profile", "allow", &admin.id)
+        .await
+        .expect("profile is created");
+    policies
+        .set_profile_rule("legacy-profile", "shared-model", "allow", &admin.id)
+        .await
+        .expect("profile rule is set");
+    policies
+        .assign_profile(&member.id, "legacy-profile", &admin.id)
+        .await
+        .expect("profile is assigned");
+    // create (v1) plus the rule write (v2): the edit must target v2.
+    assert!(
+        policies
+            .update_profile("legacy-profile", "Legacy Profile v2", "deny", 2, &admin.id)
+            .await
+            .expect("profile is edited")
+    );
+    let profiles = policies.list_profiles().await.expect("profiles list");
+    assert_eq!(profiles.len(), 1);
+    assert_eq!(profiles[0].name, "Legacy Profile v2");
+
+    // Budget rules land on the upgraded schema and enforce for real: an
+    // estimated member request publishes and settles, and a global rule
+    // intersects it.
+    database
+        .call(|connection| {
+            connection.execute(
+                "INSERT INTO accounts (id, name, api_key_env, enabled, provider_id)
+                 VALUES (10, 'budget-account', 'UNUSED', 1, 'provider-a')",
+                [],
+            )?;
+            connection.execute(
+                "INSERT INTO models (model_id, protocol, provider_id, resolution_status)
+                 VALUES ('model-a', 'openai', 'provider-a', 'resolved')",
+                [],
+            )?;
+            Ok(())
+        })
+        .await
+        .expect("budget fixture rows insert");
+    let user_budgets = UserBudgetService::new(database.clone());
+    user_budgets
+        .set_rule(
+            &admin.id,
+            &member.id,
+            None,
+            BudgetWindow::Day,
+            BudgetLimits {
+                tokens: Some(1_000_000),
+                ..Default::default()
+            },
+        )
+        .await
+        .expect("estimated user rule is set");
+    let global_budgets = InstanceBudgetService::new(database.clone());
+    global_budgets
+        .set_rule(
+            &admin.id,
+            None,
+            BudgetWindow::Day,
+            BudgetLimits {
+                requests: Some(100),
+                ..Default::default()
+            },
+        )
+        .await
+        .expect("global rule is set");
+    let mut provider_config = eggpool::config::ProviderConfig {
+        id: "provider-a".into(),
+        base_url: "https://provider.invalid/v1".into(),
+        protocols: vec!["openai".into()],
+        auth: eggpool::config::ProviderAuthConfig {
+            mode: "none".into(),
+            ..Default::default()
+        },
+        ..Default::default()
+    };
+    provider_config
+        .accounts
+        .push(eggpool::config::AccountConfig {
+            name: "budget-account".into(),
+            ..Default::default()
+        });
+    let mut config = Config::default();
+    config
+        .providers
+        .insert("provider-a".into(), provider_config);
+    config.validate().expect("fixture config validates");
+    let registry = AccountRegistry::from_config(
+        &config,
+        &[Account {
+            id: 10,
+            name: "budget-account".into(),
+            api_key_env: "UNUSED".into(),
+            enabled: true,
+            weight: 1.0,
+            provider_id: "provider-a".into(),
+        }],
+        &CredentialStore::default(),
+    )
+    .expect("registry builds");
+    let mut catalog = ModelCatalogCache::default();
+    catalog.set_account_provider("budget-account", "provider-a");
+    let mut model = ModelInput::new("model-a");
+    model.protocol = Some("openai".into());
+    model.protocol_source = Some("fixture".into());
+    model.resolution_status = ProtocolResolutionStatus::Resolved;
+    catalog
+        .update_from_account("budget-account", "provider-a", &[model], true, true)
+        .expect("catalog model");
+    let router = RoutingRouter::new(
+        registry,
+        catalog,
+        QuotaEstimator::new([AccountQuota::new("budget-account")]),
+        None,
+        EligibilityPolicy::default(),
+    );
+    let mut facts = RoutingRequestFacts::new("model-a");
+    facts.requested_protocol = Some("openai".into());
+    facts.client_protocol = Some("openai".into());
+    facts.projected_tokens = 42;
+    let claim = router
+        .select_and_claim(&facts, &BTreeSet::new())
+        .await
+        .expect("claim succeeds")
+        .expect("fixture has a candidate");
+    // Resolve the live principal epoch exactly as the request edge does:
+    // the password rotation above invalidated older epochs.
+    let member_epoch: i64 = database
+        .call({
+            let member_id = member.id.clone();
+            move |connection| {
+                connection.query_row(
+                    "SELECT auth_epoch FROM users WHERE id = ?1",
+                    [member_id],
+                    |row| row.get(0),
+                )
+            }
+        })
+        .await
+        .expect("member epoch reads");
+    let attribution = AuthenticatedPrincipal {
+        user_id: Some(member.id.clone()),
+        credential_id: None,
+        role: Some("member".into()),
+        scopes: vec!["inference".into()],
+        auth_epoch: Some(member_epoch),
+        kind: PrincipalKind::AgentToken,
+    }
+    .request_attribution();
+    let outcome = PublicationService::new(database.clone())
+        .publish_attributed(
+            claim,
+            PublicationInput::new("legacy-upgrade-request", "openai", "openai", false, 1),
+            Some(attribution),
+        )
+        .await
+        .expect("estimated request publishes under migrated rules");
+    let PublicationOutcome::Published(published) = outcome else {
+        panic!("upgraded request should publish");
+    };
+    DurableFinalizer::new(database.clone())
+        .finalize_request(
+            &published.identity,
+            FinalizationData {
+                outcome: FinalizationOutcome::Completed,
+                ..FinalizationData::default()
+            },
+            Some(published.claim),
+        )
+        .await
+        .expect("upgraded request settles");
+    let settled_user: i64 = database
+        .call(|connection| {
+            connection.query_row(
+                "SELECT COUNT(*) FROM user_budget_reservations WHERE status = 'settled'",
+                [],
+                |row| row.get(0),
+            )
+        })
+        .await
+        .expect("user settlement reads");
+    assert_eq!(settled_user, 1);
+
+    // Forced restart over the upgraded image: the legacy pending request
+    // interrupts with its legacy reservation, the settled budget request
+    // is untouched, and startup reconverges.
+    database.close().await.expect("generation closes");
+    let restarted = open_database(&path).await;
+    let rerun = MigrationRunner::new(&restarted)
+        .run()
+        .await
+        .expect("migrations stay idempotent across restart");
+    assert!(rerun.applied_this_run.is_empty());
+    let report = CrashReconciler::new(restarted.clone())
+        .reconcile_once()
+        .await
+        .expect("restart reconciliation succeeds");
+    assert_eq!(report.requests_interrupted, 1);
+    assert_eq!(report.reservations_released, 1);
+    assert_eq!(report.user_budget_holds_released, 0);
+    assert_eq!(report.instance_budget_holds_released, 0);
+    let second = CrashReconciler::new(restarted.clone())
+        .reconcile_once()
+        .await
+        .expect("second pass succeeds");
+    assert!(second.converged);
+
+    // Backup/restore of the current (post-upgrade) state preserves users,
+    // rules, usage, and audit across the round trip.
+    let backup_root = tempfile::tempdir().expect("backup root");
+    let config_path = backup_root.path().join("config.toml");
+    let mut backup_config = Config::default();
+    backup_config.database.path = path.to_string_lossy().into_owned();
+    fs::write(
+        &config_path,
+        toml::to_string(&backup_config).expect("config TOML"),
+    )
+    .expect("config writes");
+    let backup = BackupService::from_config(&config_path, &backup_config)
+        .with_output_dir(backup_root.path().join("backups"));
+    let archive = backup
+        .create(&restarted)
+        .await
+        .expect("current-state backup")
+        .archive;
+    BackupService::validate_archive(&archive).expect("current archive validates");
+    restarted
+        .call(|connection| {
+            connection.query_row("PRAGMA wal_checkpoint(TRUNCATE)", [], |_| Ok(()))?;
+            Ok(())
+        })
+        .await
+        .expect("wal checkpoints");
+    restarted.close().await.expect("database closes");
+    backup.recover(&archive).expect("current-state restore");
+    let restored = open_database(&path).await;
+    assert_eq!(table_count(&restored, "users").await, 2);
+    assert_eq!(table_count(&restored, "user_budget_rules").await, 1);
+    assert_eq!(table_count(&restored, "instance_budget_rules").await, 1);
+    assert_eq!(table_count(&restored, "user_budget_usage").await, 2);
+    // Creating the first member moved the instance to managed, and the
+    // round trip preserves that activation state.
+    assert_eq!(
+        access_state(&restored).await.expect("state reads"),
+        "managed"
+    );
+    restored.close().await.expect("restored database closes");
     fs::remove_file(&path).expect("temporary database removed");
 }

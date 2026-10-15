@@ -36,7 +36,8 @@ use super::{
     FinalizationError, FinalizationIdentity, FinalizationOutcome, FinalizationResult,
     FinalizationSupervisor, PostCommitInterruption, PublicationError, PublicationInput,
     PublicationOutcome, PublicationService, PublishedAttempt, RetryPolicy,
-    RuntimePublicationReceipt, WireResolver, release_claim, retry_after_from_headers,
+    RuntimePublicationReceipt, WireResolver, budget_proof_for_claim, release_claim,
+    retry_after_from_headers,
 };
 
 const MAX_CLIENT_ERROR_BYTES: usize = 512;
@@ -264,6 +265,7 @@ struct FiniteExecutionInput {
     routing_facts: RoutingRequestFacts,
     operation: super::endpoints::InferenceOperation,
     admission: FiniteAdmission,
+    attribution: Option<crate::identity::RequestAttribution>,
 }
 
 impl FiniteExecutionInput {
@@ -296,6 +298,7 @@ impl FiniteExecutionInput {
             routing_facts,
             operation,
             admission,
+            attribution: None,
         }
     }
 
@@ -316,6 +319,7 @@ impl FiniteExecutionInput {
             routing_facts,
             operation: super::endpoints::InferenceOperation::Compact,
             admission: FiniteAdmission::Compact(Some(compact)),
+            attribution: None,
         }
     }
 
@@ -388,6 +392,7 @@ impl FiniteRequest {
             raw_body_bytes: compact.raw_body_bytes,
             reservation_tokens: compact.reservation_tokens,
             context_tokens: compact.context_tokens,
+            budget_facts: compact.budget_facts,
         };
         Ok(Self {
             proxy_request_id: proxy_request_id.into(),
@@ -431,6 +436,7 @@ impl FiniteRequest {
             raw_body_bytes: compact.raw_body_bytes,
             reservation_tokens: compact.reservation_tokens,
             context_tokens: compact.context_tokens,
+            budget_facts: compact.budget_facts,
         };
         Ok(Self {
             proxy_request_id: proxy_request_id.into(),
@@ -558,8 +564,20 @@ impl FiniteCoordinator {
         &self,
         request: FiniteRequest,
     ) -> Result<FiniteExecution, FiniteCoordinatorError> {
-        self.execute_input(FiniteExecutionInput::from_public(request))
+        self.execute_input(FiniteExecutionInput::from_public(request), None)
             .await
+    }
+
+    pub(crate) async fn execute_attributed(
+        &self,
+        request: FiniteRequest,
+        attribution: crate::identity::RequestAttribution,
+    ) -> Result<FiniteExecution, FiniteCoordinatorError> {
+        self.execute_input(
+            FiniteExecutionInput::from_public(request),
+            Some(attribution),
+        )
+        .await
     }
 
     /// Execute a production compact request without constructing the public
@@ -572,21 +590,26 @@ impl FiniteCoordinator {
         incoming_headers: HeaderMap,
         compact: CompactAdmittedRequest,
         routing_facts: RoutingRequestFacts,
+        attribution: Option<crate::identity::RequestAttribution>,
     ) -> Result<FiniteExecution, FiniteCoordinatorError> {
-        self.execute_input(FiniteExecutionInput::compact(
+        let mut input = FiniteExecutionInput::compact(
             proxy_request_id,
             raw_body,
             incoming_headers,
             compact,
             routing_facts,
-        ))
-        .await
+        );
+        input.attribution = attribution;
+        let attribution = input.attribution.clone();
+        self.execute_input(input, attribution).await
     }
 
     async fn execute_input(
         &self,
-        request: FiniteExecutionInput,
+        mut request: FiniteExecutionInput,
+        attribution: Option<crate::identity::RequestAttribution>,
     ) -> Result<FiniteExecution, FiniteCoordinatorError> {
+        request.attribution = attribution;
         let Some(canonical) = request.canonical() else {
             return Err(FiniteCoordinatorError::InvalidFacts);
         };
@@ -768,14 +791,29 @@ impl FiniteCoordinator {
                 .iter()
                 .any(|candidate| !attempted.contains(&candidate.surface()));
             let upstream_protocol = protocol_for_surface(candidate.surface());
-            let publication_input = PublicationInput::new(
+            let mut publication_input = PublicationInput::new(
                 request.proxy_request_id.clone(),
                 request.client_surface.protocol(),
                 upstream_protocol,
                 false,
                 i64::from(attempt_number),
             );
-            let published = match self.publication.publish(claim, publication_input).await {
+            // Worst-case budget proof travels with the publication so the
+            // atomic hold decision sees the admission output bound and the
+            // operator tariff for the selected provider. The tariff snapshot
+            // belongs to this generation; in-flight holds keep theirs.
+            publication_input.budget_proof = Some(budget_proof_for_claim(
+                &claim,
+                provider
+                    .budget
+                    .max_microdollars_per_million_tokens
+                    .and_then(|tariff| i64::try_from(tariff).ok()),
+            ));
+            let published = match self
+                .publication
+                .publish_attributed(claim, publication_input, request.attribution.clone())
+                .await
+            {
                 Ok(PublicationOutcome::Published(value)) => value,
                 Ok(PublicationOutcome::AlreadyPublished(_)) => {
                     return Err(FiniteCoordinatorError::Publication(

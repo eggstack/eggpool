@@ -5,7 +5,7 @@
       "path": "db/migrations/checksums.json",
       "category": "sqlite-migrations",
       "source": "rust/assets/db/migrations/checksums.json",
-      "sha256": "0b0ea98e626a51a561c3e2e2cbff09f8a5c7d05a2ef2e61ba7589347c929bc95",
+      "sha256": "6391e4ddd06466dfb899dd2baabb6669c7299b8562b27854224b0d8dfe415e00",
       "identity": "exact"
     },
     {
@@ -26,14 +26,14 @@
       "path": "config/config.example.toml",
       "category": "configuration-template",
       "source": "rust/config.example.toml",
-      "sha256": "3ad588d51b0f0c3d2be087f3bc44b01e137783bc036d613789596142942940f3",
+      "sha256": "046355f5469c730125d3179a190dc605bcdde344a7b1f1ef7ab3ad304dfce7b4",
       "identity": "exact"
     },
     {
       "path": "config/config.sbc.example.toml",
       "category": "configuration-template",
       "source": "rust/config.sbc.example.toml",
-      "sha256": "fb6f32e73514a7f013acb270467fcb87978830fe71cfc6d0b1b87dc3f304d218",
+      "sha256": "cae152978cd756cc795f22110a01b28751bfe2804e18f253b60430163a9f07dd",
       "identity": "exact"
     },
     {
@@ -47,12 +47,12 @@
       "path": "dashboard/manifest.json",
       "category": "dashboard-assets",
       "source": "rust/assets/dashboard/manifest.json",
-      "sha256": "78edb15cc669d61ad099d2c5c98c6a1aa32186c29e12c22a7cc3e7b4626944c3",
+      "sha256": "13d628c41486e65bb38f402eb5f26c230aba617105b7f1a3a059278df290ed63",
       "identity": "exact"
     }
   ],
-  "schema_migration_count": 54,
-  "schema_change": false,
+  "schema_migration_count": 62,
+  "schema_change": true,
   "ownership": "Rust build/runtime embeds these assets; source paths are canonical repository inputs",
   "rollback": "restore the source tree from Git history"
 }

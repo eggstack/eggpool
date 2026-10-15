@@ -452,7 +452,10 @@ impl Default for DashboardConfig {
 #[serde(deny_unknown_fields, default)]
 pub struct SecurityConfig {
     pub allowed_hosts: Vec<String>,
+    pub allow_insecure_web_auth: bool,
     pub cors_origins: Vec<String>,
+    /// Literal proxy IPs whose single `X-Forwarded-Proto: https` value may
+    /// establish the external scheme for browser authentication.
     pub trusted_proxies: Vec<String>,
     pub redact_headers: Vec<String>,
     pub persist_redacted_error_detail: bool,
@@ -463,6 +466,7 @@ impl Default for SecurityConfig {
             allowed_hosts: Vec::new(),
             cors_origins: Vec::new(),
             trusted_proxies: Vec::new(),
+            allow_insecure_web_auth: false,
             redact_headers: vec!["authorization".into(), "x-api-key".into()],
             persist_redacted_error_detail: false,
         }
@@ -715,6 +719,7 @@ pub struct ProviderConfig {
     pub models_endpoint: Option<ProviderModelsEndpointConfig>,
     pub static_models: Vec<ProviderStaticModelConfig>,
     pub verify: ProviderVerifyConfig,
+    pub budget: ProviderBudgetConfig,
 }
 impl Default for ProviderConfig {
     fn default() -> Self {
@@ -748,8 +753,26 @@ impl Default for ProviderConfig {
             models_endpoint: None,
             static_models: Vec::new(),
             verify: ProviderVerifyConfig::default(),
+            budget: ProviderBudgetConfig::default(),
         }
     }
+}
+
+#[derive(Debug, Clone, Default, Deserialize, Serialize)]
+#[serde(deny_unknown_fields, default)]
+pub struct ProviderBudgetConfig {
+    /// Operator-specified conservative price ceiling for this provider in
+    /// microdollars per million tokens. This is the ONLY price source hard
+    /// USD budget rules trust: estimator fallbacks (EWMA, family, generic)
+    /// are never a hard price. `None` means unknown price, so hard USD
+    /// admission fails closed for this provider. `Some(0)` is an explicit
+    /// verified zero-cost declaration (free local model), distinct from
+    /// unknown. Applies to every model dispatched to this provider, so it
+    /// must cover the most expensive one; per-model refinement is a
+    /// non-goal. Live-reloadable like other provider fields; each admitted
+    /// request snapshots the tariff of its generation, and in-flight holds
+    /// keep their original reservation.
+    pub max_microdollars_per_million_tokens: Option<u64>,
 }
 
 #[derive(Debug, Clone, Deserialize, Serialize)]
@@ -1548,6 +1571,13 @@ impl Config {
     }
 
     pub fn validate(&mut self) -> Result<(), ConfigError> {
+        for proxy in &self.security.trusted_proxies {
+            if proxy.parse::<std::net::IpAddr>().is_err() {
+                return Err(ConfigError::validation(
+                    "security.trusted_proxies entries must be literal IP addresses",
+                ));
+            }
+        }
         let wire_registry = crate::wire::WireProfileRegistry::embedded().map_err(|error| {
             ConfigError::validation(format!("invalid wire profile registry: {error}"))
         })?;
@@ -1946,6 +1976,15 @@ fn validate_provider(
                 "provider stream timeout is invalid",
             ));
         }
+    }
+    if provider
+        .budget
+        .max_microdollars_per_million_tokens
+        .is_some_and(|tariff| tariff > i64::MAX as u64)
+    {
+        return Err(ConfigError::validation(
+            "provider.budget.max_microdollars_per_million_tokens must fit in a signed 64-bit integer",
+        ));
     }
     if provider
         .stream_timeouts

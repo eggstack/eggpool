@@ -46,7 +46,47 @@ command is committed and verified, without overwriting an existing file, and
 prints the resolved config path.
 
 After install, `eggpool onboard` walks the operator through provider
-connections, configuration validation, and an optional server start.
+connections, configuration validation, and an optional server start. On a
+new database it also creates the initial local administrator with a
+non-default password and prints one personal API token once. For unattended
+bootstrap, pass `--password-stdin` and provide the password on stdin; the
+password is never accepted in argv. Secret output is suppressed when stdout
+is not a terminal unless `--show-secret` is explicitly passed. Existing databases keep their legacy
+authentication behavior until an operator explicitly initializes local user
+access.
+
+Manage local identities from the machine that owns the data directory with
+`eggpool users list`, `eggpool users token USER`, `eggpool users revoke USER`,
+and `eggpool users reset-password USER`. Personal tokens are for inference,
+model discovery, and the integration profile; they do not authorize dashboard
+or admin pages. The configured server API key remains a legacy shared
+inference credential during the staged migration. Do not share it with new
+users; issue an individual token instead.
+
+With `[dashboard].enabled = true`, an administrator can manage users, profiles,
+budgets, tokens, and audit history in the embedded dashboard. New members
+receive a temporary password and must change it at first login. Members can
+manage their personal tokens and view only their own usage and accessible
+models. A browser-issued token is shown once in a no-store response; set it as
+`EGGPOOL_API_KEY` in the environment that launches the desktop client.
+Remote browser login must use the operator's TLS proxy and trusted-proxy setup
+below: LAN reachability alone does not encrypt passwords or cookies.
+
+Budget rules are `estimated` by default. Promoting a rule to `hard` requires
+proof the proxy can actually bound: hard token rules need clients to send an
+explicit output cap, and hard USD rules need a conservative operator tariff on
+every provider those users can reach, configured as
+`[providers.<id>.budget] max_microdollars_per_million_tokens` (microdollars
+per million tokens, covering the most expensive model on that provider;
+omit for unknown price, `0` for verified free). Without a bound, hard-mode
+requests are denied before upstream dispatch — hard mode is unavailable rather
+than approximate. See [model limits](model-limits.md#local-user-budgets).
+
+An optional instance-wide ceiling (`eggpool users global-budget set` or the
+dashboard instance section) caps total consumption across all users and is
+intersected with every per-user rule. It covers unattributed legacy-key
+requests as well, survives user disable/delete, and needs no second database
+or writer. See [model limits](model-limits.md#instance-budget-ceilings).
 
 ### Updating EggPool
 
@@ -390,11 +430,29 @@ single-event-loop default (`threads = 1`).
 
 `eggpool onboard` keeps any explicit operator bind address and never rewrites
 it to loopback; newly initialized configs carry the canonical `0.0.0.0` LAN
-bind. The server API key generated during onboarding still guards inference
-(`/v1/*`), integration (`/api/integrations/*`), and runtime/update/status
-endpoints even though the human-facing dashboard is public by default. Use
-`eggpool dashboard public --off` to require the API key on ordinary dashboard
-pages and data as well.
+bind. Before local identity initialization, the configured server API key
+retains legacy behavior and the public read-only dashboard setting applies.
+After the first local administrator is created, the shared key is no longer
+accepted; personal tokens authenticate agent surfaces, while dashboard and
+admin routes require a browser session regardless of `dashboard.public`.
+
+For managed operation, remove `[server].api_key` and unset its configured
+environment variable, then set `dashboard.public = false` and run
+`eggpool users enable-managed`. That command refuses the transition while the
+shared key or public-dashboard setting remains. Non-loopback listeners may
+then run without a shared server key because protected routes require a
+personal token or browser session.
+
+Browser password login is allowed over loopback HTTP. For remote browser use,
+terminate TLS at an operator-managed proxy and add the proxy's literal peer IP
+to `[security].trusted_proxies`; EggPool accepts only a single
+`X-Forwarded-Proto: https` from that peer. Browser sign-in and failed personal-
+token throttling use one literal client IP in `X-Forwarded-For` from the
+trusted peer; the proxy must replace this header, and missing, duplicate, or
+chained values use the proxy peer as the throttle identity. The proxy must preserve the public
+Host header and the firewall must prevent direct access around the proxy. The
+optional `[security].allow_insecure_web_auth = true` switch is for isolated
+development only and emits a startup warning.
 
 Optional background features that remain explicit: set `[backup].enabled = true`
 for in-process archives or `[update_checker].enabled = true` for the periodic
@@ -562,7 +620,7 @@ sudo nano /etc/eggpool/env
 #
 # [server]
 # host = "0.0.0.0"         # canonical LAN bind (set "127.0.0.1" for loopback-only)
-# port = 11300             # a server API key is required for non-loopback binds
+# port = 11300             # legacy installs need a key; managed installs use per-user credentials
 #
 # [database]
 # path = "/var/lib/eggpool/usage.sqlite3"
@@ -837,14 +895,17 @@ sudo journalctl -u eggpool -n 50 --no-pager
 ### Cannot connect from LAN
 
 1. Verify that the explicit config selected `server.host = "0.0.0.0"` (or
-   another non-loopback address) and configured `[server].api_key` or
-   `[server].api_key_env`.
+   another non-loopback address). Legacy installs need `[server].api_key` or
+   `[server].api_key_env`; managed installs authenticate with personal tokens
+   and browser sessions.
 2. Check firewall: `ss -tlnp | grep 11300`
 3. See `docs/firewall.md`
 
-The copyable SBC profile stays on loopback by default. Shared startup and
-`check-config` validation reject LAN or wildcard binding without the existing
-simple server API key; loopback-only development may remain unauthenticated.
+The copyable SBC profile stays on loopback by default. A non-loopback legacy
+install requires the shared server key. After identity initialization, a
+keyless listener is allowed, but protected routes still require personal
+credentials or a browser session; unauthenticated loopback behavior is limited
+to the explicit legacy state.
 
 ### Headless server + desktop workgroup
 

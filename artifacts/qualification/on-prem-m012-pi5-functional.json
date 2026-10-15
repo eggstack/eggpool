@@ -1,0 +1,659 @@
+{
+  "backup": {
+    "archive_sha256": "bf84e6ec1487173dcad74479b3252e60ce69dbbd75ea6204592b0e5cbb44a2df",
+    "archive_size_bytes": 842130,
+    "elapsed_ms": 8983,
+    "member_count": 3
+  },
+  "candidate": {
+    "binary_size_bytes": 34984648,
+    "build_elapsed_ms": 1521999,
+    "build_mode": "on-device-release-build",
+    "build_profile": "release",
+    "rust_toolchain": "rustc 1.99.0 (b940084d7 2026-09-28)",
+    "sha256": "8609119a7f0494c8541b7a47ddbbe86be45ce3f84096b5ee87c228c71513a538"
+  },
+  "commands": [
+    {
+      "command": [
+        "<CANDIDATE>",
+        "--config",
+        "<TEMP_ROOT>/config.toml",
+        "version"
+      ],
+      "duration_ms": 6,
+      "id": "version",
+      "reason": "0.8.2",
+      "returncode": 0,
+      "status": "pass",
+      "timed_out": false
+    },
+    {
+      "command": [
+        "<CANDIDATE>",
+        "--config",
+        "<TEMP_ROOT>/config.toml",
+        "--help"
+      ],
+      "duration_ms": 4,
+      "id": "help",
+      "reason": "EggPool - aggregate OpenCode Go subscriptions. Usage: eggpool [OPTIONS] [COMMAND] Commands: serve connect logout check-config edit getkey newkey configsetup configremote deploy accounts dashboard db models modelinfo stats users onboard croncheck ensure-running migrate stop restart init-config help recover uninstall update set rehash runtime-status status backup version Options: --config <PATH> Path to the TOML configuration file. Falls back to $EGGPOOL_CONFIG, then ~/.config/eggpool/config.toml, then ./config.toml. -h, --help Print help -V, --version Print version",
+      "returncode": 0,
+      "status": "pass",
+      "timed_out": false
+    },
+    {
+      "command": [
+        "<CANDIDATE>",
+        "--config",
+        "<TEMP_ROOT>/config.toml",
+        "check-config"
+      ],
+      "duration_ms": 6,
+      "id": "check-config",
+      "reason": "Configuration loaded successfully from /tmp/eggpool-q008-2l3zr0jw/config.toml Server: 127.0.0.1:37919 Accounts: 1 Database: <DATABASE> Content digest: 241a6e7f7229d228cddac9e3370bc55775ff39ce786a257a38fac6e4c57ce2f2",
+      "returncode": 0,
+      "status": "pass",
+      "timed_out": false
+    },
+    {
+      "command": [
+        "<CANDIDATE>",
+        "--config",
+        "<TEMP_ROOT>/config.toml",
+        "migrate"
+      ],
+      "duration_ms": 4352,
+      "id": "migrate",
+      "reason": "Migrations completed successfully Applied migrations: 62 Current schema: 62",
+      "returncode": 0,
+      "status": "pass",
+      "timed_out": false
+    },
+    {
+      "command": [
+        "<CANDIDATE>",
+        "--config",
+        "<TEMP_ROOT>/config.toml",
+        "users",
+        "bootstrap"
+      ],
+      "duration_ms": 331,
+      "id": "bootstrap-admin",
+      "reason": "synthetic administrator bootstrap complete",
+      "returncode": 0,
+      "status": "pass",
+      "timed_out": false
+    },
+    {
+      "command": [
+        "<CANDIDATE>",
+        "--config",
+        "<TEMP_ROOT>/config.toml",
+        "accounts",
+        "list"
+      ],
+      "duration_ms": 5,
+      "id": "accounts-list",
+      "reason": "Configured accounts: fixture/q008-account Total: 1 accounts",
+      "returncode": 0,
+      "status": "pass",
+      "timed_out": false
+    },
+    {
+      "command": [
+        "<CANDIDATE>",
+        "--config",
+        "<TEMP_ROOT>/config.toml",
+        "modelinfo",
+        "list"
+      ],
+      "duration_ms": 10,
+      "id": "modelinfo-list",
+      "reason": "No model-info rows found.",
+      "returncode": 0,
+      "status": "pass",
+      "timed_out": false
+    },
+    {
+      "command": [
+        "<CANDIDATE>",
+        "--config",
+        "<TEMP_ROOT>/config.toml",
+        "stats",
+        "explain-dashboard",
+        "--json"
+      ],
+      "duration_ms": 11,
+      "id": "operator-stats",
+      "reason": "{ \"period\": \"24h\", \"bucket\": \"hour\", \"group_by\": \"provider_model\", \"queries\": [ { \"name\": \"fetch_timeseries\", \"plan\": [ \"SEARCH r USING COVERING INDEX idx_requests_started (started_at>? AND started_at<?)\", \"USE TEMP B-TREE FOR GROUP BY\" ] }, { \"name\": \"fetch_grouped_timeseries\", \"plan\": [ \"SEARCH r USING INDEX idx_requests_started (started_at>? AND started_at<?)\", \"USE TEMP B-TREE FOR GROUP BY\" ] }, { \"name\": \"fetch_summary\", \"plan\": [ \"SEARCH r USING INDEX idx_requests_started (started_at>? AND started_at<?)\" ] }, { \"name\": \"fetch_account_stats\", \"plan\": [ \"SEARCH r USING INDEX idx_requests_started (started_at>? AND started_at<?)\", \"USE TEMP B-TREE FOR GROUP BY\" ] }, { \"name\": \"fetch_model_stats\", \"plan\": [ \"SEARCH r USING INDEX idx_requests_started (starte",
+      "returncode": 0,
+      "status": "pass",
+      "timed_out": false
+    },
+    {
+      "command": [
+        "<CANDIDATE>",
+        "--config",
+        "<TEMP_ROOT>/config.toml",
+        "stats",
+        "transcoding",
+        "--json"
+      ],
+      "duration_ms": 10,
+      "id": "transcoding-stats",
+      "reason": "{ \"total\": 0, \"native_count\": 0, \"transcoded_count\": 0, \"per_direction\": {}, \"top_loss_warnings\": [], \"period\": \"24h\" }",
+      "returncode": 0,
+      "status": "pass",
+      "timed_out": false
+    },
+    {
+      "command": [
+        "<CANDIDATE>",
+        "--config",
+        "<TEMP_ROOT>/config.toml",
+        "runtime-status",
+        "--json"
+      ],
+      "duration_ms": 6,
+      "id": "runtime-status",
+      "reason": "runtime-status authentication failed (HTTP 401)",
+      "returncode": 1,
+      "status": "fail",
+      "timed_out": false
+    },
+    {
+      "command": [
+        "<CANDIDATE>",
+        "--config",
+        "<TEMP_ROOT>/config.toml",
+        "rehash",
+        "--json"
+      ],
+      "duration_ms": 8,
+      "id": "rehash",
+      "reason": "{ \"ok\": true, \"stage\": \"activation\", \"exit_code\": 0, \"generation\": 2, \"changed_sections\": [ \"metrics\" ], \"warnings\": [], \"restart_required\": [], \"retirement_pending\": true, \"message\": \"reload applied\" }",
+      "returncode": 0,
+      "status": "pass",
+      "timed_out": false
+    },
+    {
+      "command": [
+        "<CANDIDATE>",
+        "--config",
+        "<TEMP_ROOT>/config.toml",
+        "backup",
+        "--output-dir",
+        "<TEMP_ROOT>/backups"
+      ],
+      "duration_ms": 8983,
+      "id": "backup",
+      "reason": "Wrote backup: /tmp/eggpool-q008-2l3zr0jw/backups/eggpool-backup-20261014-211225.zip included: config.toml included: usage.sqlite3",
+      "returncode": 0,
+      "status": "pass",
+      "timed_out": false
+    },
+    {
+      "command": [
+        "<CANDIDATE>",
+        "--config",
+        "<TEMP_ROOT>/config.toml",
+        "stop",
+        "--timeout",
+        "30"
+      ],
+      "duration_ms": 15028,
+      "id": "stop-before-recovery",
+      "reason": "Stopping server (PID 2539379)... Server stopped.",
+      "returncode": 0,
+      "status": "pass",
+      "timed_out": false
+    },
+    {
+      "command": [
+        "<CANDIDATE>",
+        "--config",
+        "<TEMP_ROOT>/recovery/config.toml",
+        "recover",
+        "<TEMP_ROOT>/recovery/recovered.zip"
+      ],
+      "duration_ms": 4452,
+      "id": "recover",
+      "reason": "Overwrite current configuration and database? [y/N] Restore complete. Restart the server to load the new config. config: /tmp/eggpool-q008-2l3zr0jw/recovery/config.toml db: /tmp/eggpool-q008-2l3zr0jw/recovery/usage.sqlite3",
+      "returncode": 0,
+      "status": "pass",
+      "timed_out": false
+    },
+    {
+      "command": [
+        "<CANDIDATE>",
+        "--config",
+        "<TEMP_ROOT>/config.toml",
+        "db",
+        "vacuum"
+      ],
+      "duration_ms": 3608,
+      "id": "vacuum",
+      "reason": "Database vacuum completed successfully",
+      "returncode": 0,
+      "status": "pass",
+      "timed_out": false
+    },
+    {
+      "command": [
+        "<CANDIDATE>",
+        "--config",
+        "<TEMP_ROOT>/config.toml",
+        "stop",
+        "--timeout",
+        "30"
+      ],
+      "duration_ms": 2359,
+      "id": "stop",
+      "reason": "Stopping server (PID 2539504)... Server stopped.",
+      "returncode": 0,
+      "status": "pass",
+      "timed_out": false
+    }
+  ],
+  "durable": {
+    "active_reservations": 0,
+    "attempts": 8,
+    "pending_requests": 0,
+    "request_statuses": {
+      "completed": 8
+    },
+    "requests": 8,
+    "reservations": 8
+  },
+  "environment": {
+    "architecture": "aarch64",
+    "attestation": "Linux aarch64 plus device-tree board model",
+    "board_model": "Raspberry Pi 5 Model B Rev 1.0",
+    "cpu_frequency_policy": "2400000",
+    "cpu_governor": "ondemand",
+    "filesystem": "ext4",
+    "kernel": "6.8.0-1065-raspi",
+    "loopback_provider_requests": 8,
+    "os": "Ubuntu 24.04.4 LTS",
+    "os_version_id": "24.04",
+    "power_thermal_mode_celsius": 52.4,
+    "ram_bytes": 8322752512,
+    "root_storage_device_class": "mmc",
+    "soc_cpu_core_count": 4,
+    "storage_medium_class": "non-rotational"
+  },
+  "findings": [],
+  "functional": [
+    {
+      "body_bytes": 15,
+      "http_status": 200,
+      "id": "startup-readyz",
+      "status": "pass"
+    },
+    {
+      "body_bytes": 272,
+      "http_status": 200,
+      "id": "model-listing",
+      "status": "pass"
+    },
+    {
+      "body_bytes": 225,
+      "elapsed_ms": 4,
+      "http_status": 200,
+      "id": "chat_completions-finite",
+      "status": "pass",
+      "ttft_ms": 4
+    },
+    {
+      "body_bytes": 309,
+      "elapsed_ms": 4,
+      "http_status": 200,
+      "id": "responses-finite",
+      "status": "pass",
+      "ttft_ms": 4
+    },
+    {
+      "body_bytes": 213,
+      "elapsed_ms": 4,
+      "http_status": 200,
+      "id": "messages-finite",
+      "status": "pass",
+      "ttft_ms": 4
+    },
+    {
+      "body_bytes": 145,
+      "elapsed_ms": 5,
+      "http_status": 200,
+      "id": "chat_completions-stream",
+      "status": "pass",
+      "terminal_evidence": true,
+      "ttft_ms": 3
+    },
+    {
+      "body_bytes": 270,
+      "elapsed_ms": 5,
+      "http_status": 200,
+      "id": "responses-stream",
+      "status": "pass",
+      "terminal_evidence": true,
+      "ttft_ms": 4
+    },
+    {
+      "body_bytes": 480,
+      "elapsed_ms": 5,
+      "http_status": 200,
+      "id": "messages-stream",
+      "status": "pass",
+      "terminal_evidence": true,
+      "ttft_ms": 4
+    },
+    {
+      "id": "accounts-list",
+      "status": "pass"
+    },
+    {
+      "id": "modelinfo-list",
+      "status": "pass"
+    },
+    {
+      "id": "operator-stats",
+      "status": "pass"
+    },
+    {
+      "id": "transcoding-stats",
+      "status": "pass"
+    },
+    {
+      "id": "runtime-status",
+      "note": "managed-fencing: server-key rejected, browser session required",
+      "status": "pass"
+    },
+    {
+      "body_bytes": 29,
+      "http_status": 401,
+      "id": "dashboard-page",
+      "note": "managed-fencing: dashboard shell requires browser session",
+      "status": "pass"
+    },
+    {
+      "body_bytes": 56004,
+      "http_status": 200,
+      "id": "dashboard-static-dashboard.css",
+      "status": "pass"
+    },
+    {
+      "body_bytes": 49083,
+      "http_status": 200,
+      "id": "dashboard-static-dashboard.js",
+      "status": "pass"
+    },
+    {
+      "body_bytes": 131072,
+      "http_status": 200,
+      "id": "dashboard-static-chart.js",
+      "status": "pass"
+    },
+    {
+      "body_bytes": 1203,
+      "http_status": 200,
+      "id": "dashboard-static-favicon.svg",
+      "status": "pass"
+    },
+    {
+      "body_bytes": 1264,
+      "http_status": 200,
+      "id": "dashboard-static-theme.css?theme=Nord",
+      "status": "pass"
+    },
+    {
+      "id": "rehash-runtime-status",
+      "status": "pass"
+    },
+    {
+      "id": "graceful-stop-before-recovery",
+      "status": "pass"
+    },
+    {
+      "id": "backup-recover-isolated",
+      "recovered_database": true,
+      "status": "pass"
+    },
+    {
+      "id": "bounded-maintenance",
+      "status": "pass"
+    },
+    {
+      "id": "restart-reconcile",
+      "status": "pass"
+    },
+    {
+      "id": "graceful-shutdown",
+      "status": "pass"
+    }
+  ],
+  "isolated_temporary_root": true,
+  "manifest": "runtime-q001.v1",
+  "plan": "SBC qualification",
+  "python_reference": {
+    "reason": "optional same-board comparison was not supplied",
+    "status": "not-run"
+  },
+  "repeated_run_stability": {
+    "fd_counts": [
+      14,
+      14,
+      14,
+      17,
+      14
+    ],
+    "interpretation": "bounded samples for release characterization; no fixed performance threshold applied",
+    "logical_leaks": false,
+    "rss_bytes": [
+      18505728,
+      21630976,
+      22675456,
+      23691264,
+      19390464
+    ],
+    "samples": 5,
+    "status": "pass",
+    "thread_counts": [
+      2,
+      2,
+      2,
+      3,
+      2
+    ]
+  },
+  "request_workload_timings": {
+    "elapsed_ms": {
+      "finite_elapsed_ms": [
+        4,
+        4,
+        4
+      ],
+      "finite_ttft_ms": [
+        4,
+        4,
+        4
+      ],
+      "second_workload_elapsed_ms": [
+        6,
+        5
+      ],
+      "second_workload_ttft_ms": [
+        6,
+        5
+      ],
+      "streaming_elapsed_ms": [
+        5,
+        5,
+        5
+      ],
+      "streaming_ttft_ms": [
+        3,
+        4,
+        4
+      ]
+    },
+    "interpretation": "bounded client-observed timings; first-byte values are diagnostic characterization, not an SLA",
+    "sample_count": 16
+  },
+  "resource_samples": [
+    {
+      "active_generation_id": null,
+      "active_leases": null,
+      "active_reservations": 0,
+      "attempts": 0,
+      "cpu_percent": 0.0,
+      "db_bytes": 831488,
+      "finalization_capacity": null,
+      "finalization_jobs": null,
+      "generation_count": null,
+      "label": "before-warmup",
+      "open_fd_count": 14,
+      "pending_requests": 0,
+      "request_statuses": {},
+      "requests": 0,
+      "reservations": 0,
+      "retiring_generations": null,
+      "retiring_leases": 0,
+      "rss_bytes": 18505728,
+      "running_tasks": 0,
+      "runtime_read_error": false,
+      "runtime_tasks": 0,
+      "sample_window_ms": 200,
+      "terminal_references": 0,
+      "thread_count": 2,
+      "virtual_bytes": 98308096,
+      "wal_bytes": 103032,
+      "wire_flights": null
+    },
+    {
+      "active_generation_id": null,
+      "active_leases": null,
+      "active_reservations": 0,
+      "attempts": 0,
+      "cpu_percent": 0.0,
+      "db_bytes": 831488,
+      "finalization_capacity": null,
+      "finalization_jobs": null,
+      "generation_count": null,
+      "label": "after-warmup",
+      "open_fd_count": 14,
+      "pending_requests": 0,
+      "request_statuses": {},
+      "requests": 0,
+      "reservations": 0,
+      "retiring_generations": null,
+      "retiring_leases": 0,
+      "rss_bytes": 21630976,
+      "running_tasks": 0,
+      "runtime_read_error": false,
+      "runtime_tasks": 0,
+      "sample_window_ms": 200,
+      "terminal_references": 0,
+      "thread_count": 2,
+      "virtual_bytes": 167682048,
+      "wal_bytes": 160712,
+      "wire_flights": null
+    },
+    {
+      "active_generation_id": null,
+      "active_leases": null,
+      "active_reservations": 0,
+      "attempts": 6,
+      "cpu_percent": 0.0,
+      "db_bytes": 831488,
+      "finalization_capacity": null,
+      "finalization_jobs": null,
+      "generation_count": null,
+      "label": "after-first-workload",
+      "open_fd_count": 14,
+      "pending_requests": 0,
+      "request_statuses": {
+        "completed": 6
+      },
+      "requests": 6,
+      "reservations": 6,
+      "retiring_generations": null,
+      "retiring_leases": 0,
+      "rss_bytes": 22675456,
+      "running_tasks": 0,
+      "runtime_read_error": false,
+      "runtime_tasks": 0,
+      "sample_window_ms": 200,
+      "terminal_references": 0,
+      "thread_count": 2,
+      "virtual_bytes": 168005632,
+      "wal_bytes": 1730432,
+      "wire_flights": null
+    },
+    {
+      "active_generation_id": null,
+      "active_leases": null,
+      "active_reservations": 0,
+      "attempts": 6,
+      "cpu_percent": 0.0,
+      "db_bytes": 831488,
+      "finalization_capacity": null,
+      "finalization_jobs": null,
+      "generation_count": null,
+      "label": "after-rehash-backup",
+      "open_fd_count": 17,
+      "pending_requests": 0,
+      "request_statuses": {
+        "completed": 6
+      },
+      "requests": 6,
+      "reservations": 6,
+      "retiring_generations": null,
+      "retiring_leases": 0,
+      "rss_bytes": 23691264,
+      "running_tasks": 0,
+      "runtime_read_error": false,
+      "runtime_tasks": 0,
+      "sample_window_ms": 200,
+      "terminal_references": 0,
+      "thread_count": 3,
+      "virtual_bytes": 168058880,
+      "wal_bytes": 1911712,
+      "wire_flights": null
+    },
+    {
+      "active_generation_id": null,
+      "active_leases": null,
+      "active_reservations": 0,
+      "attempts": 8,
+      "cpu_percent": 0.0,
+      "db_bytes": 827392,
+      "finalization_capacity": null,
+      "finalization_jobs": null,
+      "generation_count": null,
+      "label": "after-second-workload",
+      "open_fd_count": 14,
+      "pending_requests": 0,
+      "request_statuses": {
+        "completed": 8
+      },
+      "requests": 8,
+      "reservations": 8,
+      "retiring_generations": null,
+      "retiring_leases": 0,
+      "rss_bytes": 19390464,
+      "running_tasks": 0,
+      "runtime_read_error": false,
+      "runtime_tasks": 0,
+      "sample_window_ms": 200,
+      "terminal_references": 0,
+      "thread_count": 2,
+      "virtual_bytes": 98484224,
+      "wal_bytes": 556232,
+      "wire_flights": null
+    }
+  ],
+  "schema_version": "runtime-q008.v1",
+  "startup_to_ready_ms": 136,
+  "status": "pass"
+}

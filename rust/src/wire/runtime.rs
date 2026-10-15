@@ -765,6 +765,7 @@ impl WireRuntime {
             raw_body_bytes: admission.raw_body_bytes,
             reservation_tokens: admission.reservation_tokens,
             context_tokens: admission.context_tokens,
+            budget_facts: admission.budget_facts,
         };
         Ok(PreparedRequest {
             identity,

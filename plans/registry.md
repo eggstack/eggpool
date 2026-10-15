@@ -14,9 +14,10 @@ Canonical direction:
 
 Legacy archive (pre-251, immutable, top level): `plans/001-*` through
 `plans/250-*` plus `python_hotpath_dispatch_compression_optimization.md`.
-Most recently closed: Deployment and Packaging M005 (active PATH integration
-detection corrective; 78-case harness, hosted Linux Bash + macOS arm64 zsh
-passed; `plans/closure/deployment-packaging/005-status.md`).
+Most recently closed: On-prem Concurrency Performance M001 (conditionally
+closed after three paired physical Pi 5/MMC and tmpfs runs; durable
+publication/SQLite/storage attribution; remaining controls in
+`plans/closure/on-prem-concurrency-performance/001-status.md`).
 Legacy archive latest: Plan 250
 (EggServe 0.3.0 direct-Tower migration, `7879cbf9`). Plans 244–245, 215–220,
 241 remain historical per their own closure passes; the `146-*` duplicate
@@ -49,14 +50,14 @@ pair is a known numbering accident.
 | Persistence | active | `plans/subsystems/persistence-roadmap.md` | M011 ready — post-M010 roadmap/documentation reconciliation | M009/M010 closures accepted. Documentation/tooling-only corrective; production remains WAL/NORMAL. No technical persistence successor is registered. |
 | Deployment and packaging | closed | `plans/subsystems/deployment-packaging-roadmap.md` | M005 closed — active PATH integration detection corrective | M001–M005 closed; no successor registered. |
 | Dashboard | closed | `plans/subsystems/dashboard-roadmap.md` | M012 closed — lifecycle closure and documentation polish | M001–M012 closed; no registered successor; future dashboard work requires a new bounded plan. |
+| On-prem user access | active | `plans/subsystems/on-prem-user-access-roadmap.md` | M016 closed — merge held pending maintainer review | M014/M015 and exact M016 candidate checks are closed/passed; PR #7 remains open pending maintainer review. M001–M013 history preserved; physical Pi 5 restricted envelope remains qualified only for solo/light concurrency. |
+| On-prem concurrency performance | active | `plans/subsystems/on-prem-concurrency-performance-roadmap.md` | M001 conditionally closed — Pi 5/microSD durable-storage tail attribution | Optional follow-up, **nonblocking** to PR #7 merge. Controlled competing-I/O and account/budget matrix evidence remain before broader claims or optimization. SSD/NVMe is optional, not a closure dependency. |
 
 ## Dependency-ready implementation plans
 
 | Subsystem | Milestone | Status | Implementation plan | Dependencies / handoff note |
 |---|---|---|---|---|
 | Persistence | M011 — post-M010 roadmap and documentation reconciliation | ready | `plans/implementation/persistence/011-post-m010-roadmap-documentation-reconciliation.md` | Hard: M009/M010 closures accepted. Documentation/tooling only; no runtime or physical target dependency. |
-
-
 
 ## Active implementation plans
 
@@ -68,6 +69,23 @@ pair is a known numbering accident.
 
 | Subsystem | Milestone | Blocker |
 |---|---|---|
+
+
+Unblock audit (on-prem user access reopening after M012 closure, baseline
+`3c7def1e`): M001–M013 closure records remain immutable; no
+historical milestone was reopened. M014 is closed after Rustls
+0.23.46 passed exact-SHA hosted cargo-deny, CI, and installer jobs.
+M015 is closed on `d8fd9c2a`; its independent review findings were
+fixed, re-reviewed, and covered by local default/no-default suites and
+exact-SHA hosted CI, installer and dependency-audit jobs. Registry audit
+found M016 is the only registered successor blocked on M015, so M016 is
+promoted to ready. M016 still needs final merge-readiness reconciliation.
+Independent
+on-prem concurrency performance M001 is ready as nonblocking
+diagnostic research: the Pi 5/MMC G3 tail-latency failure is
+documented, not waived or treated as a release-blocking
+throughput commitment. No unrelated ready/active milestone
+is promoted or blocked by this registration.
 
 Explicit user direction opens Shared Provider Profile Contract M001 at baseline `b73eea6bc4ecdb6ce6b8974769b7821cf5e7e036`. The milestone extracts the existing secret-free provider endpoint/wire/auth/discovery/verification metadata into a sibling-consumable sans-I/O crate, keeps all account/credential/routing/runtime ownership in EggPool, and adds reviewed non-fixed OpenCode Go model-wire hints. CodeGG is an operational downstream only and must consume an immutable closure revision; no sibling repository is treated as first-party provider authority.
 
@@ -82,6 +100,20 @@ Historical M007 blocker assessment at baseline `7e241ad` (`plans/closure/persist
 
 | Subsystem / plan | Disposition | Evidence |
 |---|---|---|
+| On-prem user access M016 — final PR #7 integration and merge-readiness reconciliation | closed — local Rust/tooling, Q007, release-doc, browser and installed release-binary evidence pass; exact PR head `3d68c715` hosted CI, Linux/macOS installer and cargo-deny pass; merge held because no maintainer PR review has been submitted; no future plan depends on M016 | `plans/closure/on-prem-user-access/016-status.md`, PR #7, base `9a0a903c`, head `3d68c715`, CI `38721601336`, installer `38721601305`, audit `38721601318` |
+| On-prem user access M015 — independent authentication/authorization threat review | closed — independent review findings on hard-cost proof bounds and browser-session access corrected and re-reviewed; default 1,024 / no-default 1,025 tests pass (one ignored each); exact-SHA CI, installer and dependency audit pass on `d8fd9c2a`; no M015 security findings remain; M016 promoted to ready | `plans/closure/on-prem-user-access/015-status.md`, implementation `a526980c`, `deb1622f`, `d8fd9c2a`, security scan `52bd79cc`, CI `38720507683`, installer `38720509034`, audit `38720507720` |
+| On-prem user access M014 — Rustls dependency security-advisory corrective | closed — lockfile-only Rustls 0.23.46 patch, unchanged transport feature graph; local default/no-default and 1,009/1,010-test workspace suites, provider TLS (trusted root, wrong-root and hostname rejection), budget/coordinator suites, release build and tooling pass; hosted cargo-deny, CI and both installers pass on `7462263ec482c5fda4bd1a70a9a55b0efc313cd3`; main remains pending PR merge | `plans/closure/on-prem-user-access/014-status.md`, implementation `7462263e`, audit `38671345587`, CI `38671345679`, installers `38671345597` |
+| On-prem concurrency performance M001 — Pi 5/microSD concurrent tail attribution | conditionally closed — three paired physical microSD/tmpfs runs identify durable publication/SQLite/storage as the dominant tested four-way tail contributor; no production change or capacity claim; SSD/NVMe is not required | `plans/closure/on-prem-concurrency-performance/001-status.md`, six Q008 reports + manifest under `artifacts/qualification/on-prem-concurrency-performance/`, artifact guard `tests/tooling/test_on_prem_mmc_tail_attribution.py` |
+| On-prem user access M012 — physical SBC small-team qualification and final disposition | closed — Pi 5 managed envelope measured (functional 25 cells + 3×30 benchmark batches all pass, 145/145 each, 0 pending/active; Argon2id 51 ms 1-way / 71–73 ms 2-way; 49 named users at 51 ms p50 with spot logins passing; concurrency 1/2/4/8 completes with 8-way saturating at p50 4.1 s); runner managed-auth corrective + 2 contract tests; solo practical, 49 users inexpensive metadata, no 50-concurrent claim; one medium (MMC tails exceed Sep-21 gates, envelope restricted) + six low findings, no high | `plans/closure/on-prem-user-access/012-status.md`, artifacts `artifacts/qualification/on-prem-m012-pi5-functional.json` + `on-prem-m012-pi5-benchmark-run-{1,2,3}.json`, docs `docs/raspberry-pi.md` envelope |
+| On-prem user access M011 — admin/member dashboard browser qualification | closed — frozen Python oracle rebuilt and run against head with 54 parity gaps, identical to the pre-M011 baseline (0 new, 0 resolved); on-prem admin/member pages qualified against a Rust-owned approved reference (70 observations, 22 captures) covering both roles, the negative matrix, no-JS sign-in, HiDPI/mobile/themed viewports, and a DOM credential-leak guard; browser sign-in, top-nav overflow at 1280px, unstyled usage pages, missing viewport declarations, unbounded tables, and budget labelling all corrected; 967 serial Rust tests and 175 tooling tests pass at the M011 baseline (re-verified post-integration — see integration note) | `plans/closure/on-prem-user-access/011-status.md` |
+| On-prem user access M010 — budget crash recovery and schema-54 restore | closed
+| On-prem user access M007 — small-team qualification, migration, and release hardening | conditionally closed — local 964 serial Rust tests + 166 tooling tests; hosted CI `38497388228`, installer qualification `38497388225`, and dependency audit `38497388244` pass; seven synthetic loopback requests complete with no reservations left; physical Pi/Le Potato capacity and schema-54 restore remain unmeasured, so no 49-user or concurrency claim | `plans/closure/on-prem-user-access/007-status.md`, local artifact `artifacts/qualification/on-prem-user-access-m007-local.json` |
+| On-prem user access M006 — web administration and personal client integration | conditionally closed — migration 60, session/role/CSRF-fenced admin and member screens, one-time/revocable personal credentials, bounded audit/list reads, 964 serial Rust tests + 166 tooling tests; browser parity captures and M005 estimate/physical evidence carried into M007 | `plans/closure/on-prem-user-access/006-status.md`, implementation `a3f2d00a` |
+| On-prem user access M004 — profile-based model authorization | closed — migration 58, exact profile and user policy, concrete-dispatch checks, filtered model discovery and policy ETag; default/no-default compile gates and 957 all-target tests passed; M005 promoted to ready | `plans/closure/on-prem-user-access/004-status.md`, implementation `f537df4`, concurrency fixture `c53bf4d` |
+| On-prem user access M005 — durable user/model budgets | conditionally closed — migration 59, transactional holds, retry/terminal settlement, bounded authenticated usage and 962 serial workspace tests; exact output/USD caps, global scope, crash/restore tests and overhead measurement remain explicit conditions; M006 promoted to ready | `plans/closure/on-prem-user-access/005-status.md`, implementation `49dc6ce` |
+| On-prem user access M003 — principal propagation and attribution | conditionally closed — typed principal and durable logical request ownership across finite, stream, compact, retries, and selector child; 953 integration tests passed, 1 ignored; two unrelated update unit-test failures and physical measurement carried as explicit conditions; M004 promoted to ready | `plans/closure/on-prem-user-access/003-status.md`, implementation `9af8787a` |
+| On-prem user access M002 — browser sessions and route authorization | closed — opaque sessions, CSRF, role-separated managed routes, trusted-proxy transport checks; 947 Rust tests passed, 1 ignored; M003 promoted to ready; SBC hash qualification remains with M007 | `plans/closure/on-prem-user-access/002-status.md`, implementation `087953a3` |
+| On-prem user access M001 — admin bootstrap and client credentials | conditionally closed — migration 55, local admin and personal-token lifecycle, legacy-key cutover, 939 workspace tests passed; physical SBC Argon2 qualification carried to M007; M002 promoted to ready | `plans/closure/on-prem-user-access/001-status.md`, implementation `ecdc313` |
 | Deployment and packaging M005 — active PATH integration detection corrective | closed — 78-case installer harness (73 baseline + 5 new Gregg/array regressions), Linux Bash and macOS arm64 zsh hosted qualification, full CI; no dependent plan was unblocked | `plans/closure/deployment-packaging/005-status.md`, implementation `576b462d`, CI `38030165909`, shell run `38030165862` |
 | Deployment and packaging M004 — shell command discovery and activation corrective | closed — 73-case installer harness, Linux Bash and macOS arm64 zsh hosted qualification, full CI; no dependent plan was unblocked | `plans/closure/deployment-packaging/004-status.md`, implementation `57af5bc` + test hardening `45149d2`, CI `38026958264`, shell run `38026958268` |
 | Provider transport M006 — Eggress 1.0.12 dependency refresh and requalification | closed — all 16 registry-resolved Eggress crates at 1.0.12; provider/coordinator/wire and default/no-default workspace gates passed; release binary +520 bytes (+0.0017%); hosted CI and dependency audit green; no plan unblocked | `plans/closure/provider-transport/006-status.md`, implementation `d8be1599` |
@@ -382,3 +414,100 @@ selection, runtime efficiency, shared provider profile contract, and dashboard
 remain closed with no successor. No deployment-packaging successor is registered;
 future hardening (attestations, system/root distribution, additional targets)
 requires new bounded plans.
+
+Unblock audit (on-prem user access M001 conditionally closed, implementation
+`ecdc313`, `plans/closure/on-prem-user-access/001-status.md`): searched
+`plans/implementation/on-prem-user-access/`, the subsystem dependency graph,
+and the ready/active/blocked registry tables. M002's hard M001 credential and
+schema dependency is satisfied by the accepted closure and was promoted to
+ready. M003 remains blocked on M002 and its stable principal/scope contract;
+M004 remains blocked on M003 attribution; M005 on M004 policy gates; M006 on
+M005 durable budgets; M007 on M006 and physical qualification. No other
+registered plan depends on M001. The M001 Argon2 SBC measurement condition is
+carried into M007, so promotion of M002 does not assert physical sizing.
+
+
+Unblock audit (on-prem user access M006 conditionally closed, implementation
+`a3f2d00a`, `plans/closure/on-prem-user-access/006-status.md`): searched
+`plans/implementation/on-prem-user-access/`, the roadmap dependency graph, and
+the dependency-ready, active, and blocked registry tables. M007's hard M006
+dependency is satisfied and it is promoted to ready. Its physical SBC and
+ordinary-host measurements remain operational evidence required for M007
+closure; they do not block preparatory compatibility and recovery work. No
+other registered plan declares M006 as a dependency, so no other plan was
+promoted. M005 estimate/global-scope/recovery findings and M001 Argon2 hardware
+measurement remain carried conditions.
+
+
+Unblock audit (on-prem user access M007 conditionally closed, implementation
+`a3f2d00a`, `plans/closure/on-prem-user-access/007-status.md`): searched
+`plans/implementation/on-prem-user-access/`, the roadmap dependency graph, and
+the dependency-ready, active, and blocked registry tables. M001–M007 are
+terminal and no successor or downstream plan declares this workstream as a
+dependency. No plan was promoted. The physical SBC, exact schema-54 restore,
+dashboard parity, M005 budget, and hosted-CI conditions remain visible in the
+closure; no named-user capacity claim is supported by the local synthetic run.
+
+
+Unblock audit (on-prem user access M011 closed,
+`plans/closure/on-prem-user-access/011-status.md`): searched
+`plans/implementation/on-prem-user-access/`, the roadmap dependency graph, and
+the dependency-ready, active, and blocked registry tables. M011 left the
+dependency-ready table. At M011's own baseline its hard-dependency note held
+(M008 still ready, M009/M010 blocked on it); on integration into this branch,
+M008/M009/M010/M013 are all accepted closures, so M012's hard dependency
+(M008–M011 accepted closures) is now fully satisfied and M012 stays blocked
+solely on its operational requirement (provisioned physical SBC and reference
+ordinary Linux target). No plan was promoted: nothing else declares these
+milestones as a dependency. M006's recorded browser-parity condition is
+satisfied additively here; the immutable M006 record is not retroactively
+altered.
+
+Integration note (M011 cherry-picked as `d495d483` from
+`feat/auto-20261014-e526194d` onto this branch): the pick's registry and
+roadmap edits were reconciled to current truth (M008/M009/M010/M013 already
+closed here); the `render/admin.rs` budget-form conflict resolved in favour of
+the mode-aware M008 form (the M011 labels predated enforcement modes) while
+keeping M011's `on_prem_page`/`scroll_table` structural fixes; the M011 plan
+file moved `ready` → `implemented` (activation was skipped in the separate
+session — recorded here, not rewritten).
+
+Unblock audit (on-prem user access M012 blocked closure,
+`plans/closure/on-prem-user-access/012-status.md`): searched
+`plans/implementation/on-prem-user-access/`, the roadmap dependency graph, and
+the dependency-ready, active, and blocked registry tables. M012's hard
+dependency (accepted M008–M011 closures) is satisfied; the operational
+requirement (provisioned physical SBC and reference ordinary Linux target)
+is not, so M012 stays blocked and the roadmap stays `active`. The closure
+pass lands only the tooling boundary-contract suite
+(`tests/tooling/test_on_prem_sbc_qualification.py`, 9 tests) with zero
+production diff; no plan is promoted and nothing else declares these
+milestones as a dependency. No capacity, latency, Argon2, RSS, WAL, or
+named-user claim is accepted. When hardware is provisioned, resume at plan
+work packages 2–4 with predeclared gates.
+
+Unblock audit (on-prem user access M012 closed,
+`plans/closure/on-prem-user-access/012-status.md`): searched
+`plans/implementation/on-prem-user-access/`, the roadmap dependency graph, and
+the dependency-ready, active, and blocked registry tables at this commit.
+M012's hard dependency (accepted M008–M011 closures) was already satisfied;
+the operational requirement is now met with Pi 5 managed evidence
+(functional + 3× benchmark + Argon2 + 49 named users + 1/2/4/8 concurrency),
+so M012 moves `blocked` → `implemented`/`closed` and the on-prem roadmap
+moves `active` → `closed`. This pass lands the runner managed-auth corrective,
+two contract tests (11 total), four Pi 5 artifacts, and the `raspberry-pi.md`
+envelope with zero production diff. No plan is promoted: nothing else
+declares M012 as a dependency, M013 is already closed, and the only ready row
+(Persistence M011) is independent and unaffected. The blocked-work table is
+now empty. Future hardware-class or higher-concurrency claims require new
+bounded plans; this closure record is not to be rewritten.
+
+Unblock audit (on-prem concurrency performance M001 conditionally closed,
+`plans/closure/on-prem-concurrency-performance/001-status.md`): searched
+`plans/implementation/`, the subsystem dependency graph, and the dependency-
+ready, active, and blocked registry tables. No registered plan declares M001
+as a hard, interface, soft, or operational dependency. No plan is promoted or
+unblocked. On-prem user-access M016 is ready after M014/M015 closure and still
+requires final-SHA gates; this optional diagnostic workstream has no edge
+to that sequence. The concurrency-performance roadmap remains active for any
+future separately scoped controlled-I/O/media/budget work; none is registered.

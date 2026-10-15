@@ -39,7 +39,7 @@ use crate::coordinator::{
     FinalizationData, FinalizationIdentity, FinalizationOutcome, FinalizationResult,
     FinalizationSupervisor, NextAction, PublicationError, PublicationInput, PublicationOutcome,
     PublicationService, PublishedAttempt, RetryPolicy, RetryScope, WireResolver,
-    filter_response_headers, retry_after_from_headers,
+    budget_proof_for_claim, filter_response_headers, retry_after_from_headers,
 };
 
 /// End-to-end streaming coordinator for one immutable runtime generation.
@@ -205,6 +205,22 @@ impl StreamingCoordinator {
     pub async fn execute(
         &self,
         request: StreamRequest,
+    ) -> Result<StreamingExecution, StreamingCoordinatorError> {
+        self.execute_inner(request, None).await
+    }
+
+    pub(crate) async fn execute_attributed(
+        &self,
+        request: StreamRequest,
+        attribution: crate::identity::RequestAttribution,
+    ) -> Result<StreamingExecution, StreamingCoordinatorError> {
+        self.execute_inner(request, Some(attribution)).await
+    }
+
+    async fn execute_inner(
+        &self,
+        request: StreamRequest,
+        attribution: Option<crate::identity::RequestAttribution>,
     ) -> Result<StreamingExecution, StreamingCoordinatorError> {
         if request.admitted.canonical.origin.client_surface() != Some(request.client_surface)
             || request.routing_facts.canonical_model_id != request.admitted.canonical.model
@@ -393,14 +409,25 @@ impl StreamingCoordinator {
                 .iter()
                 .any(|candidate| !attempted.contains(&candidate.surface()));
             let upstream_protocol = protocol_for_surface(candidate.surface());
-            let publication_input = PublicationInput::new(
+            let mut publication_input = PublicationInput::new(
                 request.proxy_request_id.clone(),
                 request.client_surface.protocol(),
                 upstream_protocol,
                 true,
                 i64::from(attempt_number),
             );
-            let published = match self.publication.publish(claim, publication_input).await? {
+            publication_input.budget_proof = Some(budget_proof_for_claim(
+                &claim,
+                provider
+                    .budget
+                    .max_microdollars_per_million_tokens
+                    .and_then(|tariff| i64::try_from(tariff).ok()),
+            ));
+            let published = match self
+                .publication
+                .publish_attributed(claim, publication_input, attribution.clone())
+                .await?
+            {
                 PublicationOutcome::Published(value) => value,
                 PublicationOutcome::AlreadyPublished(_) => {
                     return Err(StreamingCoordinatorError::Publication(

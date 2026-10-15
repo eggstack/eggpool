@@ -137,6 +137,12 @@ nav.topnav {
   flex-wrap: wrap;
   gap: 0.5rem;
   align-items: center;
+  /* The menu reflows internally, but as a flex item of the topbar this element
+     still defaults to a `min-width: auto` floor of its max-content width, so a
+     long navigation widens the whole bar instead of wrapping inside it.
+     Letting the item shrink keeps the topbar inside its own container. */
+  min-width: 0;
+  max-width: 100%;
 }
 
 nav.topnav a {
@@ -1180,8 +1186,8 @@ label.trace-limit {
     width: 100%;
   }
 
-  /* Thirteen links at a 44px tap height plus the theme picker stack to
-     ~694px, which is taller than a typical phone viewport (~660px). The
+  /* Sixteen links at a 44px tap height plus the theme picker stack to
+     ~810px, which is taller than a typical phone viewport (~660px). The
      picker sits last, so on a phone it landed below the fold and the one
      control the operator most wants to reach was the one they could not.
      Cap the dropdown to the space actually below the sticky topbar and let
@@ -1274,7 +1280,7 @@ label.trace-limit {
     width: auto;
     margin-top: 0;
     /* A zero flex-basis is required here, not `auto`. With `flex: 1 1 auto`
-       the menu's hypothetical main size is its full content width (13 links
+       the menu's hypothetical main size is its full content width (16 links
        plus the theme selector), which exceeds the topbar, so `flex-wrap`
        broke the line *before* any shrinking happened — the menu took a line
        by itself and the refresh button wrapped onto a row of its own. With
@@ -1292,8 +1298,8 @@ label.trace-limit {
 
   /* ---- Compact metrics for the inline (non-burger) topbar ----
 
-     Thirteen uppercase nav links plus a theme `<select>` plus the reload
-     button need roughly 1710px at the default metrics. At full size the
+     Sixteen uppercase nav links plus a theme `<select>` plus the reload
+     button need roughly 1900px at the default metrics. At full size the
      group fell to three or four rows from 761px all the way to 1279px —
      measured at 768px the sticky topbar was 175px tall (brand / two nav rows
      / theme picker alone on a 325px row), permanently occupying 23% of a
@@ -1338,16 +1344,20 @@ label.trace-limit {
 
 /* ---- Wide: one line for links, theme picker, and reload button ----
 
-   `nowrap` is the last step, layered on the compact metrics above. Measured
-   against the real topbar the group needs ~1360px to truly fit one row, so
-   this is not the breakpoint where the bar becomes a single row — it is where
-   forcing one stops costing more height than wrapping does. Between 1280 and
-   1359 the rows measured 88px with `nowrap` against 129px with the wrap
-   inherited from the 761px block, so `nowrap` starts at 1280 and the bar is a
-   single 57px row from ~1340px. The 761-1279 range keeps the wrap: thirteen
-   links plus the picker do not fit a tablet, but the compact metrics above
-   hold that range to 129px instead of the 175px it measured before. */
-@media (min-width: 1280px) {
+   `nowrap` is the last step, layered on the compact metrics above. It is not
+   the breakpoint where the bar becomes a single row — it is where forcing one
+   stops costing more height than wrapping does.
+
+   The tier used to start at 1280px because thirteen links plus the picker needed
+   ~1360px to fit one row, and between 1280 and 1359 the bar measured 88px with
+   `nowrap` against 129px with the wrap inherited from the 761px block. The
+   on-prem user-access navigation then added Users, Profiles, Usage, and My
+   Account, so the group is sixteen links and no longer fits at 1280px: measured
+   on a 1280x800 viewport the document scrolled 212px past the viewport with
+   `nowrap`, which is the common laptop width this tier was sized for. The tier
+   now starts at 1560px, above the 1520px the group actually needs, and the
+   1280-1559 range keeps the inherited wrap. */
+@media (min-width: 1560px) {
   nav.topnav {
     flex-wrap: nowrap;
   }
@@ -1360,7 +1370,7 @@ label.trace-limit {
 
 /* Touch-sized topbar controls above the burger breakpoint.
 
-   The 760/761 split is a layout-fit decision: below it thirteen nav
+   The 760/761 split is a layout-fit decision: below it sixteen nav
    links plus a theme picker do not fit on a row, so the burger appears.
    It cannot also express *input capability*, so every viewport from
    761px up inherits mouse-sized controls — and a 768x1024 iPad is

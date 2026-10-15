@@ -78,6 +78,31 @@ changes.
   IO stays in `operations/integrations.rs`; helper never implies Windows
   proxy support.
 
-Phases 2–4 create NO automatic milestones. Subsystem roadmaps are written on
+## Phase 5 — Optional on-prem small-team access and budgeting
+
+Objective: add identity-bound use of a single locally administered EggPool
+instance without regressing the single-owner SBC and LAN deployment.
+Authorized clients may route to operator-configured hosted or self-hosted LLMs;
+all provider secrets/topology remain under TOML/environment ownership.
+
+- Authority: `plans/adrs/ADR-0002-on-prem-user-identity-and-policy-boundaries.md`
+  and `plans/subsystems/on-prem-user-access-roadmap.md`.
+- Order: secure administrator bootstrap and user credentials; browser-session
+  and route authorization; principal propagation/attribution; model-policy
+  profiles; durable user budgets; web administration/client projection; small-team
+  physical hardware and migration qualification.
+- Integration edges: preserve generation leases, publication/finalization
+  ownership, provider quota eligibility, single SQLite gate/WAL/NORMAL, and
+  compatible Chat/Responses/Messages client authentication.
+- Non-goals: multi-organization/tenant hosted management, SaaS billing,
+  mandatory cloud/SSO, native public internet access, and unqualified claims
+  about 50 concurrent generations.
+- Completion: legacy upgrade preserves data and access; fresh bootstrap is
+  fail closed without defaults; user policy cannot be bypassed via virtual
+  routing or alternate surfaces; per-user budgets recover across cancellation/
+  restart; measured SBC and ordinary-hardware evidence scopes supported
+  team size and concurrent workload honestly.
+
+Phases 2–5 create NO automatic milestones. Subsystem roadmaps are written on
 demand when a slice is ready to be reasoned about, with typed dependencies
 (hard / interface / soft / operational) and explicit non-goals.

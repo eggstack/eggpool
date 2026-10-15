@@ -60,7 +60,7 @@ fn rust_command_options(root: &mut Command, path: &str) -> Vec<String> {
 #[test]
 fn rust_parser_has_one_entry_for_every_frozen_python_command() {
     let expected = fixture_commands();
-    assert_eq!(expected.len(), 65);
+    assert_eq!(expected.len(), 72);
     let mut root = Cli::command();
     for (path, options) in expected {
         assert_eq!(rust_command_options(&mut root, &path), options, "{path}");
@@ -127,4 +127,199 @@ fn configremote_parses_targets_and_options() {
     ));
     // Missing target fails closed.
     assert!(Cli::try_parse_from(["eggpool", "configremote"]).is_err());
+}
+
+#[test]
+fn local_model_policy_profile_commands_parse_with_exact_effects() {
+    assert!(
+        Cli::try_parse_from([
+            "eggpool",
+            "users",
+            "policy",
+            "create",
+            "restricted",
+            "Restricted",
+            "deny",
+        ])
+        .is_ok()
+    );
+    assert!(
+        Cli::try_parse_from([
+            "eggpool",
+            "users",
+            "policy",
+            "rule",
+            "restricted",
+            "model-a/provider-a",
+            "allow",
+        ])
+        .is_ok()
+    );
+    assert!(
+        Cli::try_parse_from([
+            "eggpool",
+            "users",
+            "policy",
+            "assign",
+            "member-a",
+            "restricted",
+        ])
+        .is_ok()
+    );
+    assert!(
+        Cli::try_parse_from([
+            "eggpool",
+            "users",
+            "policy",
+            "rule",
+            "restricted",
+            "model-a",
+            "maybe",
+        ])
+        .is_err()
+    );
+}
+
+#[test]
+fn local_user_budget_commands_parse_with_bounded_windows() {
+    assert!(
+        Cli::try_parse_from([
+            "eggpool",
+            "users",
+            "budget",
+            "set",
+            "member-a",
+            "--window",
+            "day",
+            "--max-requests",
+            "25",
+            "--max-tokens",
+            "100000",
+            "--max-concurrent",
+            "2",
+        ])
+        .is_ok()
+    );
+    assert!(
+        Cli::try_parse_from([
+            "eggpool",
+            "users",
+            "budget",
+            "remove",
+            "member-a",
+            "--model-id",
+            "model-a",
+            "--window",
+            "month",
+        ])
+        .is_ok()
+    );
+    assert!(
+        Cli::try_parse_from([
+            "eggpool",
+            "users",
+            "budget",
+            "set",
+            "member-a",
+            "--window",
+            "rolling",
+            "--max-requests",
+            "25",
+        ])
+        .is_err()
+    );
+    // M008: enforcement mode is explicit and bounded; the default stays
+    // estimated so existing rules are never silently promoted to hard.
+    let estimated = Cli::try_parse_from([
+        "eggpool",
+        "users",
+        "budget",
+        "set",
+        "member-a",
+        "--window",
+        "day",
+        "--max-tokens",
+        "100000",
+    ])
+    .expect("default enforcement parses");
+    let rendered = format!("{:?}", estimated.command);
+    assert!(
+        rendered.contains("enforcement: \"estimated\""),
+        "budget set defaults to estimated enforcement: {rendered}"
+    );
+    assert!(
+        Cli::try_parse_from([
+            "eggpool",
+            "users",
+            "budget",
+            "set",
+            "member-a",
+            "--window",
+            "day",
+            "--max-tokens",
+            "100000",
+            "--enforcement",
+            "hard",
+        ])
+        .is_ok()
+    );
+    assert!(
+        Cli::try_parse_from([
+            "eggpool",
+            "users",
+            "budget",
+            "set",
+            "member-a",
+            "--window",
+            "day",
+            "--max-tokens",
+            "100000",
+            "--enforcement",
+            "guaranteed",
+        ])
+        .is_err()
+    );
+    // M009: instance ceilings share the window/enforcement contract without
+    // a user argument.
+    assert!(
+        Cli::try_parse_from([
+            "eggpool",
+            "users",
+            "global-budget",
+            "set",
+            "--window",
+            "month",
+            "--max-requests",
+            "1000",
+            "--enforcement",
+            "hard",
+        ])
+        .is_ok()
+    );
+    assert!(
+        Cli::try_parse_from([
+            "eggpool",
+            "users",
+            "global-budget",
+            "remove",
+            "--window",
+            "month",
+        ])
+        .is_ok()
+    );
+    assert!(
+        Cli::try_parse_from([
+            "eggpool",
+            "users",
+            "global-budget",
+            "set",
+            "--window",
+            "month",
+            "--max-requests",
+            "1000",
+            "--enforcement",
+            "guaranteed",
+        ])
+        .is_err()
+    );
 }

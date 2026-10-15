@@ -437,10 +437,15 @@ cleanup_max_rows_per_pass = 5000
 [security]
 allowed_hosts = []
 cors_origins = []
-# Honor X-Forwarded-For/X-Real-IP only when the immediate peer is listed here.
-# Configure only proxies that overwrite or correctly append these headers;
-# X-Forwarded-For uses the nearest untrusted hop in the chain.
-# An empty list ignores forwarded client-attribution headers.
+# Honor forwarded client-attribution headers only when the immediate peer is
+# listed here. For browser login over proxy-terminated HTTPS, EggPool trusts
+# one X-Forwarded-Proto: https from an exact listed peer IP. Browser sign-in
+# and failed personal-token throttling use one literal X-Forwarded-For client
+# IP from that peer; the proxy must replace the header, and malformed,
+# duplicate, or chained values fall back to the proxy peer. Other attribution
+# uses the nearest untrusted hop in the X-Forwarded-For chain. Entries must be
+# literal IP addresses, not hostnames or CIDRs. An empty list ignores all
+# forwarded headers for trust decisions.
 #
 # List both IPv4 and IPv6 loopback addresses explicitly when the proxy is
 # reached over IPv6 loopback (for example ``::1`` from a client on the
@@ -448,6 +453,9 @@ cors_origins = []
 # back to the peer address and ignore forwarded headers in that case.
 # trusted_proxies = ["127.0.0.1", "::1"]
 trusted_proxies = []
+# Set true only for a deliberately insecure development deployment. Remote
+# browser authentication otherwise requires direct HTTPS or a trusted proxy.
+allow_insecure_web_auth = false
 redact_headers = ["authorization", "x-api-key"]
 persist_redacted_error_detail = false
 
@@ -503,6 +511,15 @@ enabled = false
 # # proxy = "residential-us"
 # # proxy_url = "ss://chacha20:password@proxy.example.com:8388"
 # # proxy_url_env = "GOROUTER_PERSONAL_PROXY_URL"
+#
+# [providers.opencode-go.budget]
+# Optional conservative price ceiling for hard USD budget rules, in
+# microdollars per million tokens. Omitted means unknown price: hard USD
+# rules fail closed for this provider. Zero is an explicit verified
+# zero-cost declaration (free local model), distinct from unknown. The
+# tariff must cover the most expensive model on this provider; estimator
+# fallbacks are never a hard price.
+# max_microdollars_per_million_tokens = 3000000  # $3/MTok ceiling
 #
 # [providers.opencode-go.auth]
 # The selected wire surface supplies endpoint-specific auth.

@@ -63,6 +63,10 @@ pub struct SelectionSnapshot {
     pub provider_id: Option<String>,
     pub protocol: Option<String>,
     pub request_surface: String,
+    /// Admission-carried worst-case input bound for hard budget enforcement.
+    pub budget_input_worst_case_tokens: i64,
+    /// Admission-carried caller output cap, if any.
+    pub budget_requested_output_tokens: Option<i64>,
     pub candidates: Vec<RoutingCandidate>,
     pub exclusions: Vec<RoutingExclusion>,
     pub eligible_candidate_count: usize,
@@ -96,6 +100,8 @@ impl SelectionSnapshot {
             provider_id: facts.provider_id.clone(),
             protocol: facts.requested_protocol.clone(),
             request_surface: facts.request_surface.clone(),
+            budget_input_worst_case_tokens: facts.budget_input_worst_case_tokens,
+            budget_requested_output_tokens: facts.budget_requested_output_tokens,
             eligible_candidate_count: candidates.len(),
             top_account_name: top.map(|candidate| candidate.account_name.clone()),
             top_score: top.map(|candidate| candidate.score.clone()),
@@ -122,6 +128,8 @@ impl SelectionSnapshot {
             provider_id: plan.requested_provider_id,
             protocol: plan.requested_protocol,
             request_surface: plan.request_surface,
+            budget_input_worst_case_tokens: 0,
+            budget_requested_output_tokens: None,
             eligible_candidate_count: plan.candidates.len(),
             top_account_name: top.map(|candidate| candidate.account_name.clone()),
             top_score: top.map(|candidate| candidate.score.clone()),
@@ -256,6 +264,12 @@ impl SelectionClaim {
     }
     pub fn projected_cost_microdollars(&self) -> i64 {
         self.projected_cost_microdollars
+    }
+    pub fn budget_input_worst_case_tokens(&self) -> i64 {
+        self.snapshot.budget_input_worst_case_tokens
+    }
+    pub fn budget_requested_output_tokens(&self) -> Option<i64> {
+        self.snapshot.budget_requested_output_tokens
     }
     pub fn owns_probe(&self) -> bool {
         self.owns_probe

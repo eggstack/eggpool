@@ -88,6 +88,10 @@ pub(in crate::server::dashboard) fn render_dashboard_layout(
         ("reliability", "/reliability", "Reliability"),
         ("routing", "/routing", "Routing"),
         ("cache", "/cache", "Cache"),
+        ("users", "/users", "Users"),
+        ("profiles", "/profiles", "Profiles"),
+        ("usage", "/usage", "Usage"),
+        ("my-account", "/my-account", "My Account"),
         ("accounts", "/accounts", "Accounts"),
         ("models", "/models", "Models"),
         ("latency", "/latency", "Latency"),
@@ -138,7 +142,7 @@ pub(in crate::server::dashboard) fn render_dashboard_layout(
         String::new()
     };
     let navigation_markup = format!(
-        "<div class=\"topnav-menu\" id=\"topnav-menu\">{}<form method=\"get\" class=\"theme-selector\" data-tooltip=\"Switch dashboard theme\" data-tooltip-pos=\"bottom\" aria-label=\"Switch dashboard theme\"><select name=\"theme\" onchange=\"this.form.submit()\">{}</select><input type=\"hidden\" name=\"period\" value=\"{}\"></form></div>",
+        "<div class=\"topnav-menu\" id=\"topnav-menu\">{}<form method=\"get\" class=\"theme-selector\" data-tooltip=\"Switch dashboard theme\" data-tooltip-pos=\"bottom\" aria-label=\"Switch dashboard theme\"><select name=\"theme\" aria-label=\"Dashboard theme\" onchange=\"this.form.submit()\">{}</select><input type=\"hidden\" name=\"period\" value=\"{}\"></form></div>",
         navigation,
         theme_options,
         html_escape(period)

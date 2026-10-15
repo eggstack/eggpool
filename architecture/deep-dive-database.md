@@ -18,7 +18,72 @@ Commit/rollback ambiguity fails closed: body failure maps to `Transaction`/`Sqli
 
 ## Migrations
 
-Migrations are embedded from `rust/assets/db/migrations/` (zero-padded `0001_*.sql`…`0054_*.sql` = versions 1–54) with `checksums.json` (`files` map, 54 entries): v1–v54, 54 files, validated by `MigrationRunner::validate_embedded_checksums` before any database use (`canonical_inventory_is_complete_and_immutable` guards first = 1, last = 54, len = 54). `MigrationRunner::run` keeps the `_migrations` ledger, rejects unknown versions and ledger-name mismatches, refuses read-only migration, and applies all pending migrations in one atomic transaction. History is never rewritten or renumbered; restore validation additionally checks the staged ledger against this inventory.
+Migrations are embedded from `rust/assets/db/migrations/` (zero-padded `0001_*.sql`…`0062_*.sql` = versions 1–62) with `checksums.json` (`files` map, 62 entries), validated by `MigrationRunner::validate_embedded_checksums` before any database use. Migration 55 adds downstream identity and credential storage without repurposing upstream `accounts`; migration 56 adds browser sessions and CSRF digests; migration 57 adds user/auth-epoch attribution to request rows and selector-parent linkage; migration 58 adds local model-policy profiles, exact rules, per-user overrides, instance denials, and a monotonic policy revision; migration 59 adds user budget rules, request holds, attempt usage, audit, and bounded user/model/time rollups; migration 60 adds bounded secret-free administrative audit events; migration 61 adds the hard/estimated enforcement mode, worst-case hold facts, and price provenance to the budget tables; migration 62 adds the instance-global budget scope (rules, request holds, per-model usage buckets, audit, policy-revision triggers) with no user reference. Schema history is never rewritten or renumbered. `MigrationRunner::run` keeps the `_migrations` ledger, rejects unknown versions and ledger-name mismatches, refuses read-only migration, and applies all pending migrations in one atomic transaction. Restore validation additionally checks the staged ledger against this inventory.
+
+`users`, `user_credentials`, and `user_access_state` hold usernames, password
+hashes, downstream roles, token digests, scopes, and explicit transition state.
+The initial admin and first personal token are committed atomically. Backups
+therefore carry the identity records and non-recoverable credential digests;
+plaintext passwords and API tokens are never stored.
+On a brand-new schema, migration entrypoints record `fresh_uninitialized`;
+onboarding can complete bootstrap after an interrupted setup, and a keyless
+fresh listener refuses to start. Existing databases start in
+`legacy_unmigrated` and retain their configured authentication until local
+identity initialization. Migration 56 adds opaque `web_sessions` with
+session-token and CSRF digests, expiry, idle-use, and revocation state; password
+reset revokes sessions in the same transaction as the credential revocation.
+Request rows keep a nullable historical `user_id` without a foreign key, so
+disabling or removing a local user cannot erase request attribution. New
+authenticated publications snapshot the user, credential/session ID, auth
+epoch, and principal kind in the same publication transaction. Internal
+semantic selector rows carry a parent proxy request ID and are excluded from
+logical user history queries. `identity::recent_user_requests` uses the
+`(user_id, started_at DESC, id DESC)` index, clamps reads to 500 rows, and
+returns content-free request facts.
+
+`model_policy` owns migration-58 profile and exact-model policy access. Policy
+mutations advance the singleton revision in the same SQLite transaction;
+database triggers also advance it when user state, role, or auth epoch changes.
+The bounded process cache checks that revision before serving a new request,
+then retains an immutable policy snapshot for the admitted request. Exact
+instance denial has highest precedence, followed by user override, assigned
+profile rule, and the role-safe default. Policy state remains separate from
+provider topology and provider-account quota.
+
+`user_budget` keeps downstream budget enforcement separate from upstream
+`reservations`, `AccountQuota`, and provider scoring. Daily and monthly windows
+use UTC calendar boundaries. Publication checks exact user/model and
+user-aggregate rules and inserts an active hold in the same transaction as the
+request/attempt/provider reservation; a concurrent last-slot request cannot
+pass on a stale preflight. Retries extend that logical hold without
+incrementing its request count. Rules carry an explicit `hard`/`estimated`
+enforcement mode (migration 61; pre-existing rows are estimated, promotion is
+an explicit admin operation): estimated holds keep the request-size token
+projection and fallback microdollars, while hard holds reserve the admission
+worst case (input bound plus caller output cap, cost converted at the
+operator-configured `[providers.<id>.budget]` tariff) and record the bound
+plus price provenance on the reservation row. Unbounded output, unknown tariff,
+or arithmetic overflow denies with `BudgetNotEnforceable` before any upstream
+submission. Attempt facts are idempotently retained, and
+terminal finalization settles one daily and one monthly usage bucket in the
+same transaction that terminalizes the request. Unknown usage consumes the
+remaining estimate and increments explicit unknown counters; provider-reported
+usage above a hard hold is settled visibly, never clamped. Instance-global
+ceilings (`instance_budget`) reuse the same hold formulas and the M008 tariff
+trust boundary in the same publication transaction: global rules aggregate
+across per-model usage rows with bounded indexed sums (no full history scan
+under the gate), retries extend without consuming a second request, and
+settlement folds the shared attempt rows. Instance rows carry no user
+reference, so user disable/delete preserves history; with no matching
+instance rule, publication takes no instance hold and writes no instance rows.
+Provider-reported,
+locally estimated, and reservation-fallback microdollars remain distinct in the
+user rollup. Rule changes retain an actor/version/mode audit row. `GET
+/api/user-budget` returns only the authenticated user's data unless an active
+admin asks for a target `user_id`; each rule reports its enforcement mode.
+Migration 60 adds `user_admin_audit`, a
+bounded, secret-free actor/action/target record written transactionally with
+user, token, and profile administration mutations.
 
 ## Publication and finalization transactions
 
@@ -67,6 +132,9 @@ Persistence M004 (`plans/closure/persistence/004-status.md`) collected 14 accept
 - Migrations immutable and checksum-pinned; unknown or mismatched ledgers fail closed.
 - `backup_to` is a primitive; orchestration, validation, and restore stay in `operations/backup.rs`.
 - Startup reconciliation repairs only covered states; ambiguity never resolves silently.
+  Covered budget states: active user/instance holds on interrupted requests
+  are released without folding usage; settled holds, usage buckets, and
+  attempt-usage facts are never mutated by reconciliation.
 
 ## Verification
 

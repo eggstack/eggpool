@@ -10,7 +10,9 @@ from .process import *  # noqa: F403
 # instead of being labelled with an unrelated correction.
 ORACLE_CANDIDATE_CORRECTIONS = {
     "static/dashboard.css": (
-        "bound mobile panel intrinsic width within its table scroll wrapper"
+        "bound mobile panel intrinsic width within its table scroll wrapper, and "
+        "let the sixteen-entry top navigation reflow inside the topbar instead of "
+        "forcing one nowrap row that overflowed a 1280px viewport"
     ),
     "static/dashboard.js": (
         "submit the timeseries filter form natively so the server renders the "

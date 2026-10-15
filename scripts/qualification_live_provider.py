@@ -55,7 +55,6 @@ Q011_FIXTURE = (
 DEFAULT_OUTPUT = ROOT / "artifacts/qualification/007-run.json"
 MANIFEST_VERSION = "runtime-q001.v1"
 SCHEMA_VERSION = "runtime-q007.v1"
-SERVER_KEY = "q007-server-key"
 FAKE_PROVIDER_KEY = "q007-provider-key"
 OPENCODE_SESSION_HEADER = "x-opencode-session"
 MAX_REQUESTS = 8
@@ -909,6 +908,7 @@ def run_qualification(
         config = root / "config.toml"
         process: subprocess.Popen[bytes] | None = None
         fake_provider: FakeProvider | None = None
+        agent_token: str | None = None
         output_stream: Any | None = None
         error_stream: Any | None = None
         stdout_path = root / "candidate.stdout"
@@ -949,7 +949,36 @@ def run_qualification(
                     child_env["Q011_MINIMAX_API_KEY"] = secondary_key
             else:
                 child_env["Q007_PROVIDER_API_KEY"] = FAKE_PROVIDER_KEY
-            child_env["SERVER_API_KEY"] = SERVER_KEY
+            bootstrap = subprocess.run(
+                [
+                    str(binary.resolve()),
+                    "--config",
+                    str(config),
+                    "users",
+                    "bootstrap",
+                    "q007-admin",
+                    "--password-stdin",
+                    "--show-secret",
+                ],
+                input="Q007 synthetic bootstrap password\n",
+                capture_output=True,
+                text=True,
+                check=False,
+                cwd=ROOT,
+                env=child_env,
+                timeout=timeout,
+            )
+            if bootstrap.returncode != 0:
+                raise QualificationError(
+                    "synthetic administrator bootstrap failed: "
+                    + bounded(bootstrap.stderr or bootstrap.stdout)
+                )
+            token_match = re.search(r"epk1_[A-Za-z0-9_-]+", bootstrap.stdout)
+            if token_match is None:
+                raise QualificationError(
+                    "synthetic administrator bootstrap returned no personal token"
+                )
+            agent_token = token_match.group(0)
             child_env.setdefault("RUST_LOG", "debug")
             output_stream = stdout_path.open("wb")
             error_stream = stderr_path.open("wb")
@@ -973,7 +1002,7 @@ def run_qualification(
             _wait_ready(process, f"{base_url}/v1/healthz", timeout)
             status, _, models_body = _http(
                 f"{base_url}/v1/models",
-                headers={"Authorization": f"Bearer {SERVER_KEY}"},
+                headers={"Authorization": f"Bearer {agent_token}"},
             )
             if status != 200:
                 raise QualificationError(f"model catalog returned HTTP {status}")
@@ -1007,7 +1036,7 @@ def run_qualification(
             for case in cases:
                 request_body = json.dumps(_payload(case)).encode()
                 headers = {
-                    "Authorization": f"Bearer {SERVER_KEY}",
+                    "Authorization": f"Bearer {agent_token}",
                     "Content-Type": "application/json",
                     OPENCODE_SESSION_HEADER: f"q007-{case.case_id}",
                 }
@@ -1038,7 +1067,7 @@ def run_qualification(
                     raise QualificationError(f"{case.case_id} lacks terminal evidence")
             runtime_status, _, _ = _http(
                 f"{base_url}/api/stats/runtime",
-                headers={"Authorization": f"Bearer {SERVER_KEY}"},
+                headers={"Authorization": f"Bearer {agent_token}"},
             )
             report["runtime_status_http"] = runtime_status
         except (OSError, QualificationError) as error:
@@ -1053,12 +1082,20 @@ def run_qualification(
             if stdout_path.exists():
                 report["candidate_stdout"] = bounded(
                     stdout_path.read_text(encoding="utf-8", errors="replace"),
-                    tuple(secret for secret in (provider_key, secondary_key) if secret),
+                    tuple(
+                        secret
+                        for secret in (provider_key, secondary_key, agent_token)
+                        if secret
+                    ),
                 )
             if stderr_path.exists():
                 report["candidate_stderr"] = bounded(
                     stderr_path.read_text(encoding="utf-8", errors="replace"),
-                    tuple(secret for secret in (provider_key, secondary_key) if secret),
+                    tuple(
+                        secret
+                        for secret in (provider_key, secondary_key, agent_token)
+                        if secret
+                    ),
                 )
             if fake_provider is not None:
                 fake_provider.__exit__(None, None, None)

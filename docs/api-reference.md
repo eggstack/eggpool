@@ -6,7 +6,8 @@ EggPool exposes OpenAI Chat Completions- and Anthropic Messages-compatible paths
 
 | Method | Path | Description |
 |--------|------|-------------|
-| `GET` | `/v1/models` | List available models |
+| `GET` | `/v1/models` | List models visible to the authenticated principal; managed users see only models allowed by their effective policy |
+| `GET` | `/api/user-budget` | Authenticated user rules and bounded usage; admins may add `?user_id=<id>` to inspect one user |
 | `POST` | `/v1/chat/completions` | OpenAI Chat Completions-compatible requests |
 | `POST` | `/v1/responses` | Stateless OpenAI Responses-compatible requests; canonical adaptation is allowed to eligible upstream surfaces |
 | `POST` | `/v1/responses/compact` | Bounded remote-compaction operation returning replacement history/checkpoint material; native compact-capable upstreams only, otherwise rejected before submission |
@@ -101,13 +102,49 @@ Request ingestion is bounded by `[server].max_request_body_bytes` (default 10 Mi
 
 ## Authentication
 
-Inference endpoints (`/v1/*`), the integration profile
-(`/api/integrations/*`), and runtime/update/status endpoints
-(`/api/stats/runtime`, `/api/stats/update`, `/api/status`) always require the
-server API key whenever one is configured. Ordinary dashboard pages and their
-non-sensitive JSON data are public while `[dashboard].public = true` (the
-default) and require the key when it is `false`. The key is sent as
-`Authorization: Bearer <key>` for OpenAI-compatible endpoints or
-`x-api-key: <key>` for Anthropic-compatible endpoints. Health, readiness, and
-static assets are unauthenticated, and a loopback-only install without a
-configured key remains open for local development.
+In `legacy_unmigrated`, the shared server key keeps its legacy behavior. After
+local identity initialization, inference uses per-user agent tokens and
+browser sessions; the legacy key is retired. A personal token grants only its
+inference/discovery scopes and does not grant dashboard or account access.
+Browser sessions authenticate the web surface, with CSRF proof required for
+state-changing requests. In managed mode, `[dashboard].public` does not make
+dashboard or `/api/*` data public. Health, readiness, login, and static assets
+are unauthenticated. See [deployment](deployment.md) and [firewall](firewall.md)
+for operator-managed HTTPS termination, trusted proxy, and loopback guidance.
+Managed users receive policy-filtered model discovery, and runtime dispatch
+enforces the same rules even when a client submits a hidden model manually.
+The integration profile's ETag includes the policy revision so client caches
+refresh after an administrator changes model access.
+
+`GET /api/user-budget` is available to personal tokens and browser sessions.
+Members can read only their own rules and rollups; an active admin may select a
+target with `user_id`. The response identifies UTC calendar windows and reports
+integer microdollars as modeled/estimated usage, with separate
+`provider_reported_microdollars`, `local_estimated_microdollars`, and
+`reservation_fallback_microdollars` totals. Unknown usage consumes the
+reserved estimate and increments an explicit unknown counter. Each rule carries
+an `enforcement` mode: `hard` rules enforce a provable worst-case bound (token
+rules require an explicit caller output cap; USD rules require an
+operator-configured provider tariff) and deny otherwise, while `estimated`
+rules use approximate holds and are never a guaranteed cap. This API does
+not represent invoices or exact charges for flat-rate provider accounts.
+Requests denied because a hard rule cannot be bounded return HTTP 429 with a
+stable machine-readable message
+(`User budget hard limit is not enforceable for this request`) before any
+upstream submission. Administrator responses additionally include
+`instance_rules` and `instance_usage`: the single instance-wide ceiling
+intersected with every per-user rule. Members never receive instance fields,
+so one member cannot observe the shared ceiling or infer other users'
+consumption from it.
+
+With `[dashboard].enabled = true`, the dashboard also serves browser-session
+pages for `/users`, `/profiles`, `/usage`, `/admin/audit`, `/my-account`, and
+`/my-account/models`. Mutations use same-origin, CSRF-protected form posts
+under `/admin/users/*`, `/admin/profiles/*`, and `/account/tokens*`.
+Administrator pages and writes require an active admin browser session;
+members can read only their own usage, model access, and credentials. Agent
+tokens never authenticate these pages. A newly issued token is returned once
+in a `no-store` response and omitted from the account page thereafter.
+Profile edits use a version check so a stale form cannot overwrite a newer
+edit. The audit view contains actor, action, target type, target ID, and time;
+it does not record passwords, token values, prompts, or request bodies.

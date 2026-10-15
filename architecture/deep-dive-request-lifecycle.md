@@ -31,6 +31,16 @@ adapts the response, and converges durable state.
 - `authenticate`/`requires_auth` enforce constant-time `Bearer`/`x-api-key`
   auth; `/api/integrations/*`, `/api/stats/runtime`, `/api/stats/update`,
   `/api/status`, and all `/v1/*` stay authenticated.
+  For authenticated inference, middleware installs a typed
+  `AuthenticatedPrincipal`: personal agent tokens resolve user, credential,
+  scopes, and auth epoch from SQLite; browser sessions resolve the same user
+  and session identity; the staged shared-key path is explicitly marked
+  `legacy_shared_key` with no downstream user ID. Request headers never set
+  the principal. Managed user requests capture one immutable policy snapshot
+  before model resolution. Requested aliases, provider-qualified models,
+  selector models, and resolved concrete targets are checked against it before
+  concrete provider dispatch. Denial is a generic 403; policy reads fail
+  closed, and admitted work retains its snapshot.
   `finish_empty_transport_body` only drains provably bodyless requests.
 
 ## 2. Endpoint classification (one parse, one call)
@@ -53,7 +63,10 @@ adapts the response, and converges durable state.
   the ingress `Bytes` handle via refcount; provider-qualified rewrite
   re-encodes only on an actual model-id change); virtual aliases resolve through
   `SemanticSelector` over the same `FiniteCoordinator` with recursion refusal
-  and affinity commit in the endpoints layer only.
+  and affinity commit in the endpoints layer only. The typed principal is
+  passed through virtual selection too; selector dispatches persist as
+  `internal_selector` children linked to the parent proxy request ID, so
+  they remain attributable without counting as another logical user request.
 - `EndpointError::status` maps admission errors; `endpoint_error_body` shapes
   OpenAI vs Messages envelopes truncated to 512 bytes. `new_proxy_request_id`
   mints the opaque proxy identity; `coordinator/attempt.rs::add_forwarded_headers`
@@ -106,13 +119,59 @@ adapts the response, and converges durable state.
 - `PublicationService::publish` converts one routing claim into durable
   `requests`/`request_attempts`/`reservations`/`routing_decisions` rows plus a
   `FinalizationIdentity`; duplicates observe `AlreadyPublished`, conflicts fail
-  closed. The worker survives caller cancellation and compensates lost
-  delivery.
+  closed. The request row stores owner user ID, credential/session ID, auth
+  epoch, principal kind, request kind, and optional selector parent. The
+  publication transaction rechecks active user/credential state before
+  dispatch; the immutable owner fields travel in `FinalizationIdentity` and
+  must still match before terminalization. Null user IDs remain explicitly
+  legacy/unattributed history. The worker survives caller cancellation and
+  compensates lost delivery.
 - `FinalizationSupervisor::register`/`wait` retains terminal ownership;
   `DurableFinalizer::finalize_request` vs `finalize_failed_attempt` separate
   terminal from retry-cleanup convergence. `CrashReconciler::reconcile_once`
   converges crash leftovers to interrupted/released without replay or
   double-charge.
+- For managed principals, publication checks aggregate and exact-model
+  daily/monthly user budget rules and inserts the logical-request hold in that
+  same SQLite transaction. The hold survives failed attempts and is extended
+  by retries; it is not released until terminal settlement. Concurrency counts
+  all live holds across UTC window boundaries. Finalization records each
+  transitioned attempt once and settles one logical request in the terminal
+  transaction. Unknown usage consumes the remaining estimate and is marked
+  unknown in the indexed rollup. Request and concurrency caps are strictly
+  enforceable in both modes. Token/cost rules carry an explicit `hard` or
+  `estimated` mode (migration 61, default estimated): estimated rules keep the
+  request-size token projection and fallback microdollars, which do not prove
+  exact output or self-hosted cost bounds; hard rules admit only requests with
+  a provable worst-case bound — admission-carried input bound plus the
+  caller's explicit compatible output cap (`max_tokens`/`max_completion_tokens`
+  on chat, `max_output_tokens` on Responses/compact, `max_tokens` on Anthropic
+  Messages) converted at the operator-configured provider tariff — and deny
+  with `BudgetNotEnforceable` (429, no   upstream submission) when unbounded,
+  unpriced, or overflowing. The initial hard hold covers two attempt
+  equivalents (concrete attempt plus unattributed selector overhead); retries
+  extend by one equivalent after re-checking. Observed provider usage above
+  the hold is settled visibly, never clamped.
+- An optional instance-global ceiling is intersected in the same publication
+  transaction for every admitted call, attributed or not: the request must
+  satisfy all applicable instance-global, instance-model, user-global, and
+  user-model rules before claim conversion, with one shared hold per scope so
+  concurrent users cannot both take the final slot and retries never
+  double-count. Global usage folds the same attempt rows at terminal
+  settlement; absent global rules, no global hold or row is written.
+- Crash recovery converges budget holds without folding usage. A restart
+  interrupts every `pending` request, and the same reconciliation pass
+  releases each active user/instance hold on those requests (`active →
+  released`, never settled): the logical request can never settle
+  afterwards, so the release is compensation, not credit, and unknown
+  upstream usage stays unknown. Settled holds and folded buckets are
+  untouched, and a stale duplicate terminal command conflicts instead of
+  re-folding. A retry under the same proxy ID after interruption is refused
+  at the duplicate gate (non-pending requests never re-enter admission), so
+  no hold is resurrected on dead work. Cancel terminalizes through the
+  normal terminal path and settles the hold conservatively at the held
+  amounts. Backups capture active holds verbatim as committed rows; a
+  restored image reconciles exactly like a crashed live database.
 - Reload policy is referenced, never duplicated: only
   `config_reload_policy.rs::classify_transition` decides reload vs restart.
 

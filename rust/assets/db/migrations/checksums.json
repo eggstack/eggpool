@@ -53,6 +53,14 @@
     "0051_model_quarantine.sql": "e60128ee2006073c9dd54af80facb70f6b3a8edfaf69d6619d0b41e35180a940",
     "0052_catalog_refresh_state.sql": "3931b8b1ef87b2e6413f8bba2f16f26b1cee899ea4e962ac9e5ff50be590c99d",
     "0053_remove_attempt_status_analytics_index.sql": "0918c57f786dcb953fd5a32238d94060c471e768f245f40aeb37e20fec8ffe99",
-    "0054_model_quarantine_null_identity.sql": "f382fa78f09a55e6a381c225e376b04c31a9775d79ecf6a3f41aeaadf9b8019e"
+    "0054_model_quarantine_null_identity.sql": "f382fa78f09a55e6a381c225e376b04c31a9775d79ecf6a3f41aeaadf9b8019e",
+    "0055_user_identity.sql": "352224c8e2505509efa8fad0017c9aaac74ef8338771b35388ef22cf77cd8a62",
+    "0056_web_sessions.sql": "b35541860dbc9c258de617f6f5a9c0111de6428be3128cd79d962bdda9634167",
+    "0057_request_attribution.sql": "d9b66c87ee15c0b88abcb27599dc7b80213cc67df988fa1ace50cf511012e87b",
+    "0058_model_policy.sql": "dc98951394abed29a02f48d75d2b72554da74d98de49563fa87c2548dd757fe2",
+    "0059_user_budgets.sql": "6637f6242750639cf292359ab3f476ff1f43ee8d9cb7de99ca67a84088f49bc2",
+    "0060_user_admin_audit.sql": "fe15aebc5a344aa25e049aaf554e8d7eaac69bd16134abbb41e24c390df8891c",
+    "0061_user_budget_enforcement.sql": "d19229166fed11622a3c924642705d78563e95bd02605123b7b2b9483ecf1a3f",
+    "0062_instance_budgets.sql": "bcb0999e1be7944512f082164f763671bb5ce1b6e82c071470d3ff5f03e5ebac"
   }
 }

@@ -55,6 +55,7 @@ ssh = ["eggress-outbound/ssh", "eggress-pproxy-compat/ssh"]
 
 [dependencies]
 arc-swap = "1.9"
+argon2 = "0.5"
 axum = "0.8"
 bytes = "1"
 clap = { version = "4.5", features = ["derive"] }
@@ -75,6 +76,7 @@ eggfetch-core = { version = "=0.2.2", default-features = false, features = [
     "tls-rustls",
 ] }
 eggserve-server = { version = "=0.4.0", default-features = false, features = ["tower"] }
+eggserve-primitives = "=0.2.2"
 getrandom = "0.3.4"
 eggpool-client-config = { version = "0.1.0", path = "crates/eggpool-client-config" }
 eggpool-model-routing = { version = "0.1.0", path = "crates/eggpool-model-routing" }
@@ -96,6 +98,7 @@ hyper-util = { version = "0.1", default-features = false, features = [
 ] }
 nix = { version = "0.31.3", default-features = false, features = ["signal", "term", "user"] }
 rustls = { version = "0.23", default-features = false, features = ["ring", "tls12"] }
+rpassword = "7"
 serde = { version = "1", features = ["derive"] }
 serde_json = { version = "1", features = ["preserve_order"] }
 sha2 = "0.10"

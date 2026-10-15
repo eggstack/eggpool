@@ -34,16 +34,24 @@
 //! - failed-attempt cleanup pending while the request is still nonterminal
 //!   → fail closed: the request is terminalized as `interrupted`, never
 //!   left retryable and never replayed upstream;
+//! - pending request with an active user or instance budget hold → the
+//!   request and its holds converge in the same pass: the request is
+//!   terminalized as `interrupted` and each active hold moves to
+//!   `released` without folding usage (the logical request can never
+//!   settle afterwards, so the reservation release is compensation, not
+//!   credit);
 //! - terminal request with already released/expired reservation → no-op;
 //! - stale duplicate terminal command evidence → no durable write; the
 //!   retained supervisor already converges duplicates (C006/C014).
 //!
 //! ## What reconciliation never does
 //!
-//! - No `INSERT` into requests, attempts, reservations, or routing
-//!   decisions: repeated passes cannot fan out rows.
-//! - No cost/token/byte mutation: usage stays exactly as persisted, so
-//!   reconciliation can never double-charge.
+//! - No `INSERT` into requests, attempts, reservations, budget holds, or
+//!   routing decisions: repeated passes cannot fan out rows.
+//! - No cost/token/byte mutation: usage buckets and attempt-usage facts stay
+//!   exactly as persisted, so reconciliation can never double-charge. Moving
+//!   a budget hold `active → released` frees a reservation for a request the
+//!   same pass terminalizes; it folds no usage and grants no credit.
 //! - No M5 hydration: active counts, quota mirrors, and probes are owned
 //!   by the live process. A fresh process starts at zero and stays there;
 //!   reconciliation only repairs durable truth.
@@ -256,6 +264,10 @@ pub struct ReconciliationClassification {
     pub open_attempts_with_terminal_parent: usize,
     /// Terminal attempts still holding an active reservation.
     pub terminal_attempts_with_active_reservation: usize,
+    /// Pending requests holding at least one active user budget hold.
+    pub pending_requests_with_active_user_hold: usize,
+    /// Pending requests holding an active instance budget hold.
+    pub pending_requests_with_active_instance_hold: usize,
     /// Terminal requests whose reservations already converged (no-op).
     pub converged_terminal_requests: usize,
 }
@@ -269,6 +281,10 @@ pub struct ReconciliationReport {
     pub requests_interrupted: usize,
     /// Reservations moved `active → released` by this pass.
     pub reservations_released: usize,
+    /// User budget holds moved `active → released` by this pass.
+    pub user_budget_holds_released: usize,
+    /// Instance budget holds moved `active → released` by this pass.
+    pub instance_budget_holds_released: usize,
     /// Attempts completed with `process_interrupted` by this pass.
     pub attempts_terminalized: usize,
     /// True when every fix ran under the batch bound.
@@ -283,7 +299,11 @@ pub struct ReconciliationReport {
 impl ReconciliationReport {
     /// Total durable rows terminalized or released by this pass.
     pub fn fixed_total(&self) -> usize {
-        self.requests_interrupted + self.reservations_released + self.attempts_terminalized
+        self.requests_interrupted
+            + self.reservations_released
+            + self.user_budget_holds_released
+            + self.instance_budget_holds_released
+            + self.attempts_terminalized
     }
 }
 
@@ -337,7 +357,7 @@ impl CrashReconciler {
     /// Classification reads only ids and status labels through
     /// indexed/bounded queries (`requests(status, started_at)`,
     /// `reservations(status, …)`, ordered `id` scans with `LIMIT`); fixing
-    /// applies three conditional bounded updates that never insert rows
+    /// applies five conditional bounded updates that never insert rows
     /// and never touch cost/token/byte accounting. Concurrent passes are
     /// safe: every update re-guards on its nonterminal predicate, so a
     /// racing pass simply fixes zero rows.
@@ -361,15 +381,19 @@ impl CrashReconciler {
         }
         let truncated = fixed.0 >= self.batch_limit
             || fixed.1 >= self.batch_limit
-            || fixed.2 >= self.batch_limit;
+            || fixed.2 >= self.batch_limit
+            || fixed.3 >= self.batch_limit
+            || fixed.4 >= self.batch_limit;
         let report = ReconciliationReport {
             classification,
             requests_interrupted: fixed.0,
             reservations_released: fixed.1,
             attempts_terminalized: fixed.2,
+            user_budget_holds_released: fixed.3,
+            instance_budget_holds_released: fixed.4,
             bounded: true,
             truncated,
-            converged: fixed.0 == 0 && fixed.1 == 0 && fixed.2 == 0,
+            converged: fixed.0 == 0 && fixed.1 == 0 && fixed.2 == 0 && fixed.3 == 0 && fixed.4 == 0,
         };
         Ok(report)
     }
@@ -434,12 +458,33 @@ impl CrashReconciler {
                     [batch],
                     |row| row.get(0),
                 )?;
+                let pending_with_user_hold: i64 = connection.query_row(
+                    "SELECT COUNT(*) FROM (SELECT r.id FROM requests r
+                      WHERE r.status = 'pending'
+                        AND EXISTS (SELECT 1 FROM user_budget_reservations h
+                                    WHERE h.request_id = r.id AND h.status = 'active')
+                      ORDER BY r.id LIMIT ?1)",
+                    [batch],
+                    |row| row.get(0),
+                )?;
+                let pending_with_instance_hold: i64 = connection.query_row(
+                    "SELECT COUNT(*) FROM (SELECT r.id FROM requests r
+                      WHERE r.status = 'pending'
+                        AND EXISTS (SELECT 1 FROM instance_budget_reservations h
+                                    WHERE h.request_id = r.id AND h.status = 'active')
+                      ORDER BY r.id LIMIT ?1)",
+                    [batch],
+                    |row| row.get(0),
+                )?;
                 Ok(ReconciliationClassification {
                     pending_requests_without_attempt: pending_without_attempt.max(0) as usize,
                     pending_requests_with_open_attempt: pending_with_open.max(0) as usize,
                     open_attempts_with_active_reservation: open_with_reservation.max(0) as usize,
                     open_attempts_with_terminal_parent: open_with_terminal_parent.max(0) as usize,
                     terminal_attempts_with_active_reservation: terminal_with_reservation.max(0)
+                        as usize,
+                    pending_requests_with_active_user_hold: pending_with_user_hold.max(0) as usize,
+                    pending_requests_with_active_instance_hold: pending_with_instance_hold.max(0)
                         as usize,
                     converged_terminal_requests: converged_terminal.max(0) as usize,
                 })
@@ -448,7 +493,10 @@ impl CrashReconciler {
             .map_err(ReconciliationError::Database)
     }
 
-    async fn fix_bounded(&self, batch: i64) -> Result<(usize, usize, usize), ReconciliationError> {
+    async fn fix_bounded(
+        &self,
+        batch: i64,
+    ) -> Result<(usize, usize, usize, usize, usize), ReconciliationError> {
         self.database
             .with_transaction(move |connection| {
                 // Frozen Python `_crash_recovery` policy: every pending
@@ -457,7 +505,7 @@ impl CrashReconciler {
                 let requests = connection.execute(
                     "UPDATE requests SET status = 'interrupted', completed_at = CURRENT_TIMESTAMP
                       WHERE id IN (SELECT id FROM requests WHERE status = 'pending'
-                                   ORDER BY id LIMIT ?1)",
+                                    ORDER BY id LIMIT ?1)",
                     [batch],
                 )?;
                 // Every active reservation is released with the explicit
@@ -467,7 +515,7 @@ impl CrashReconciler {
                     "UPDATE reservations SET status = 'released', released_at = CURRENT_TIMESTAMP,
                       release_reason = 'crash_recovery'
                       WHERE id IN (SELECT id FROM reservations WHERE status = 'active'
-                                   ORDER BY id LIMIT ?1)",
+                                    ORDER BY id LIMIT ?1)",
                     [batch],
                 )?;
                 // Every open attempt is terminalized with the explicit
@@ -478,10 +526,33 @@ impl CrashReconciler {
                     "UPDATE request_attempts SET completed_at = CURRENT_TIMESTAMP,
                       error_class = 'process_interrupted'
                       WHERE id IN (SELECT id FROM request_attempts WHERE completed_at IS NULL
-                                   ORDER BY id LIMIT ?1)",
+                                    ORDER BY id LIMIT ?1)",
                     [batch],
                 )?;
-                Ok((requests, reservations, attempts))
+                // Active budget holds on interrupted requests are
+                // compensation, not credit: the logical request can never
+                // settle (finalization conflicts on terminal rows and
+                // retries fail closed without an active hold), so the
+                // reservation must not keep occupying quota. Usage buckets
+                // and attempt-usage facts are untouched — unknown usage
+                // stays unknown. `settled_at` stays NULL: the hold never
+                // settled. Only interrupted requests are eligible, so a
+                // live pending request's hold is never touched here.
+                let user_holds = connection.execute(
+                    "UPDATE user_budget_reservations SET status = 'released'
+                      WHERE status = 'active' AND request_id IN
+                        (SELECT id FROM requests WHERE status = 'interrupted'
+                          ORDER BY id LIMIT ?1)",
+                    [batch],
+                )?;
+                let instance_holds = connection.execute(
+                    "UPDATE instance_budget_reservations SET status = 'released'
+                      WHERE status = 'active' AND request_id IN
+                        (SELECT id FROM requests WHERE status = 'interrupted'
+                          ORDER BY id LIMIT ?1)",
+                    [batch],
+                )?;
+                Ok((requests, reservations, attempts, user_holds, instance_holds))
             })
             .await
             .map_err(ReconciliationError::Database)
