@@ -87,11 +87,12 @@ BENCHMARK_MAX_SAMPLES = 100
 BENCHMARK_WARMUPS = 5
 CONCURRENCY_BATCH_SIZE = 32
 CONCURRENCY_WORKERS = 4
-CONCURRENCY_WORKERS_MAX = 8
+CONCURRENCY_WORKERS_MAX = 16
 CONCURRENCY_REQUESTS_MAX = 4000
 P99_MIN_SAMPLES = 1000
 COMPETING_IO_MAX_MIB_PER_SECOND = 4
 COMPETING_IO_MAX_MIB = 128
+ORDINARY_SERVER_MAX_INITIAL_IO_PRESSURE_PERCENT = 25.0
 SYNTHETIC_ADMIN_PASSWORD = "SBC synthetic bootstrap password 123"
 STABILIZATION_SECONDS = 3.0
 DIAGNOSTIC_MIN_SAMPLES = 10
@@ -379,6 +380,70 @@ def _path_storage_metadata(path: Path) -> dict[str, str | None]:
     }
 
 
+def host_io_snapshot() -> dict[str, Any]:
+    """Read aggregate root-device bytes and Linux I/O pressure, when available."""
+    root_device = _root_block_device(_root_mount_source())
+    device_stats = (
+        _read_text(Path(f"/sys/class/block/{root_device}/stat"))
+        if root_device
+        else None
+    )
+    read_bytes = write_bytes = None
+    if device_stats:
+        fields = device_stats.split()
+        if len(fields) >= 7:
+            with contextlib.suppress(ValueError):
+                read_bytes = int(fields[2]) * 512
+                write_bytes = int(fields[6]) * 512
+    pressure: dict[str, dict[str, float]] = {}
+    pressure_text = _read_text(Path("/proc/pressure/io")) or ""
+    for line in pressure_text.splitlines():
+        fields = line.split()
+        if not fields or fields[0] not in {"some", "full"}:
+            continue
+        values: dict[str, float] = {}
+        for item in fields[1:]:
+            key, separator, raw = item.partition("=")
+            if separator and key in {"avg10", "avg60", "avg300"}:
+                with contextlib.suppress(ValueError):
+                    values[key] = float(raw)
+        pressure[fields[0]] = values
+    return {
+        "root_device_read_bytes": read_bytes,
+        "root_device_write_bytes": write_bytes,
+        "io_pressure": pressure,
+    }
+
+
+def host_io_full_avg10(snapshot: Mapping[str, Any]) -> float | None:
+    pressure = snapshot.get("io_pressure")
+    if not isinstance(pressure, Mapping):
+        return None
+    pressure = cast("Mapping[str, Any]", pressure)
+    full = pressure.get("full")
+    if not isinstance(full, Mapping):
+        return None
+    full = cast("Mapping[str, Any]", full)
+    value = full.get("avg10")
+    return float(value) if isinstance(value, (int, float)) else None
+
+
+def _host_io_delta(
+    before: Mapping[str, Any], after: Mapping[str, Any]
+) -> dict[str, Any]:
+    deltas: dict[str, Any] = {}
+    for key in ("root_device_read_bytes", "root_device_write_bytes"):
+        start, end = before.get(key), after.get(key)
+        deltas[key.removesuffix("_bytes") + "_delta_bytes"] = (
+            end - start
+            if isinstance(start, int) and isinstance(end, int) and end >= start
+            else None
+        )
+    deltas["io_pressure_before"] = before.get("io_pressure")
+    deltas["io_pressure_after"] = after.get("io_pressure")
+    return deltas
+
+
 def board_metadata() -> tuple[dict[str, Any] | None, str | None]:
     """Return board facts, or why physical SBC evidence is unavailable."""
     if platform.system().lower() != "linux":
@@ -477,6 +542,94 @@ def board_metadata() -> tuple[dict[str, Any] | None, str | None]:
     }, None
 
 
+def ordinary_server_metadata() -> tuple[dict[str, Any] | None, str | None]:
+    """Describe an ordinary Linux host without claiming it is bare metal."""
+    if platform.system().lower() != "linux":
+        return None, "ordinary-server qualification requires Linux"
+
+    root_source = _root_mount_source()
+    root_device = _root_block_device(root_source)
+    storage = _path_storage_metadata(Path("/"))
+    mem_total = _read_text(Path("/proc/meminfo")) or ""
+    memory_kib_match = re.search(r"(?m)^MemTotal:\s+(\d+)\s+kB", mem_total)
+    cpu_model = None
+    cpu_info = _read_text(Path("/proc/cpuinfo")) or ""
+    cpu_match = re.search(r"(?m)^(?:model name|Hardware)\s*:\s*(.+)$", cpu_info)
+    if cpu_match:
+        cpu_model = cpu_match.group(1).strip()[:160]
+    dmi = {
+        name: _read_text(Path(f"/sys/devices/virtual/dmi/id/{name}"))
+        for name in ("sys_vendor", "product_name", "board_name")
+    }
+    disk_model = (
+        _read_text(Path(f"/sys/class/block/{root_device}/device/model"))
+        if root_device
+        else None
+    )
+    mounts = _read_text(Path("/proc/mounts")) or ""
+    root_mount_options = None
+    for line in mounts.splitlines():
+        fields = line.split()
+        if len(fields) >= 4 and fields[1] == "/":
+            root_mount_options = fields[3][:128]
+            break
+    try:
+        virtualization = subprocess.run(
+            ["systemd-detect-virt"],
+            capture_output=True,
+            text=True,
+            timeout=2,
+            check=False,
+        )
+        virtualization_type = (
+            "none"
+            if virtualization.returncode == 1
+            else virtualization.stdout.strip()[:64]
+            if virtualization.returncode == 0
+            else "unavailable"
+        )
+    except (OSError, subprocess.TimeoutExpired):
+        virtualization_type = "unavailable"
+    container_type = (
+        _read_text(Path("/run/systemd/container"))
+        or ("docker-marker" if Path("/.dockerenv").exists() else None)
+        or (
+            "container-cgroup"
+            if re.search(
+                r"(?i)docker|containerd|kubepods|lxc",
+                _read_text(Path("/proc/1/cgroup")) or "",
+            )
+            else "none"
+        )
+    )
+    release = _os_release()
+    return {
+        "target_class": "ordinary-server",
+        "architecture": platform.machine().lower(),
+        "kernel": platform.release()[:128],
+        "os": release.get("PRETTY_NAME", "unknown"),
+        "os_version_id": release.get("VERSION_ID", "unknown"),
+        "cpu_model": cpu_model,
+        "logical_cpu_count": os.cpu_count(),
+        "ram_bytes": int(memory_kib_match.group(1)) * 1024
+        if memory_kib_match
+        else None,
+        "system_vendor": dmi["sys_vendor"],
+        "product_name": dmi["product_name"],
+        "board_name": dmi["board_name"],
+        "root_filesystem": storage["filesystem"],
+        "root_storage_medium_class": storage["storage_medium_class"],
+        "root_storage_device_class": storage["device_class"],
+        "root_storage_device_model": disk_model[:128] if disk_model else None,
+        "root_mount_options": root_mount_options,
+        "virtualization_type": virtualization_type,
+        "container_type": container_type,
+        "attestation": (
+            "Linux host metadata from procfs, sysfs, DMI and systemd-detect-virt"
+        ),
+    }, None
+
+
 class _LoopbackHandler(BaseHTTPRequestHandler):
     protocol_version = "HTTP/1.1"
     owner: ClassVar[LoopbackProvider]
@@ -503,7 +656,9 @@ class _LoopbackHandler(BaseHTTPRequestHandler):
         try:
             length = int(self.headers.get("content-length", "0"))
             body = self.rfile.read(min(length, MAX_HTTP_BODY_BYTES))
-            self.owner.record(self.path)
+            delay_ms = self.owner.record(self.path)
+            if delay_ms:
+                time.sleep(delay_ms / 1000)
             streaming = b'"stream":true' in body.replace(b" ", b"")
             if self.path.endswith("/chat/completions"):
                 response = (
@@ -601,7 +756,10 @@ class _LoopbackHandler(BaseHTTPRequestHandler):
 class LoopbackProvider:
     """Threaded loopback-only provider with fixed-bucket request counters."""
 
-    def __init__(self) -> None:
+    def __init__(self, latency_profile: str = "instant") -> None:
+        if latency_profile not in {"instant", "mixed-0-10-50ms"}:
+            raise ValueError("unknown loopback provider latency profile")
+        self.latency_profile = latency_profile
         self.requests = 0
         self._lock = threading.Lock()
         self._diagnostic_condition = threading.Condition(self._lock)
@@ -618,14 +776,17 @@ class LoopbackProvider:
         _LoopbackHandler.owner = self
         self.thread = threading.Thread(target=self.server.serve_forever, daemon=True)
 
-    def record(self, path: str) -> None:
-        """Count one loopback request in a fixed bucket; no URLs retained."""
+    def record(self, path: str) -> int:
+        """Count one request and return its deterministic synthetic service delay."""
         with self._lock:
             self.requests += 1
             for bucket in self._path_counts:
                 if path.endswith(bucket):
                     self._path_counts[bucket] += 1
                     break
+            if self.latency_profile == "mixed-0-10-50ms":
+                return (0, 0, 0, 10, 10, 50)[(self.requests - 1) % 6]
+            return 0
 
     def path_counts(self) -> dict[str, int]:
         with self._lock:
@@ -2450,7 +2611,7 @@ def _concurrent_finite_benchmark(
 ) -> dict[str, Any]:
     """Run a bounded finite batch with optional same-filesystem I/O load."""
     if not 1 <= client_concurrency <= CONCURRENCY_WORKERS_MAX:
-        raise ValueError("concurrent benchmark workers must be between 1 and 8")
+        raise ValueError("concurrent benchmark workers must be between 1 and 16")
     if not client_concurrency <= request_count <= CONCURRENCY_REQUESTS_MAX:
         raise ValueError(
             "concurrent benchmark requests must be between worker count and 4000"
@@ -2509,6 +2670,7 @@ def _concurrent_finite_benchmark(
             io_thread.join(timeout=5)
             raise QualificationError("competing I/O worker did not become ready")
 
+    host_io_before = host_io_snapshot()
     first_cpu = _proc_cpu(process.pid)
     started = time.monotonic()
 
@@ -2536,6 +2698,7 @@ def _concurrent_finite_benchmark(
         raise QualificationError("competing I/O worker failed")
     elapsed_seconds = max(time.monotonic() - started, 0.001)
     second_cpu = _proc_cpu(process.pid)
+    host_io_after = host_io_snapshot()
     elapsed_ms = [result[2] for result in results]
     ttft_ms = [result[3] for result in results if result[3] is not None]
     completed = sum(1 for status, body, _, _ in results if status == 200 and body)
@@ -2553,6 +2716,7 @@ def _concurrent_finite_benchmark(
         "batch_elapsed_ms": round(elapsed_seconds * 1000),
         "requests_per_second": round(request_count / elapsed_seconds, 3),
         "cpu": _cpu_batch_summary(first_cpu, second_cpu, elapsed_seconds),
+        "host_io": _host_io_delta(host_io_before, host_io_after),
         "timings": _timing_summary(elapsed_ms, ttft_ms, include_p99=True),
         "competing_io": {
             "enabled": bool(competing_io_max_mib),
@@ -2990,6 +3154,8 @@ def run_qualification(
     competing_io_max_mib: int = 0,
     benchmark_principals: int = 1,
     benchmark_budget_mode: str = "none",
+    target_class: str = "sbc",
+    provider_latency_profile: str = "instant",
 ) -> dict[str, Any]:
     """Run SBC qualification and return a bounded machine-readable report."""
     if benchmark_samples < 0 or benchmark_samples > BENCHMARK_MAX_SAMPLES:
@@ -2997,7 +3163,7 @@ def run_qualification(
             f"benchmark sample count must be 0 or 1..{BENCHMARK_MAX_SAMPLES}"
         )
     if not 1 <= concurrency_workers <= CONCURRENCY_WORKERS_MAX:
-        raise ValueError("concurrency workers must be between 1 and 8")
+        raise ValueError("concurrency workers must be between 1 and 16")
     if not concurrency_workers <= concurrency_requests <= CONCURRENCY_REQUESTS_MAX:
         raise ValueError("concurrency requests must be between workers and 4000")
     if (competing_io_mib_per_second == 0) != (competing_io_max_mib == 0):
@@ -3010,6 +3176,10 @@ def run_qualification(
         raise ValueError("benchmark principals must be between 1 and 49")
     if benchmark_budget_mode not in {"none", "user", "global", "user-global"}:
         raise ValueError("invalid benchmark budget mode")
+    if target_class not in {"sbc", "ordinary-server"}:
+        raise ValueError("target class must be sbc or ordinary-server")
+    if provider_latency_profile not in {"instant", "mixed-0-10-50ms"}:
+        raise ValueError("invalid provider latency profile")
     if benchmark_samples == 0 and (
         concurrency_workers != CONCURRENCY_WORKERS
         or concurrency_requests != CONCURRENCY_BATCH_SIZE
@@ -3147,7 +3317,11 @@ def run_qualification(
     )
     report: dict[str, Any] = {
         "schema_version": SCHEMA_V2 if benchmark_mode else SCHEMA_V1,
-        "plan": "SBC qualification",
+        "plan": (
+            "SBC qualification"
+            if target_class == "sbc"
+            else "ordinary-server qualification"
+        ),
         "manifest": MANIFEST_VERSION,
         "status": "blocked",
         "functional": [],
@@ -3155,7 +3329,10 @@ def run_qualification(
         "commands": [],
         "findings": [],
     }
-    board, block_reason = board_metadata()
+    if target_class == "sbc":
+        board, block_reason = board_metadata()
+    else:
+        board, block_reason = ordinary_server_metadata()
     if block_reason:
         report["reason"] = block_reason
         report["environment"] = {
@@ -3165,6 +3342,20 @@ def run_qualification(
         return report
     environment = cast("dict[str, Any]", board)
     report["environment"] = environment
+    if target_class == "ordinary-server" and benchmark_mode:
+        preflight_io = host_io_snapshot()
+        environment["preflight_io"] = preflight_io
+        pressure = host_io_full_avg10(preflight_io)
+        if (
+            pressure is None
+            or pressure >= ORDINARY_SERVER_MAX_INITIAL_IO_PRESSURE_PERCENT
+        ):
+            report["status"] = "blocked"
+            report["reason"] = (
+                "ordinary-server benchmark stopped before load because initial "
+                "full I/O pressure is missing or at/above the 25% avg10 gate"
+            )
+            return report
     if not binary.is_file():
         report["status"] = "fail"
         report["reason"] = "candidate binary does not exist"
@@ -3210,6 +3401,20 @@ def run_qualification(
         ):
             (root / name).mkdir()
         database = root / "data-home" / "usage.sqlite3"
+        if target_class == "ordinary-server" and benchmark_samples:
+            database_storage = _path_storage_metadata(database)
+            report["environment"]["qualification_database_storage"] = database_storage
+            if (
+                database_storage["storage_medium_class"] != "non-rotational"
+                or database_storage["device_class"] not in {"nvme", "scsi-disk"}
+                or database_storage["filesystem"] in {"tmpfs", "ramfs", "overlay"}
+            ):
+                report["status"] = "blocked"
+                report["reason"] = (
+                    "ordinary-server benchmark database must use durable "
+                    "SSD/NVMe storage, not an ephemeral filesystem"
+                )
+                return report
         backup_dir = root / "backups"
         config = root / "config.toml"
         recovery_root = root / "recovery"
@@ -3243,7 +3448,10 @@ def run_qualification(
             "second_workload_elapsed_ms": [],
             "second_workload_ttft_ms": [],
         }
-        with contextlib.ExitStack() as resources, LoopbackProvider() as provider:
+        with (
+            contextlib.ExitStack() as resources,
+            LoopbackProvider(provider_latency_profile) as provider,
+        ):
             if (
                 diagnose_publication_storage is not None or diagnose_publication_phases
             ) and diagnostic_database_dir is not None:
@@ -4270,6 +4478,7 @@ def run_qualification(
                         "client_concurrency": concurrency_workers,
                         "database_storage": _path_storage_metadata(database),
                         "config_fixture": Path(config_fixture).name,
+                        "provider_latency_profile": provider_latency_profile,
                         "cadence": benchmark_cadence_facts(content),
                         "runs": {},
                     }
@@ -4647,7 +4856,11 @@ def run_qualification(
         report["commands"] = [item.as_dict(root, binary, database) for item in commands]
         report["isolated_temporary_root"] = True
         if benchmark_mode:
-            end_board, _ = board_metadata()
+            end_board, _ = (
+                board_metadata()
+                if target_class == "sbc"
+                else ordinary_server_metadata()
+            )
             if end_board:
                 report["environment"]["power_thermal_mode_celsius_end"] = end_board.get(
                     "power_thermal_mode_celsius"
@@ -4700,6 +4913,12 @@ def _parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--binary", type=Path, required=True)
     parser.add_argument("--config-fixture", type=Path, default=DEFAULT_FIXTURE)
+    parser.add_argument(
+        "--target-class",
+        choices=("sbc", "ordinary-server"),
+        default="sbc",
+        help="Host evidence profile; SBC remains the default qualification target.",
+    )
     parser.add_argument("--expected-sha256")
     parser.add_argument(
         "--build-elapsed-ms",
@@ -4725,7 +4944,16 @@ def _parser() -> argparse.ArgumentParser:
         type=int,
         default=CONCURRENCY_WORKERS,
         metavar="N",
-        help="Concurrent finite-request workers, 1..8 (benchmark mode only).",
+        help="Concurrent finite-request workers, 1..16 (benchmark mode only).",
+    )
+    parser.add_argument(
+        "--provider-latency-profile",
+        choices=("instant", "mixed-0-10-50ms"),
+        default="instant",
+        help=(
+            "Deterministic loopback upstream service distribution; mixed profile "
+            "cycles 0/0/0/10/10/50 ms."
+        ),
     )
     parser.add_argument(
         "--concurrency-requests",
@@ -4920,6 +5148,8 @@ def main(argv: Sequence[str] | None = None) -> int:
             competing_io_max_mib=args.competing_io_max_mib,
             benchmark_principals=args.benchmark_principals,
             benchmark_budget_mode=args.benchmark_budget_mode,
+            target_class=args.target_class,
+            provider_latency_profile=args.provider_latency_profile,
         )
     except (OSError, QualificationError, ValueError, sqlite3.Error) as error:
         requested_benchmark = (

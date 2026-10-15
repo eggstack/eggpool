@@ -138,15 +138,17 @@ explains that Codex CLI requests without a cap cannot use hard token budgets.
 M022 is closed. M023's hard M022 dependency is satisfied. Its remaining
 ordinary-server Linux/SSD-or-NVMe measurement is an operational evidence gate
 for implementation acceptance and team-capacity claims. The available runner
-is a Darwin MacBook Pro, so it cannot supply that evidence; the independent
-on-prem concurrency M002 plan remains ready and no qualifying hardware record
-was found. M023 remains blocked pending that ordinary-server evidence. No
-other on-prem user-access plan after M023 is registered as eligible.
+is a Darwin MacBook Pro, so it cannot supply that evidence. The independent
+concurrency M002 tooling/setup slice is conditionally closed, but its attested
+Ubuntu host exceeded the predeclared I/O-pressure stop gate during build
+verification; no qualification cell or capacity measurement ran. M023 remains
+blocked pending an isolated ordinary-server result. No other on-prem
+user-access plan after M023 is registered as eligible.
 
 ## 12. Registry updates
 
 The closure commit marks M022 `implemented` and the roadmap milestone `closed`,
 adds this record to recent closures, and records the M023 unblock audit.
 M023 remains `blocked` with M022 removed from its blocker; its remaining
-operational gate is the ordinary-server M002 qualification. No other
+operational gate is the unmeasured ordinary-server M002 qualification. No other
 dependency-ready or active plan is promoted.

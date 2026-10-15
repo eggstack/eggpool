@@ -492,6 +492,38 @@ descriptive observations rather than universal RSS or latency gates, and keep
 EggPool-local `local_pre_upstream`/`dispatch_overhead` separate from upstream
 connect, header, TTFT, and total response latency.
 
+### Ordinary-server team sizing evidence
+
+The M002 synthetic reference uses an ordinary Linux host with durable
+SSD/NVMe storage, WAL/NORMAL, and one database worker. It records CPU, RAM,
+filesystem, device class/model, virtualization/container status, process RSS,
+request throughput and percentiles, I/O pressure, and durable reservation
+settlement. Named account rows (1/5/10/25/49) are measured separately from
+simultaneous inference requests (1/2/4/8/16); neither count is a service
+guarantee. The synthetic upstream cycles a fixed 0/10/50 ms service-time
+distribution to show how provider latency affects observed response time.
+
+The driver writes the manifest, raw runs, and generated summary under
+`artifacts/qualification/on-prem-concurrency-performance/ordinary-server/`.
+Until a complete run is recorded, there is no M002 capacity result. Once
+available, use it only for relative sizing; qualify the actual provider mix,
+model payloads, login rate, and policy/budget profile before deployment. No
+universal throughput, concurrency, or latency SLA follows from one host and
+synthetic workload. The Pi microSD envelope remains a separate solo-device
+reference in [`raspberry-pi.md`](raspberry-pi.md). See the
+[M002 closure record](../plans/closure/on-prem-concurrency-performance/002-status.md)
+for its measured/unmeasured status and required follow-up evidence.
+
+To repeat the frozen corpus from a release binary, run
+`uv run python scripts/qualification_ordinary_server.py --binary <release-binary>`.
+The driver writes its manifest before collection, creates a fresh qualification
+root for each run, requires three repetitions per condition, validates p99
+sample counts and settlement, and derives `summary.json` from the raw Q008
+reports. It refuses non-Linux hosts and non-durable or rotational qualification
+storage, and stops before load when initial full I/O pressure exceeds 25% over
+the 10-second window. Qualification does not send requests to a real provider
+or charge a provider account.
+
 ### Lean (default)
 
 Recommended for Raspberry Pi and low-power devices. Optimized for

@@ -272,6 +272,11 @@ Le Potato and a separate ordinary-Linux reference host were not measured here
 deltas); 16-way concurrency was not attempted because 8-way already
 saturates.
 
+The ordinary-server team baseline is maintained separately from this Pi
+microSD solo envelope; do not use the Pi limits as the team-host sizing source.
+The current M002 result is conditional and contains no server capacity claim;
+see its [closure record](../plans/closure/on-prem-concurrency-performance/002-status.md).
+
 ## Verify from LAN
 
 1. Find Pi IP: `hostname -I`
