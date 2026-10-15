@@ -605,13 +605,11 @@ pub(crate) fn hold_for_admission(
     };
     let hold_microdollars = if hard_cost {
         let tariff = proof.and_then(|proof| proof.tariff_microdollars_per_million_tokens);
-        // Cost-hard-only rules still need attempt-equivalent coverage on the
-        // token side before converting through the tariff.
-        let cost_tokens = if hard_token {
-            hold_tokens
-        } else {
-            checked_mul(estimate_tokens.max(0), HARD_HOLD_INITIAL_EQUIVALENTS)?
-        };
+        // A hard cost cap still needs a conservative token proof when token
+        // count itself is estimated. Estimates can be below the raw-body
+        // bound or capped for resource reasons, so they cannot justify a hard
+        // monetary reservation.
+        let cost_tokens = checked_mul(single?, HARD_HOLD_INITIAL_EQUIVALENTS)?;
         tariff_cost_microdollars(cost_tokens, tariff)?
     } else {
         estimate_microdollars.max(0)
@@ -654,11 +652,7 @@ pub(crate) fn hold_for_retry(
     };
     let extra_microdollars = if hard_cost {
         let tariff = proof.and_then(|proof| proof.tariff_microdollars_per_million_tokens);
-        let cost_tokens = if hard_token {
-            extra_tokens
-        } else {
-            checked_mul(estimate_tokens.max(0), HARD_HOLD_RETRY_EQUIVALENTS)?
-        };
+        let cost_tokens = checked_mul(single?, HARD_HOLD_RETRY_EQUIVALENTS)?;
         tariff_cost_microdollars(cost_tokens, tariff)?
     } else {
         estimate_microdollars.max(0)
@@ -1196,5 +1190,33 @@ mod hard_cost_tests {
             .expect("hard token and cost bounds are provable");
         assert_eq!(combined.tokens, 2);
         assert_eq!(combined.microdollars, 1);
+    }
+
+    #[test]
+    fn cost_hard_holds_require_and_use_conservative_proof_tokens() {
+        let proof = BudgetProof {
+            input_worst_case_tokens: 100_000,
+            requested_output_tokens: Some(100_000),
+            tariff_microdollars_per_million_tokens: Some(1_000_000),
+        };
+
+        let initial = hold_for_admission(1, 0, Some(&proof), false, true)
+            .expect("hard cost requires a usable token proof");
+        assert_eq!(initial.tokens, 1);
+        assert_eq!(initial.microdollars, 400_000);
+        assert_eq!(initial.bound_microdollars, 400_000);
+
+        let retry = hold_for_retry(1, 0, Some(&proof), false, true)
+            .expect("retry cost uses the single-attempt proof bound");
+        assert_eq!(retry.tokens, 1);
+        assert_eq!(retry.microdollars, 200_000);
+        assert_eq!(retry.bound_microdollars, 200_000);
+
+        let unbounded = BudgetProof {
+            requested_output_tokens: None,
+            ..proof
+        };
+        assert!(hold_for_admission(1, 0, Some(&unbounded), false, true).is_none());
+        assert!(hold_for_retry(1, 0, Some(&unbounded), false, true).is_none());
     }
 }

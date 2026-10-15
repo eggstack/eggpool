@@ -552,6 +552,176 @@ async fn trusted_reverse_proxy_can_complete_secure_browser_login() {
 }
 
 #[tokio::test]
+async fn browser_sessions_can_read_scoped_user_budget_api() {
+    let (_directory, database) = database().await;
+    let (admin_id, _) = create_admin(&database).await;
+    identity::enable_managed(&database).await.unwrap();
+    identity::reset_password(&database, "admin", "M015 budget api admin password")
+        .await
+        .unwrap();
+    let member = identity::create_member(
+        &database,
+        &admin_id,
+        "budget-api-member",
+        "M015 budget api member temporary password",
+    )
+    .await
+    .unwrap();
+    let other_member = identity::create_member(
+        &database,
+        &admin_id,
+        "budget-api-other",
+        "M015 budget api other temporary password",
+    )
+    .await
+    .unwrap();
+    identity::reset_password(
+        &database,
+        "budget-api-member",
+        "M015 budget api member password",
+    )
+    .await
+    .unwrap();
+    identity::reset_password(
+        &database,
+        "budget-api-other",
+        "M015 budget api other password",
+    )
+    .await
+    .unwrap();
+
+    let limits = eggpool::user_budget::BudgetLimits {
+        requests: Some(5),
+        tokens: None,
+        microdollars: None,
+        concurrent: None,
+        enforcement: eggpool::user_budget::BudgetEnforcement::Estimated,
+    };
+    let budgets = eggpool::user_budget::UserBudgetService::new(database.clone());
+    budgets
+        .set_rule(
+            &admin_id,
+            &member.id,
+            None,
+            eggpool::user_budget::BudgetWindow::Day,
+            limits,
+        )
+        .await
+        .unwrap();
+    let other_limits = eggpool::user_budget::BudgetLimits {
+        requests: Some(10),
+        ..limits
+    };
+    budgets
+        .set_rule(
+            &admin_id,
+            &other_member.id,
+            None,
+            eggpool::user_budget::BudgetWindow::Day,
+            other_limits,
+        )
+        .await
+        .unwrap();
+    eggpool::instance_budget::InstanceBudgetService::new(database.clone())
+        .set_rule(
+            &admin_id,
+            None,
+            eggpool::user_budget::BudgetWindow::Day,
+            limits,
+        )
+        .await
+        .unwrap();
+
+    let member_session = web_session::issue(&database, &member.id).await.unwrap();
+    let admin_session = web_session::issue(&database, &admin_id).await.unwrap();
+    let process = ProcessRuntime::new(database.clone()).expect("process runtime");
+    let mut config = Config::default();
+    config.server.host = "127.0.0.1".to_owned();
+    config.server.api_key = Some("configured-shared-key-for-budget-api-test".to_owned());
+    config.dashboard.enabled = true;
+    config.dashboard.public = true;
+    let candidate = RuntimeGenerationFactory::prepare(
+        &process,
+        config.clone(),
+        "browser-budget-api-test".to_owned(),
+        1,
+    )
+    .await
+    .expect("initial generation");
+    let manager = Arc::new(RuntimeManager::new(
+        candidate.transfer().expect("generation transfer"),
+    ));
+    let runtime = ServerRuntime::new(process, manager, config);
+    let handle = runtime.handle();
+    let listener = TcpListener::bind(("127.0.0.1", 0)).await.unwrap();
+    let address = listener.local_addr().unwrap();
+    let task = tokio::spawn(async move { runtime.serve_listener(listener).await });
+
+    let member_response = http_request(
+        address,
+        &format!(
+            "GET /api/user-budget HTTP/1.1\r\nHost: {address}\r\nCookie: eggpool_session={}\r\nConnection: close\r\n\r\n",
+            member_session.session_token
+        ),
+    )
+    .await;
+    assert!(
+        member_response.starts_with("HTTP/1.1 200"),
+        "{member_response}"
+    );
+    assert!(
+        member_response
+            .to_ascii_lowercase()
+            .contains("cache-control: no-store"),
+        "browser budget response must not be cached: {member_response}"
+    );
+    assert!(
+        member_response.contains("\"max_requests\":5"),
+        "{member_response}"
+    );
+    assert!(
+        !member_response.contains("instance_rules")
+            && !member_response.contains("\"max_requests\":10"),
+        "members see neither instance ceilings nor another user's rules: {member_response}"
+    );
+
+    let denied = http_request(
+        address,
+        &format!(
+            "GET /api/user-budget?user_id={} HTTP/1.1\r\nHost: {address}\r\nCookie: eggpool_session={}\r\nConnection: close\r\n\r\n",
+            other_member.id, member_session.session_token
+        ),
+    )
+    .await;
+    assert!(denied.starts_with("HTTP/1.1 403"), "{denied}");
+
+    let admin_response = http_request(
+        address,
+        &format!(
+            "GET /api/user-budget?user_id={} HTTP/1.1\r\nHost: {address}\r\nCookie: eggpool_session={}\r\nConnection: close\r\n\r\n",
+            member.id, admin_session.session_token
+        ),
+    )
+    .await;
+    assert!(
+        admin_response.starts_with("HTTP/1.1 200"),
+        "{admin_response}"
+    );
+    assert!(
+        admin_response.contains("instance_rules"),
+        "{admin_response}"
+    );
+    assert!(
+        admin_response.contains("\"max_requests\":5"),
+        "{admin_response}"
+    );
+
+    handle.request_shutdown(ShutdownReason::Requested);
+    task.await.unwrap().unwrap();
+    database.close().await.unwrap();
+}
+
+#[tokio::test]
 async fn token_guess_throttle_runs_before_access_state_and_database_lookup() {
     let (_directory, database) = database().await;
     let (_admin_id, _) = create_admin(&database).await;

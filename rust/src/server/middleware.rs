@@ -27,6 +27,7 @@ pub(super) async fn authenticate(
         .map(|extension| &extension.0);
     let token_peer = super::auth::throttle_peer_ip(connection, request.headers(), &state.server);
     if personal_credential_allowed(&path)
+        && path != "/api/user-budget"
         && state.server.api_key.is_some()
         && supplied_key.is_none()
     {
@@ -78,7 +79,7 @@ pub(super) async fn authenticate(
             Err(_) => return auth_unavailable(),
         }
     }
-    if personal_credential_allowed(&path) {
+    if personal_credential_allowed(&path) && path != "/api/user-budget" {
         return unauthorized("Invalid or missing personal API credential");
     }
 
