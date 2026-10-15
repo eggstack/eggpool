@@ -7,7 +7,7 @@ use eggpool::{
     coordinator::{
         CrashReconciler, DurableFinalizer, EndpointError, FinalizationData, FinalizationError,
         FinalizationOutcome, PublicationError, PublicationFaultInjector, PublicationInput,
-        PublicationOutcome, PublicationService, PublicationStage, endpoint_error_body,
+        PublicationOutcome, PublicationService, PublicationStage, endpoint_error_body_for,
     },
     db::{Account, Database, DatabaseConfig, MigrationRunner},
     identity::{AuthenticatedPrincipal, PrincipalKind},
@@ -957,14 +957,29 @@ async fn endpoint_error_maps_not_enforceable_to_stable_429() {
     assert_eq!(error.status().as_u16(), 429);
     assert_eq!(
         error.to_string(),
-        "User budget hard limit is not enforceable for this request"
+        "Hard budget cannot be enforced: include a positive output cap supported by this API, and configure an operator tariff when a hard USD limit applies"
     );
-    let body = endpoint_error_body(ClientSurface::ChatCompletions, &error.to_string());
+    let body = endpoint_error_body_for(ClientSurface::ChatCompletions, &error);
     let parsed: serde_json::Value = serde_json::from_slice(&body).expect("error body is JSON");
     assert_eq!(
         parsed["error"]["message"].as_str(),
-        Some("User budget hard limit is not enforceable for this request")
+        Some(
+            "Hard budget cannot be enforced: include a positive output cap supported by this API, and configure an operator tariff when a hard USD limit applies"
+        )
     );
+    assert_eq!(
+        parsed["error"]["code"].as_str(),
+        Some("hard_budget_not_enforceable")
+    );
+    let messages = endpoint_error_body_for(ClientSurface::Messages, &error);
+    let parsed: serde_json::Value = serde_json::from_slice(&messages).expect("JSON error");
+    assert_eq!(parsed["error"]["code"], "hard_budget_not_enforceable");
+    let exceeded = endpoint_error_body_for(
+        ClientSurface::ChatCompletions,
+        &EndpointError::BudgetExceeded,
+    );
+    let parsed: serde_json::Value = serde_json::from_slice(&exceeded).expect("JSON error");
+    assert_eq!(parsed["error"]["code"], "budget_exceeded");
 }
 
 #[tokio::test]
@@ -1040,6 +1055,66 @@ async fn admission_extracts_per_surface_output_bounds() {
     )
     .expect("compact admission succeeds");
     assert_eq!(compact.budget_facts.requested_output_tokens, Some(16));
+}
+
+#[test]
+fn invalid_agent_output_caps_are_rejected_across_surfaces() {
+    use eggpool::request::{AdmissionOptions, admit_request};
+
+    for (surface, cap_field) in [
+        (ClientSurface::ChatCompletions, "max_tokens"),
+        (ClientSurface::Responses, "max_output_tokens"),
+        (ClientSurface::Messages, "max_tokens"),
+    ] {
+        let mut payload = serde_json::Map::new();
+        payload.insert("model".into(), serde_json::json!("synthetic-model"));
+        payload.insert(cap_field.into(), serde_json::json!("unbounded"));
+        let body = serde_json::to_vec(&payload).expect("synthetic request encodes");
+        let result = admit_request(
+            &body,
+            AdmissionOptions {
+                client_surface: surface,
+                ..AdmissionOptions::default()
+            },
+        );
+        assert!(
+            result.is_err(),
+            "invalid output cap accepted for {surface:?}"
+        );
+    }
+}
+
+#[test]
+fn sanitized_agent_budget_capture_corpus_records_supported_surfaces() {
+    let corpus: serde_json::Value = serde_json::from_str(include_str!(
+        "fixtures/on_prem_budget_agent_compatibility.json"
+    ))
+    .expect("compatibility corpus is valid JSON");
+    assert_eq!(corpus["clients"][0]["version"], "0.162.1");
+    assert_eq!(corpus["clients"][0]["surface"], "responses");
+    assert!(corpus["clients"][0]["output_cap"].is_null());
+    assert_eq!(
+        corpus["clients"][0]["budget_compatibility"],
+        "unbounded; EggPool hard rules reject before dispatch under the proof contract"
+    );
+    assert_eq!(corpus["clients"][1]["version"], "1.18.35");
+    assert_eq!(corpus["clients"][1]["output_cap"], 1024);
+    assert_eq!(
+        corpus["surface_fields"]["chat_completions"],
+        serde_json::json!(["max_completion_tokens", "max_tokens"])
+    );
+    assert_eq!(
+        corpus["surface_fields"]["responses"],
+        serde_json::json!(["max_output_tokens", "max_completion_tokens", "max_tokens"])
+    );
+    assert_eq!(
+        corpus["surface_fields"]["compact_responses"],
+        corpus["surface_fields"]["responses"]
+    );
+    assert_eq!(
+        corpus["surface_fields"]["anthropic_messages"],
+        serde_json::json!(["max_tokens"])
+    );
 }
 
 #[tokio::test]

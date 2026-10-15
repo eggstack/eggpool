@@ -8,6 +8,15 @@ Codex and OpenCode additionally support a managed lifecycle that installs a gene
 
 ## Supported Targets
 
+For hard token budgets, clients must send an explicit output cap supported by
+their API surface. OpenCode sends its configured model `limit.output` as
+`max_output_tokens` on Responses requests; set that model limit when using a
+hard token budget. The tested Codex CLI 0.162.1 Responses request did not
+include an output cap, so it is rejected before upstream dispatch when a hard
+token rule applies. EggPool does not invent an output cap. See the
+[hard-budget compatibility matrix](model-limits.md#coding-agent-compatibility)
+for supported field names and capture details.
+
 | Target | Command | Output Format | `--write` Default | Model |
 |--------|---------|---------------|-------------------|-------|
 | OpenCode | `eggpool configsetup opencode` | JSON provider config (Responses runtime) | N/A (clipboard) | auto (all models) |

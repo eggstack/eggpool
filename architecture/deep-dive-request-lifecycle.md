@@ -147,7 +147,7 @@ adapts the response, and converges durable state.
   caller's explicit compatible output cap (`max_tokens`/`max_completion_tokens`
   on chat, `max_output_tokens` on Responses/compact, `max_tokens` on Anthropic
   Messages) converted at the operator-configured provider tariff — and deny
-  with `BudgetNotEnforceable` (429, no   upstream submission) when unbounded,
+  with `BudgetNotEnforceable` (429, no upstream submission) when unbounded,
   unpriced, or overflowing. The initial hard hold covers two attempt
   equivalents (concrete attempt plus unattributed selector overhead); retries
   extend by one equivalent after re-checking. Observed provider usage above

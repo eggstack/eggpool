@@ -22,7 +22,7 @@ Hard: M017 client credential/replay integration must close first. Interface: exi
 
 ## 3. Current evidence
 
-`rust/src/user_budget.rs` and `rust/src/instance_budget.rs` reserve worst-case hard costs; `docs/model-limits.md` documents proof-or-reject semantics. Hard token rules require explicit caller output cap. Hard USD rules also require conservative operator tariff for all eligible providers. Some supported clients may omit compatible output-cap fields for one or more OpenAI Responses, Chat, Anthropic Messages or compact surfaces; those requests correctly fail before dispatch. M015 corrected under-reserved hard-dollar proof, so a relaxed estimated fallback would regress security.
+`rust/src/user_budget.rs` and `rust/src/instance_budget.rs` reserve worst-case hard costs; `docs/model-limits.md` documents proof-or-reject semantics. Hard token rules require an explicit caller output cap. Hard USD rules also require a conservative operator tariff for all eligible providers. Synthetic loopback request captures against a local mock server used Codex CLI 0.162.1 and OpenCode 1.18.35: Codex sent a streaming Responses request without an output cap, while OpenCode sent `max_output_tokens: 1024` from its configured model `limit.output`. The mock returned synthetic HTTP 400; only endpoint, version, stream and cap fields were retained. No prompt, request body, key, or provider call was used. The sanitized evidence is in `rust/tests/fixtures/on_prem_budget_agent_compatibility.json`. M015 corrected under-reserved hard-dollar proof, so a relaxed estimated fallback would regress security.
 
 ## 4. Invariants
 
@@ -34,7 +34,7 @@ In: reproduce which clients/protocols omit bounds, clearer budget failure diagno
 
 ## 6. Production changes
 
-Start by creating a protocol/client matrix with OpenCode, Codex and other supported clients using controlled fixture requests. Identify exact native output-limit fields. Investigate an explicit per-model/provider operator maximum output cap that the adapter can enforce in upstream request payload and prove across native/transcoded/streaming/compact paths. If impossible on a surface, preserve rejection and add clear guidance. Do not add a cross-client injected limit just to improve pass rates.
+Create a protocol/client matrix with controlled synthetic requests and identify the accepted output-limit fields for Chat Completions, Responses, compact Responses and Anthropic Messages. Existing request admission and `BudgetProof` consume these fields without mutating the request. Do not add an operator cap: there is no protocol-wide evidence that an inferred limit would be preserved across all upstreams, wire translations and retries. Preserve rejection for clients omitting a bound and give a corrective hint.
 
 ## 7. Ordered work packages
 
@@ -52,9 +52,9 @@ Acceptance: adversarial proof test for every affected surface, including malform
 
 ### C — UX and failure mapping
 
-Return stable sanitized reason codes and meaningful corrective hints for missing output cap, unknown tariff, exhausted budget and concurrency. Preserve correct `Retry-After` behavior only for retryable conditions. Surface non-priced private-model token/request limits accurately.
+Return stable sanitized codes for an exhausted budget (`budget_exceeded`) and a hard proof failure (`hard_budget_not_enforceable`), with a corrective hint for explicit output caps and operator tariffs. The current transaction result intentionally does not distinguish a missing token bound from an unknown tariff or arithmetic overflow, so the message describes both safe client/operator remedies without exposing rule contents. No `Retry-After` is added: these are policy/proof decisions rather than transient waits. Preserve non-priced private-model token/request limits.
 
-Acceptance: a member can identify whether to change the client request, budget or provider tariff without seeing another user's budgets or accounts.
+Acceptance: a member sees a stable machine code and can identify the client-request or operator-tariff correction without seeing another user's budgets or accounts.
 
 ## 8. Failure, cancellation, restart and contention
 

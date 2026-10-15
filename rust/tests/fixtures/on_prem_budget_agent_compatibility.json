@@ -1,0 +1,29 @@
+{
+  "capture_method": "loopback synthetic request capture; retained fields only; no request bodies, prompts, keys, or provider calls",
+  "mock_response": "HTTP 400",
+  "clients": [
+    {
+      "name": "Codex CLI",
+      "version": "0.162.1",
+      "surface": "responses",
+      "stream": true,
+      "output_cap": null,
+      "budget_compatibility": "unbounded; EggPool hard rules reject before dispatch under the proof contract"
+    },
+    {
+      "name": "OpenCode",
+      "version": "1.18.35",
+      "surface": "responses",
+      "stream": true,
+      "output_cap": 1024,
+      "source": "configured model limit.output",
+      "hard_token_budget": "bounded_by_explicit_request_cap"
+    }
+  ],
+  "surface_fields": {
+    "chat_completions": ["max_completion_tokens", "max_tokens"],
+    "responses": ["max_output_tokens", "max_completion_tokens", "max_tokens"],
+    "compact_responses": ["max_output_tokens", "max_completion_tokens", "max_tokens"],
+    "anthropic_messages": ["max_tokens"]
+  }
+}

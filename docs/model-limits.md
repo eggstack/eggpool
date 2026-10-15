@@ -146,10 +146,33 @@ nothing is silently upgraded to a guarantee.
   max_microdollars_per_million_tokens`); unpriced providers fail closed, an
   explicit zero tariff means verified free, and estimator fallbacks are never
   a hard price. Requests that cannot be bounded — unbounded output, unknown
-  tariff, arithmetic overflow — are denied with a stable 429
-  (`User budget hard limit is not enforceable for this request`) before any
-  upstream submission. Observed provider usage above a hard hold is settled
-  visibly, never clamped.
+  tariff, arithmetic overflow — are denied with HTTP 429 and machine code
+  `hard_budget_not_enforceable` before any upstream submission. The response
+  advises callers to include a positive output cap supported by the API and
+  operators to configure a tariff when hard USD rules apply. `budget_exceeded`
+  identifies an exhausted rule. Observed provider usage above a hard hold is
+  settled visibly, never clamped.
+
+### Coding-agent compatibility
+
+The supported request fields used as output bounds are:
+
+| API surface | Explicit output bound fields |
+|-------------|-------------------------------|
+| Chat Completions | `max_completion_tokens`, `max_tokens` |
+| Responses | `max_output_tokens`, `max_completion_tokens`, `max_tokens` |
+| Compact Responses | `max_output_tokens`, `max_completion_tokens`, `max_tokens` |
+| Anthropic Messages | `max_tokens` |
+
+Synthetic loopback captures of Codex CLI 0.162.1 and OpenCode 1.18.35
+confirmed that behavior depends on client model configuration: Codex CLI sent
+a streaming Responses request without an output cap, while OpenCode sent
+`max_output_tokens: 1024` from its configured `limit.output`. The sanitized
+capture record is in
+[`rust/tests/fixtures/on_prem_budget_agent_compatibility.json`](../rust/tests/fixtures/on_prem_budget_agent_compatibility.json).
+An unbounded request continues to fail before dispatch under hard token rules.
+For OpenCode, configure a model output limit so its Responses request carries
+the bound. EggPool does not inject or infer a cap for any client.
 
 See the [API reference](api-reference.md#authentication) for the
 authenticated `/api/user-budget` view.

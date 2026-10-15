@@ -152,7 +152,7 @@ pub(super) async fn handle_finite_compact(
         }
         Err(error) => {
             let status = error.status();
-            let detail = endpoint_error_body(surface, &error.to_string());
+            let detail = crate::coordinator::endpoint_error_body_for(surface, &error);
             error_body_response(status, surface, detail)
         }
     }
@@ -191,7 +191,7 @@ pub(super) async fn handle_inference(
         }
         Err(error) => {
             let status = error.status();
-            let detail = endpoint_error_body(surface, &error.to_string());
+            let detail = crate::coordinator::endpoint_error_body_for(surface, &error);
             error_body_response(status, surface, detail)
         }
     }

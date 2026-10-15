@@ -128,10 +128,11 @@ rules require an explicit caller output cap; USD rules require an
 operator-configured provider tariff) and deny otherwise, while `estimated`
 rules use approximate holds and are never a guaranteed cap. This API does
 not represent invoices or exact charges for flat-rate provider accounts.
-Requests denied because a hard rule cannot be bounded return HTTP 429 with a
-stable machine-readable message
-(`User budget hard limit is not enforceable for this request`) before any
-upstream submission. Administrator responses additionally include
+Requests denied because a hard rule cannot be bounded return HTTP 429 with
+machine code `hard_budget_not_enforceable` before any upstream submission.
+The response gives corrective guidance for an explicit output cap and, when
+applicable, an operator tariff. Exhausted rules use the code
+`budget_exceeded`. Administrator responses additionally include
 `instance_rules` and `instance_usage`: the single instance-wide ceiling
 intersected with every per-user rule. Members never receive instance fields,
 so one member cannot observe the shared ceiling or infer other users'
