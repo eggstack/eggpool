@@ -1203,11 +1203,19 @@ def _runtime_task_snapshot(value: Mapping[str, Any]) -> dict[str, dict[str, Any]
     return snapshot
 
 
-def _runtime_json(runtime_url: str, server_api_key: str) -> dict[str, Any] | None:
+def _runtime_json(
+    runtime_url: str,
+    server_api_key: str = "q008-server-key",
+    *,
+    session_cookie: str | None = None,
+) -> dict[str, Any] | None:
     try:
-        status, body = _http(
-            runtime_url, headers={"Authorization": f"Bearer {server_api_key}"}
+        headers = (
+            {"Cookie": session_cookie}
+            if session_cookie is not None
+            else {"Authorization": f"Bearer {server_api_key}"}
         )
+        status, body = _http(runtime_url, headers=headers)
         if status != 200:
             return None
         value = json.loads(body.decode("utf-8"))
@@ -1221,11 +1229,14 @@ def _wait_for_diagnostic_quiescence(
     *,
     timeout: float = DIAGNOSTIC_QUIESCENCE_TIMEOUT,
     server_api_key: str = "q008-server-key",
+    session_cookie: str | None = None,
 ) -> dict[str, dict[str, Any]]:
     """Wait for startup checkpoint/metrics work and a quiescent task window."""
     deadline = time.monotonic() + timeout
     while time.monotonic() < deadline:
-        value = _runtime_json(runtime_url, server_api_key)
+        value = _runtime_json(
+            runtime_url, server_api_key, session_cookie=session_cookie
+        )
         tasks = _runtime_task_snapshot(value or {})
         checkpoint = tasks.get("checkpoint")
         metrics_flush = tasks.get("metrics_flush")
@@ -1323,6 +1334,7 @@ def resource_sample(
     *,
     duration: float = SAMPLE_SECONDS,
     server_api_key: str = "q008-server-key",
+    session_cookie: str | None = None,
     include_peak: bool = False,
 ) -> dict[str, Any]:
     """Capture a bounded procfs/runtime/database snapshot.
@@ -1343,7 +1355,12 @@ def resource_sample(
     runtime_read_error = False
     try:
         _, body = _http(
-            runtime_url, headers={"Authorization": f"Bearer {server_api_key}"}
+            runtime_url,
+            headers=(
+                {"Cookie": session_cookie}
+                if session_cookie is not None
+                else {"Authorization": f"Bearer {server_api_key}"}
+            ),
         )
         runtime_value = json.loads(body.decode("utf-8"))
         runtime = (
@@ -2243,9 +2260,9 @@ def _finite_diagnostic_payload() -> bytes:
     ).encode()
 
 
-def _diagnostic_headers() -> dict[str, str]:
+def _diagnostic_headers(api_token: str = "q008-server-key") -> dict[str, str]:
     return {
-        "Authorization": "Bearer q008-server-key",
+        "Authorization": f"Bearer {api_token}",
         "Content-Type": "application/json",
     }
 
@@ -2374,10 +2391,10 @@ def _direct_provider_control(
     }
 
 
-def _diagnostic_finite_warmup(port: int) -> None:
+def _diagnostic_finite_warmup(port: int, api_token: str = "q008-server-key") -> None:
     for _ in range(DIAGNOSTIC_WARMUPS):
         status, body, _, _ = _benchmark_request(
-            port, MODELS["responses"], False, "responses"
+            port, MODELS["responses"], False, "responses", api_token=api_token
         )
         if status != 200 or not body:
             raise QualificationError(
@@ -2395,6 +2412,7 @@ def _diagnostic_finite_batch(
     timeout: float = DIAGNOSTIC_TIMEOUT,
     warmup: bool = True,
     wal_diagnostics: bool = True,
+    api_token: str = "q008-server-key",
 ) -> dict[str, Any]:
     """Run a sequential native-finite diagnostic batch with phase attribution.
 
@@ -2409,9 +2427,9 @@ def _diagnostic_finite_batch(
         )
     url = f"http://127.0.0.1:{port}/v1/responses"
     payload = _finite_diagnostic_payload()
-    headers = _diagnostic_headers()
+    headers = _diagnostic_headers(api_token)
     if warmup:
-        _diagnostic_finite_warmup(port)
+        _diagnostic_finite_warmup(port, api_token)
     provider.start_diagnostic(capacity=samples)
     observations: list[DiagnosticSample] = []
     wal_before = (
@@ -2765,6 +2783,36 @@ def _command_token(
     if result.returncode != 0 or match is None:
         raise QualificationError("synthetic personal token issuance failed")
     return match.group(0)
+
+
+def _synthetic_admin_session_cookie(port: int, password: str, timeout: float) -> str:
+    """Create an ephemeral browser session for protected runtime diagnostics."""
+    jar = http.cookiejar.CookieJar()
+    opener = urllib.request.build_opener(urllib.request.HTTPCookieProcessor(jar))
+    origin = f"http://127.0.0.1:{port}"
+    try:
+        opener.open(f"{origin}/login", timeout=timeout).read()
+        login = urllib.request.Request(
+            f"{origin}/login",
+            data=urllib.parse.urlencode(
+                {"username": "sbc-admin", "password": password}
+            ).encode(),
+            headers={
+                "Content-Type": "application/x-www-form-urlencoded",
+                "Origin": origin,
+                "Referer": f"{origin}/login",
+            },
+            method="POST",
+        )
+        opener.open(login, timeout=timeout).read()
+    except (OSError, urllib.error.URLError, TimeoutError) as error:
+        raise QualificationError(
+            "synthetic admin browser session could not be created"
+        ) from error
+    cookie = next((item for item in jar if item.name == "eggpool_session"), None)
+    if cookie is None:
+        raise QualificationError("synthetic admin browser session was not issued")
+    return f"eggpool_session={cookie.value}"
 
 
 def _configure_benchmark_principals(
@@ -3562,6 +3610,14 @@ def run_qualification(
                 report["startup_to_ready_ms"] = round(
                     (time.monotonic() - started) * 1000
                 )
+                diagnostic_session_cookie = (
+                    _synthetic_admin_session_cookie(
+                        port, SYNTHETIC_ADMIN_PASSWORD, timeout
+                    )
+                    if diagnose_publication_phases
+                    or diagnose_publication_storage is not None
+                    else None
+                )
                 for step_id, path in (
                     ("startup-readyz", "/v1/readyz"),
                     ("model-listing", "/v1/models"),
@@ -3811,18 +3867,21 @@ def run_qualification(
                             benchmark_process,
                             database,
                             diagnostic_runtime_url,
+                            session_cookie=diagnostic_session_cookie,
                             include_peak=True,
                         )
                     )
                     benchmark["runs"]["direct_provider_control"] = (
                         _direct_provider_control(provider)
                     )
-                    _diagnostic_finite_warmup(port)
+                    _diagnostic_finite_warmup(port, agent_token)
                     baseline_tasks = _wait_for_diagnostic_quiescence(
-                        diagnostic_runtime_url
+                        diagnostic_runtime_url,
+                        session_cookie=diagnostic_session_cookie,
                     )
                     baseline_runtime = _runtime_json(
-                        diagnostic_runtime_url, "q008-server-key"
+                        diagnostic_runtime_url,
+                        session_cookie=diagnostic_session_cookie,
                     )
                     if baseline_runtime is None:
                         raise QualificationError(
@@ -3874,6 +3933,7 @@ def run_qualification(
                         wal_diagnostics=(
                             qualification_persist_journal_mode != "candidate"
                         ),
+                        api_token=agent_token,
                     )
                     if (
                         phase_run["completed_count"] != PUBLICATION_PHASE_SAMPLES
@@ -3888,7 +3948,8 @@ def run_qualification(
                             f"failed={phase_run['failed_count']}"
                         )
                     final_runtime = _runtime_json(
-                        diagnostic_runtime_url, "q008-server-key"
+                        diagnostic_runtime_url,
+                        session_cookie=diagnostic_session_cookie,
                     )
                     if final_runtime is None:
                         raise QualificationError(
@@ -4341,6 +4402,7 @@ def run_qualification(
                             benchmark_process,
                             database,
                             diagnostic_runtime_url,
+                            session_cookie=diagnostic_session_cookie,
                             include_peak=True,
                         )
                     )
@@ -4349,6 +4411,7 @@ def run_qualification(
                         benchmark_process,
                         database,
                         diagnostic_runtime_url,
+                        session_cookie=diagnostic_session_cookie,
                         duration=STABILIZATION_SECONDS,
                         include_peak=True,
                     )

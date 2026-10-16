@@ -274,8 +274,10 @@ saturates.
 
 The ordinary-server team baseline is maintained separately from this Pi
 microSD solo envelope; do not use the Pi limits as the team-host sizing source.
-The current M002 result is conditional and contains no server capacity claim;
-see its [closure record](../plans/closure/on-prem-concurrency-performance/002-status.md).
+M002 now has a measured synthetic reference on one durable-NVMe ordinary Linux
+host. Its host-specific observations and limits are in the
+[closure record](../plans/closure/on-prem-concurrency-performance/002-status.md)
+and [deployment guidance](deployment.md#ordinary-server-team-sizing-evidence).
 
 ## Verify from LAN
 

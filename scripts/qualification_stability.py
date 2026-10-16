@@ -368,6 +368,64 @@ def _command(
         }
 
 
+def _set_user_request_budget(
+    binary: Path,
+    config: Path,
+    env: Mapping[str, str],
+    limit: int,
+    timeout: float,
+    username: str = "q009-admin",
+) -> dict[str, Any]:
+    return _command(
+        binary,
+        config,
+        env,
+        (
+            "users",
+            "budget",
+            "set",
+            username,
+            "--window",
+            "day",
+            "--max-requests",
+            str(limit),
+            "--enforcement",
+            "hard",
+            "--actor",
+            "q009-admin",
+        ),
+        timeout,
+    )
+
+
+def _set_global_request_budget(
+    binary: Path,
+    config: Path,
+    env: Mapping[str, str],
+    limit: int,
+    timeout: float,
+) -> dict[str, Any]:
+    return _command(
+        binary,
+        config,
+        env,
+        (
+            "users",
+            "global-budget",
+            "set",
+            "--window",
+            "day",
+            "--max-requests",
+            str(limit),
+            "--enforcement",
+            "hard",
+            "--actor",
+            "q009-admin",
+        ),
+        timeout,
+    )
+
+
 def _wait_ready(process: subprocess.Popen[str], url: str, timeout: float) -> None:
     deadline = time.monotonic() + timeout
     while time.monotonic() < deadline:
@@ -547,6 +605,7 @@ def run_qualification(
     restart_cycles: int = 1,
     timeout: float = DEFAULT_TIMEOUT,
     phases: frozenset[str] | None = None,
+    exercise_revocation_during_restart: bool = False,
 ) -> dict[str, Any]:
     """Execute stability qualification and return a bounded report."""
     _validate_cycles(
@@ -665,12 +724,136 @@ def run_qualification(
                 agent_token = token_match.group(0)
                 commands.append(
                     {
-                        "command": ["users", "bootstrap", "q009-admin"],
+                        "command": ["users", "bootstrap"],
                         "status": "pass",
                         "duration_ms": round((time.monotonic() - started) * 1000),
                         "reason": "synthetic managed principal created",
                     }
                 )
+                policy = _command(
+                    binary,
+                    config,
+                    env,
+                    (
+                        "users",
+                        "policy",
+                        "create",
+                        "q009-disable-policy",
+                        "Q009 Disable Qualification",
+                        "allow",
+                        "--actor",
+                        "q009-admin",
+                    ),
+                    timeout,
+                )
+                commands.append(policy)
+                if policy["status"] != "pass":
+                    raise QualificationError("synthetic disable policy setup failed")
+                member_password = "Q009 synthetic member password 123"
+                try:
+                    member_add = subprocess.run(
+                        [
+                            str(binary),
+                            "--config",
+                            str(config),
+                            "users",
+                            "add",
+                            "q009-disablee",
+                            "--password-stdin",
+                            "--profile-id",
+                            "q009-disable-policy",
+                            "--actor",
+                            "q009-admin",
+                        ],
+                        cwd=ROOT,
+                        env=dict(env),
+                        input=f"{member_password}\n",
+                        capture_output=True,
+                        text=True,
+                        timeout=timeout,
+                        check=False,
+                    )
+                except (OSError, subprocess.TimeoutExpired) as error:
+                    raise QualificationError(
+                        "synthetic disable principal setup failed"
+                    ) from error
+                commands.append(
+                    {
+                        "command": ["users", "add"],
+                        "status": "pass" if member_add.returncode == 0 else "fail",
+                        "returncode": member_add.returncode,
+                        "duration_ms": round((time.monotonic() - started) * 1000),
+                        "reason": "synthetic disable principal setup",
+                    }
+                )
+                if member_add.returncode != 0:
+                    raise QualificationError("synthetic disable principal setup failed")
+                try:
+                    member_token_result = subprocess.run(
+                        [
+                            str(binary),
+                            "--config",
+                            str(config),
+                            "users",
+                            "token",
+                            "q009-disablee",
+                            "--label",
+                            "q009-disable-test",
+                            "--show-secret",
+                        ],
+                        cwd=ROOT,
+                        env=dict(env),
+                        capture_output=True,
+                        text=True,
+                        timeout=timeout,
+                        check=False,
+                    )
+                except (OSError, subprocess.TimeoutExpired) as error:
+                    raise QualificationError(
+                        "synthetic disable credential setup failed"
+                    ) from error
+                member_token_match = (
+                    re.search(r"epk1_[A-Za-z0-9_-]+", member_token_result.stdout)
+                    if member_token_result.returncode == 0
+                    else None
+                )
+                commands.append(
+                    {
+                        "command": ["users", "token"],
+                        "status": "pass" if member_token_match else "fail",
+                        "returncode": member_token_result.returncode,
+                        "duration_ms": round((time.monotonic() - started) * 1000),
+                        "reason": "synthetic disable credential issued",
+                    }
+                )
+                if member_token_match is None:
+                    raise QualificationError(
+                        "synthetic disable credential setup failed"
+                    )
+                disable_token = member_token_match.group(0)
+                for budget_command in (
+                    _set_user_request_budget(binary, config, env, 100, timeout),
+                    _set_user_request_budget(
+                        binary,
+                        config,
+                        env,
+                        100,
+                        timeout,
+                        username="q009-disablee",
+                    ),
+                    _set_global_request_budget(binary, config, env, 100, timeout),
+                ):
+                    commands.append(budget_command)
+                    if budget_command["status"] != "pass":
+                        raise QualificationError(
+                            "synthetic hard request budgets could not be enabled"
+                        )
+                report["workload_policy"] = {
+                    "principal_count": 2,
+                    "budget_mode": "hard user and global request ceilings",
+                    "initial_user_request_limit": 100,
+                    "initial_global_request_limit": 100,
+                }
                 process = _start(binary, config, env)
                 _wait_ready(process, f"http://127.0.0.1:{port}/v1/healthz", timeout)
                 report["environment"] = {
@@ -888,6 +1071,49 @@ def run_qualification(
                                 "http_status": status,
                             }
                         )
+                        budget_cases = (
+                            (
+                                "user_budget",
+                                _set_user_request_budget,
+                            ),
+                            (
+                                "global_budget",
+                                _set_global_request_budget,
+                            ),
+                        )
+                        for denial_kind, set_limit in budget_cases:
+                            configured = set_limit(binary, config, env, 1, timeout)
+                            commands.append(configured)
+                            if configured["status"] != "pass":
+                                raise QualificationError(
+                                    f"{denial_kind} denial fixture setup failed"
+                                )
+                            upstream_before = provider.total()
+                            status, _body, _, _ = _post(
+                                port,
+                                "chat_completions",
+                                "q009-chat",
+                                api_token=agent_token,
+                            )
+                            if status != 429 or provider.total() != upstream_before:
+                                raise QualificationError(
+                                    f"{denial_kind} did not reject before provider: "
+                                    f"HTTP {status}"
+                                )
+                            fault_results.append(
+                                {
+                                    "category": "budget",
+                                    "denial_kind": denial_kind,
+                                    "http_status": status,
+                                    "provider_requests": 0,
+                                }
+                            )
+                            restored = set_limit(binary, config, env, 100, timeout)
+                            commands.append(restored)
+                            if restored["status"] != "pass":
+                                raise QualificationError(
+                                    f"{denial_kind} budget restore failed"
+                                )
                     _wait_converged(database, process, port, samples, timeout)
                     _resource_sample("after-faults", process, database, port, samples)
                     report["phases"].append(
@@ -979,7 +1205,7 @@ def run_qualification(
                                 port,
                                 "chat_completions",
                                 "q009-abrupt",
-                                api_token=agent_token,
+                                api_token=disable_token,
                             )
                         except OSError as error:
                             request_error.append(type(error).__name__)
@@ -996,6 +1222,42 @@ def run_qualification(
                         raise QualificationError(
                             "abrupt-restart fixture did not reach upstream"
                         )
+                    identity_status: int | None = None
+                    if exercise_revocation_during_restart:
+                        disable = _command(
+                            binary,
+                            config,
+                            env,
+                            (
+                                "users",
+                                "disable",
+                                "q009-disablee",
+                                "--actor",
+                                "q009-admin",
+                            ),
+                            timeout,
+                        )
+                        disable["command"] = ["users", "disable"]
+                        commands.append(disable)
+                        if disable["status"] != "pass":
+                            raise QualificationError(
+                                "synthetic user disable failed during load"
+                            )
+                        upstream_before_denied_request = provider.total()
+                        identity_status, _identity_body, _, _ = _post(
+                            port,
+                            "chat_completions",
+                            "q009-chat",
+                            api_token=disable_token,
+                        )
+                        if (
+                            identity_status not in {401, 403}
+                            or provider.total() != upstream_before_denied_request
+                        ):
+                            raise QualificationError(
+                                "disabled principal was not denied before provider "
+                                "dispatch"
+                            )
                     os.killpg(process.pid, signal.SIGKILL)
                     process.wait(timeout=5)
                     process = None
@@ -1016,6 +1278,14 @@ def run_qualification(
                             "pass",
                             cycles=restart_cycles,
                             unknown_inflight_replayed=False,
+                            hard_budgets_active=True,
+                            user_disabled_during_load=(
+                                exercise_revocation_during_restart
+                            ),
+                            credential_revocation_during_load=(
+                                exercise_revocation_during_restart
+                            ),
+                            identity_denial_http_status=identity_status,
                             client_outcome="cancelled-or-closed"
                             if request_error
                             else "closed",
@@ -1095,6 +1365,7 @@ def _parser() -> argparse.ArgumentParser:
     parser.add_argument("--fault-cycles", type=int, default=1)
     parser.add_argument("--reload-cycles", type=int, default=2)
     parser.add_argument("--restart-cycles", type=int, default=1)
+    parser.add_argument("--exercise-revocation-during-restart", action="store_true")
     parser.add_argument(
         "--phase",
         dest="phases",
@@ -1120,6 +1391,7 @@ def main(argv: Sequence[str] | None = None) -> int:
             restart_cycles=args.restart_cycles,
             timeout=args.timeout,
             phases=frozenset(args.phases) if args.phases else None,
+            exercise_revocation_during_restart=args.exercise_revocation_during_restart,
         )
     except (
         OSError,

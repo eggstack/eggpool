@@ -144,12 +144,43 @@ def test_m002_raw_to_summary_requires_three_durable_p99_runs(tmp_path: Path) -> 
                 "schema_version": "runtime-q009.v1",
                 "status": "pass",
                 "candidate": {"sha256": "a" * 64},
-                "phases": [
-                    {"phase": "faults", "status": "pass"},
-                    {"phase": "restart", "status": "pass"},
-                ],
                 "provider": {"request_count": 5},
                 "ownership_convergence": {"pending_requests": 0},
+                "workload_policy": {
+                    "principal_count": 2,
+                    "budget_mode": "hard user and global request ceilings",
+                },
+                "phases": [
+                    {
+                        "phase": "faults",
+                        "status": "pass",
+                        "observations": [
+                            {
+                                "category": "provider",
+                                "expected_upstream_status": 429,
+                                "client_http_status": 429,
+                            },
+                            {
+                                "category": "budget",
+                                "denial_kind": "user_budget",
+                                "http_status": 429,
+                            },
+                            {
+                                "category": "budget",
+                                "denial_kind": "global_budget",
+                                "http_status": 429,
+                            },
+                        ],
+                    },
+                    {
+                        "phase": "restart",
+                        "status": "pass",
+                        "hard_budgets_active": True,
+                        "user_disabled_during_load": True,
+                        "credential_revocation_during_load": True,
+                        "identity_denial_http_status": 401,
+                    },
+                ],
             }
         ),
         encoding="utf-8",
@@ -211,7 +242,10 @@ def test_m002_raw_to_summary_requires_passing_same_candidate_lifecycle(
             {
                 "schema_version": SCHEMA_VERSION,
                 "status": "complete",
-                "candidate": {"sha256": "a" * 64},
+                "candidate": {
+                    "sha256": "a" * 64,
+                    "repository_commit_sha": "c" * 40,
+                },
                 "lifecycle_artifact": "lifecycle.json",
                 "conditions": [
                     {

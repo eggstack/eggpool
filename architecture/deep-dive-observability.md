@@ -24,8 +24,9 @@ The offline M002 host-capacity corpus is owned by
 sanitized host/build identity, storage class, host I/O pressure, response
 percentiles, and durable settlement for synthetic loopback workloads. These
 artifacts are qualification evidence, not runtime telemetry or a production
-capacity promise; the SQLite gate timing diagnostic remains opt-in and is not
-inferred from host I/O counters.
+capacity promise. One opt-in 60-request SQLite publication diagnostic records
+gate wait/hold phases for this target; those samples are supplementary and are
+not implied by, or substituted for, the per-cell host I/O counters.
 
 See [Metrics](deep-dive-metrics.md) for the coalescer contract (including
 the M002 ownership paragraph, which is authoritative) and

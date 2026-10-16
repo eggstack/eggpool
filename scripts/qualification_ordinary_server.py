@@ -201,6 +201,63 @@ def summarize(manifest_path: Path) -> dict[str, Any]:
             observed_phases.add(name)
     if not required_phases <= observed_phases:
         raise ValueError("ordinary-server lifecycle phases are incomplete")
+    phase_by_name: dict[str, dict[str, Any]] = {}
+    for raw_phase in lifecycle_phases:
+        if not isinstance(raw_phase, dict):
+            continue
+        phase = cast("dict[str, Any]", raw_phase)
+        name = phase.get("phase")
+        if isinstance(name, str):
+            phase_by_name[name] = phase
+    restart_phase = phase_by_name.get("restart", {})
+    workload_policy = lifecycle.get("workload_policy")
+    if not isinstance(workload_policy, dict):
+        raise ValueError("ordinary-server lifecycle workload policy is missing")
+    workload_policy = cast("dict[str, Any]", workload_policy)
+    if (
+        workload_policy.get("budget_mode") != "hard user and global request ceilings"
+        or workload_policy.get("principal_count") != 2
+        or restart_phase.get("hard_budgets_active") is not True
+        or restart_phase.get("user_disabled_during_load") is not True
+        or restart_phase.get("credential_revocation_during_load") is not True
+        or restart_phase.get("identity_denial_http_status") not in {401, 403}
+    ):
+        raise ValueError("ordinary-server managed recovery evidence is incomplete")
+    fault_phase = phase_by_name.get("faults", {})
+    raw_observations = fault_phase.get("observations")
+    if not isinstance(raw_observations, list):
+        raise ValueError("ordinary-server fault observations are missing")
+    raw_observations = cast("list[Any]", raw_observations)
+    observations: list[dict[str, Any]] = [
+        cast("dict[str, Any]", observation)
+        for observation in raw_observations
+        if isinstance(observation, dict)
+    ]
+    denial_counts = {
+        "provider_429": sum(
+            observation.get("category") == "provider"
+            and observation.get("expected_upstream_status") == 429
+            and observation.get("client_http_status") == 429
+            for observation in observations
+        ),
+        "user_budget_429": sum(
+            observation.get("category") == "budget"
+            and observation.get("denial_kind") == "user_budget"
+            and observation.get("http_status") == 429
+            for observation in observations
+        ),
+        "global_budget_429": sum(
+            observation.get("category") == "budget"
+            and observation.get("denial_kind") == "global_budget"
+            and observation.get("http_status") == 429
+            for observation in observations
+        ),
+        "identity_denial": 1,
+    }
+    if any(
+        denial_counts[name] != 1 for name in denial_counts if name != "identity_denial"
+    ):
+        raise ValueError("ordinary-server provider/budget denial counts are incomplete")
     output_dir = manifest_path.parent
     conditions = manifest.get("conditions")
     if not isinstance(conditions, list):
@@ -424,6 +481,11 @@ def summarize(manifest_path: Path) -> dict[str, Any]:
             "phases": sorted(required_phases),
             "provider": lifecycle.get("provider"),
             "ownership_convergence": lifecycle.get("ownership_convergence"),
+            "workload_policy": workload_policy,
+            "denial_counts": denial_counts,
+            "identity_denial_http_status": restart_phase.get(
+                "identity_denial_http_status"
+            ),
         },
         "interpretation": (
             "Descriptive loopback capacity characterization for this host and "
@@ -541,6 +603,7 @@ def run(binary: Path, output_dir: Path) -> int:
         "faults",
         "--phase",
         "restart",
+        "--exercise-revocation-during-restart",
         "--output",
         str(lifecycle_path),
     ]

@@ -494,23 +494,31 @@ connect, header, TTFT, and total response latency.
 
 ### Ordinary-server team sizing evidence
 
-The M002 synthetic reference uses an ordinary Linux host with durable
-SSD/NVMe storage, WAL/NORMAL, and one database worker. It records CPU, RAM,
-filesystem, device class/model, virtualization/container status, process RSS,
-request throughput and percentiles, I/O pressure, and durable reservation
+The M002 synthetic reference was measured on one ordinary Linux host with
+durable SSD/NVMe storage, WAL/NORMAL, and one database worker. It records CPU,
+RAM, filesystem, device class/model, virtualization/container status, process
+RSS, request throughput and percentiles, I/O pressure, and durable reservation
 settlement. Named account rows (1/5/10/25/49) are measured separately from
 simultaneous inference requests (1/2/4/8/16); neither count is a service
 guarantee. The synthetic upstream cycles a fixed 0/10/50 ms service-time
 distribution to show how provider latency affects observed response time.
 
+On the measured Intel i9-9900K host (16 logical CPUs, 15.5 GiB RAM, Samsung
+980 NVMe), the median of three 1,000-request runs ranged from 36 to 43
+requests/s at concurrency 1, about 194 requests/s at concurrency 4, and
+335–341 requests/s at concurrency 8–16. At concurrency 16, median p95/p99
+were 88/106 ms; maximum observed latency across the three runs was 1.119 s.
+Peak process RSS across cells was 25–46 MiB. These values describe this
+loopback synthetic workload; upstream latency, request shape, system load,
+provider limits, and team policy change the result. No universal throughput,
+concurrency, or latency SLA follows from one host and synthetic workload.
+
 The driver writes the manifest, raw runs, and generated summary under
 `artifacts/qualification/on-prem-concurrency-performance/ordinary-server/`.
-Until a complete run is recorded, there is no M002 capacity result. Once
-available, use it only for relative sizing; qualify the actual provider mix,
-model payloads, login rate, and policy/budget profile before deployment. No
-universal throughput, concurrency, or latency SLA follows from one host and
-synthetic workload. The Pi microSD envelope remains a separate solo-device
-reference in [`raspberry-pi.md`](raspberry-pi.md). See the
+Use the result only for relative sizing; qualify the actual provider mix,
+model payloads, login rate, and policy/budget profile before deployment. The
+Pi microSD envelope remains a separate solo-device reference in
+[`raspberry-pi.md`](raspberry-pi.md). See the
 [M002 closure record](../plans/closure/on-prem-concurrency-performance/002-status.md)
 for its measured/unmeasured status and required follow-up evidence.
 
@@ -519,9 +527,9 @@ To repeat the frozen corpus from a release binary, run
 The driver writes its manifest before collection, creates a fresh qualification
 root for each run, requires three repetitions per condition, validates p99
 sample counts and settlement, derives `summary.json` from the raw Q008
-reports, and runs deterministic Q009 provider-fault and abrupt-restart phases
-against the same binary. The summary requires the matching `lifecycle.json`
-artifact. It refuses non-Linux hosts and non-durable or rotational qualification
+reports, and runs deterministic Q009 provider-fault, hard-budget, user-disable,
+and abrupt-restart phases against the same binary. The summary requires the
+matching `lifecycle.json` artifact. It refuses non-Linux hosts and non-durable or rotational qualification
 storage, and stops before load when initial full I/O pressure exceeds 25% over
 the 10-second window. Qualification does not send requests to a real provider
 or charge a provider account.
