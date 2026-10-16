@@ -29,6 +29,7 @@ DEFAULT_OUTPUT = (
 )
 SCHEMA_VERSION = "on-prem-ordinary-server-matrix.v1"
 SUMMARY_VERSION = "on-prem-ordinary-server-summary.v1"
+LIFECYCLE_ARTIFACT = "lifecycle.json"
 REPETITIONS = 3
 REQUESTS_PER_CELL = 1000
 SEQUENTIAL_SAMPLES = 30
@@ -165,6 +166,32 @@ def summarize(manifest_path: Path) -> dict[str, Any]:
     if not isinstance(candidate, dict):
         raise ValueError("candidate identity is missing")
     candidate = cast("dict[str, Any]", candidate)
+    lifecycle_name = manifest.get("lifecycle_artifact")
+    if lifecycle_name != LIFECYCLE_ARTIFACT:
+        raise ValueError("ordinary-server lifecycle artifact is missing")
+    lifecycle = _load(manifest_path.parent / LIFECYCLE_ARTIFACT)
+    if (
+        lifecycle.get("status") != "pass"
+        or lifecycle.get("schema_version") != "runtime-q009.v1"
+        or not isinstance(lifecycle.get("candidate"), dict)
+        or lifecycle["candidate"].get("sha256") != candidate.get("sha256")
+    ):
+        raise ValueError("ordinary-server lifecycle qualification did not pass")
+    lifecycle_phases = lifecycle.get("phases")
+    if not isinstance(lifecycle_phases, list):
+        raise ValueError("ordinary-server lifecycle phases are missing")
+    lifecycle_phases = cast("list[Any]", lifecycle_phases)
+    required_phases = {"faults", "restart"}
+    observed_phases: set[str] = set()
+    for raw_phase in lifecycle_phases:
+        if not isinstance(raw_phase, dict):
+            continue
+        phase = cast("dict[str, Any]", raw_phase)
+        name = phase.get("phase")
+        if isinstance(name, str) and phase.get("status") == "pass":
+            observed_phases.add(name)
+    if not required_phases <= observed_phases:
+        raise ValueError("ordinary-server lifecycle phases are incomplete")
     output_dir = manifest_path.parent
     conditions = manifest.get("conditions")
     if not isinstance(conditions, list):
@@ -293,6 +320,13 @@ def summarize(manifest_path: Path) -> dict[str, Any]:
         "candidate": candidate,
         "target": manifest.get("target"),
         "workload": manifest.get("workload"),
+        "lifecycle": {
+            "artifact": LIFECYCLE_ARTIFACT,
+            "status": "pass",
+            "phases": sorted(required_phases),
+            "provider": lifecycle.get("provider"),
+            "ownership_convergence": lifecycle.get("ownership_convergence"),
+        },
         "interpretation": (
             "Descriptive loopback capacity characterization for this host and "
             "synthetic workload; not an SLA or provider-throughput promise."
@@ -350,6 +384,31 @@ def run(binary: Path, output_dir: Path) -> int:
                     json.dumps(manifest, indent=2) + "\n", encoding="utf-8"
                 )
                 return result.returncode
+    lifecycle_path = output_dir / LIFECYCLE_ARTIFACT
+    lifecycle_command = [
+        sys.executable,
+        str(ROOT / "scripts/qualification_stability.py"),
+        "--binary",
+        str(binary),
+        "--phase",
+        "faults",
+        "--phase",
+        "restart",
+        "--output",
+        str(lifecycle_path),
+    ]
+    lifecycle_result = subprocess.run(lifecycle_command, cwd=ROOT, check=False)
+    if lifecycle_result.returncode != 0:
+        manifest["status"] = "incomplete"
+        manifest["stopped_at"] = {
+            "artifact": LIFECYCLE_ARTIFACT,
+            "returncode": lifecycle_result.returncode,
+        }
+        manifest_path.write_text(
+            json.dumps(manifest, indent=2) + "\n", encoding="utf-8"
+        )
+        return lifecycle_result.returncode
+    manifest["lifecycle_artifact"] = LIFECYCLE_ARTIFACT
     manifest["status"] = "complete"
     manifest_path.write_text(json.dumps(manifest, indent=2) + "\n", encoding="utf-8")
     summary = summarize(manifest_path)

@@ -518,8 +518,10 @@ To repeat the frozen corpus from a release binary, run
 `uv run python scripts/qualification_ordinary_server.py --binary <release-binary>`.
 The driver writes its manifest before collection, creates a fresh qualification
 root for each run, requires three repetitions per condition, validates p99
-sample counts and settlement, and derives `summary.json` from the raw Q008
-reports. It refuses non-Linux hosts and non-durable or rotational qualification
+sample counts and settlement, derives `summary.json` from the raw Q008
+reports, and runs deterministic Q009 provider-fault and abrupt-restart phases
+against the same binary. The summary requires the matching `lifecycle.json`
+artifact. It refuses non-Linux hosts and non-durable or rotational qualification
 storage, and stops before load when initial full I/O pressure exceeds 25% over
 the 10-second window. Qualification does not send requests to a real provider
 or charge a provider account.

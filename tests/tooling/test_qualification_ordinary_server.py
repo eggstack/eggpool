@@ -97,10 +97,27 @@ def test_m002_raw_to_summary_requires_three_durable_p99_runs(tmp_path: Path) -> 
         "status": "complete",
         "plan": "on-prem-concurrency-performance M002",
         "candidate": {"sha256": "a" * 64},
+        "lifecycle_artifact": "lifecycle.json",
         "target": {"architecture": "x86_64"},
         "workload": {"requests_per_condition": REQUESTS_PER_CELL},
         "conditions": [{"principals": 5, "concurrency": 4, "run_artifacts": names}],
     }
+    (tmp_path / "lifecycle.json").write_text(
+        json.dumps(
+            {
+                "schema_version": "runtime-q009.v1",
+                "status": "pass",
+                "candidate": {"sha256": "a" * 64},
+                "phases": [
+                    {"phase": "faults", "status": "pass"},
+                    {"phase": "restart", "status": "pass"},
+                ],
+                "provider": {"request_count": 5},
+                "ownership_convergence": {"pending_requests": 0},
+            }
+        ),
+        encoding="utf-8",
+    )
     manifest_path = tmp_path / "matrix.json"
     manifest_path.write_text(json.dumps(manifest), encoding="utf-8")
 
@@ -112,6 +129,7 @@ def test_m002_raw_to_summary_requires_three_durable_p99_runs(tmp_path: Path) -> 
     assert cell["median_p95_ms"] == 22
     assert cell["median_p99_ms"] == 23
     assert cell["settlement"].startswith("zero pending")
+    assert summary["lifecycle"]["phases"] == ["faults", "restart"]
 
 
 def test_m002_raw_to_summary_rejects_incomplete_matrix(tmp_path: Path) -> None:
@@ -122,3 +140,47 @@ def test_m002_raw_to_summary_rejects_incomplete_matrix(tmp_path: Path) -> None:
     )
     with pytest.raises(ValueError, match="incomplete"):
         summarize(path)
+
+
+def test_m002_raw_to_summary_requires_passing_same_candidate_lifecycle(
+    tmp_path: Path,
+) -> None:
+    names = [f"run-{index}.json" for index in range(1, REPETITIONS + 1)]
+    for name in names:
+        (tmp_path / name).write_text(json.dumps(_run(5, 4, 20)), encoding="utf-8")
+    (tmp_path / "lifecycle.json").write_text(
+        json.dumps(
+            {
+                "schema_version": "runtime-q009.v1",
+                "status": "pass",
+                "candidate": {"sha256": "b" * 64},
+                "phases": [
+                    {"phase": "faults", "status": "pass"},
+                    {"phase": "restart", "status": "pass"},
+                ],
+            }
+        ),
+        encoding="utf-8",
+    )
+    manifest_path = tmp_path / "matrix.json"
+    manifest_path.write_text(
+        json.dumps(
+            {
+                "schema_version": SCHEMA_VERSION,
+                "status": "complete",
+                "candidate": {"sha256": "a" * 64},
+                "lifecycle_artifact": "lifecycle.json",
+                "conditions": [
+                    {
+                        "principals": 5,
+                        "concurrency": 4,
+                        "run_artifacts": names,
+                    }
+                ],
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    with pytest.raises(ValueError, match="lifecycle qualification did not pass"):
+        summarize(manifest_path)
