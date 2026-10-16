@@ -112,6 +112,7 @@ def _manifest(binary: Path, output_dir: Path) -> dict[str, Any]:
             "build_profile": "release",
             "build_mode": "locked release candidate",
         },
+        "qualification_tooling_commit_sha": _commit(),
         "target": target,
         "workload": {
             "fresh_root_per_run": True,
@@ -351,7 +352,32 @@ def run(binary: Path, output_dir: Path) -> int:
     output_dir.mkdir(parents=True, exist_ok=True)
     manifest_path = output_dir / "matrix.json"
     summary_path = output_dir / "summary.json"
-    manifest = _manifest(binary, output_dir)
+    fresh_manifest = _manifest(binary, output_dir)
+    manifest = fresh_manifest
+    if manifest_path.is_file():
+        try:
+            previous = _load(manifest_path)
+            resumable = (
+                previous.get("schema_version") == SCHEMA_VERSION
+                and previous.get("status") == "incomplete"
+                and previous.get("candidate", {}).get("sha256")
+                == fresh_manifest["candidate"]["sha256"]
+                and previous.get("target") == fresh_manifest["target"]
+                and previous.get("workload") == fresh_manifest["workload"]
+                and previous.get("conditions") == fresh_manifest["conditions"]
+                and isinstance(
+                    previous.get("candidate", {}).get("repository_commit_sha"), str
+                )
+            )
+            if resumable:
+                manifest = previous
+                manifest["qualification_tooling_commit_sha"] = _commit()
+                manifest["preflight_io"] = fresh_manifest["preflight_io"]
+                manifest["status"] = fresh_manifest["status"]
+                manifest["stop_reason"] = fresh_manifest["stop_reason"]
+                manifest.pop("stopped_at", None)
+        except (OSError, ValueError, AttributeError):
+            manifest = fresh_manifest
     manifest_path.write_text(json.dumps(manifest, indent=2) + "\n", encoding="utf-8")
     if manifest["status"] == "blocked":
         return 77
