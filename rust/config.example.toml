@@ -267,6 +267,13 @@ five_hour_microdollars = 12000000
 weekly_microdollars = 30000000
 monthly_microdollars = 60000000
 
+# Optional process-local short-window admission controls. Omitted rates leave
+# that rule disabled. Each configured rate is a 60-second token-bucket capacity.
+[admission_fairness]
+# requests_per_minute_per_principal = 120
+# global_requests_per_minute = 1200
+# max_tracked_principals = 4096
+
 # --- Pricing resolution ----------------------------------------------
 # External pricing catalogs supplement upstream model metadata when
 # providers do not include pricing in /v1/models responses. The per-catalog

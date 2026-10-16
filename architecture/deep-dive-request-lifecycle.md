@@ -22,6 +22,16 @@ adapts the response, and converges durable state.
   extractor: it acquires a `GenerationLease`, reads the live
   `server.max_request_body_bytes`, and enforces it while the body streams.
   `is_inference_path()` covers exactly the four public inference routes.
+- The same middleware consults the process-local short-window fairness
+  limiter after authentication and generation acquisition but before reading
+  the body or reserving durable user/global budget. It keys buckets by
+  authenticated user ID, shares allowance across that user's credentials,
+  applies optional per-principal/global 60-second token buckets, and bounds
+  retained principal state. It never queues, writes SQLite, or changes
+  provider routing. State resets on restart; absent rules allocate no bucket.
+  Throttles are 429 with `Retry-After` and
+  `short_window_rate_limited`; successful admissions expose bounded remaining
+  allowance headers.
 - Declared `Content-Length` above the live limit is rejected before polling
   (413); malformed `Content-Length` is 400. A 32 KiB initial
   `RawBodyReservation` is taken against `effective_ceiling()` =

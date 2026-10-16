@@ -138,6 +138,13 @@ intersected with every per-user rule. Members never receive instance fields,
 so one member cannot observe the shared ceiling or infer other users'
 consumption from it.
 
+An optional `[admission_fairness]` policy can add process-local short-window
+request throttles before request-body collection. A throttle returns HTTP 429
+with `Retry-After`, code `short_window_rate_limited`, and
+`X-EggPool-Admission-Scope`; accepted responses expose the remaining allowance
+in `X-EggPool-Admission-Remaining`. These short-window counters reset on
+restart and do not replace durable daily/monthly user or instance budgets.
+
 With `[dashboard].enabled = true`, the dashboard also serves browser-session
 pages for `/users`, `/profiles`, `/usage`, `/admin/audit`, `/my-account`, and
 `/my-account/models`. Mutations use same-origin, CSRF-protected form posts

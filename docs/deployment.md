@@ -334,6 +334,13 @@ use `eggpool restart` for those. A mixed live + restart-required
 change is rejected entirely (exit code `2`); no partial application.
 The CLI is fail-closed and never implicitly restarts the service.
 
+The optional `[admission_fairness]` short-window rates and principal-state
+bound are live-reloadable. They take effect for requests using the newly
+published generation; in-memory buckets are shared across generations and
+clamped to the active policy. Restart clears the ephemeral limiter state.
+See [model limits](model-limits.md#short-window-admission-fairness) for the
+rate bounds and client response contract.
+
 Sticky model-router affinity remains process-local across these live swaps only
 when the router's semantic fingerprint is unchanged. Policy edits naturally
 make prior decisions unreachable; no persisted cache state or restart step is

@@ -96,6 +96,12 @@ Failed personal-token lookups use a 256-entry, one-second negative cache keyed
 by token digest. Successful token lookups are not cached, so revocation takes
 effect on the next request.
 
+Optional short-window fairness uses only the authenticated principal's
+database-owned user ID; credentials and request headers cannot choose a bucket.
+The process-local table is capacity-bounded, stale entries are reclaimed only
+after the full refill window, and a full table fails closed for new principals.
+No token, prompt, body, IP, or provider outcome is retained in limiter state.
+
 ## Headers, bodies, and redaction
 
 Provider credentials are added only at dispatch-header construction. Incoming

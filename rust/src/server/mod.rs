@@ -407,6 +407,7 @@ impl ServerRuntime {
             runtime: Arc::clone(&self.inner.manager),
             process: Some(self.inner.process.clone()),
             body_tasks: self.inner.body_tasks.clone(),
+            admission_fairness: crate::request::AdmissionFairnessLimiter::default(),
         });
         let runtime_config =
             eggserve_runtime_config().map_err(|error| ServerError::EggServe(Box::new(error)))?;
@@ -704,6 +705,7 @@ pub struct AppState {
     pub runtime: Arc<RuntimeManager>,
     process: Option<ProcessRuntime>,
     body_tasks: BodyTaskTracker,
+    admission_fairness: crate::request::AdmissionFairnessLimiter,
 }
 
 impl AppState {
@@ -721,6 +723,7 @@ impl AppState {
             runtime,
             process: None,
             body_tasks: BodyTaskTracker::new(),
+            admission_fairness: crate::request::AdmissionFairnessLimiter::default(),
         }
     }
 
@@ -746,6 +749,7 @@ impl AppState {
             runtime: Arc::new(RuntimeManager::new(generation)),
             process: None,
             body_tasks: BodyTaskTracker::new(),
+            admission_fairness: crate::request::AdmissionFairnessLimiter::default(),
         }
     }
 }
@@ -903,6 +907,7 @@ pub async fn run_with_digest(
         runtime: Arc::clone(&manager),
         process: Some(process.clone()),
         body_tasks: BodyTaskTracker::new(),
+        admission_fairness: crate::request::AdmissionFairnessLimiter::default(),
     };
     let control_server = match crate::operations::control::start(control_path, move |request| {
         let reload_service = reload_service.clone();

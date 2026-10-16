@@ -351,6 +351,32 @@ pub(super) async fn admit_inference_body(
             endpoint_error_body(surface, "Invalid body limit"),
         );
     };
+    let active_fairness = &lease.generation().config().admission_fairness;
+    let fairness_policy = crate::request::AdmissionFairnessPolicy {
+        requests_per_minute_per_principal: active_fairness.requests_per_minute_per_principal,
+        global_requests_per_minute: active_fairness.global_requests_per_minute,
+        max_tracked_principals: active_fairness.max_tracked_principals,
+    };
+    let principal_id = request
+        .extensions()
+        .get::<crate::identity::AuthenticatedPrincipal>()
+        .and_then(|principal| principal.user_id.as_deref());
+    let fairness_headers =
+        match state
+            .admission_fairness
+            .admit_at(fairness_policy, principal_id, Instant::now())
+        {
+            crate::request::AdmissionFairnessDecision::Disabled => None,
+            crate::request::AdmissionFairnessDecision::Allowed { remaining, scope } => {
+                Some((remaining, scope))
+            }
+            crate::request::AdmissionFairnessDecision::Limited {
+                retry_after_seconds,
+                scope,
+            } => {
+                return fairness_limited_response(surface, retry_after_seconds, scope);
+            }
+        };
     let ceiling = crate::request::resource_budget::effective_ceiling(limit);
     // Malformed Content-Length is a client error, not an absent value: fail
     // closed with 400 instead of granting the cheap 32 KiB reservation path.
@@ -437,7 +463,21 @@ pub(super) async fn admit_inference_body(
     request.extensions_mut().insert(Arc::new(lease));
     request.extensions_mut().insert(Arc::new(reservation));
     *request.body_mut() = Body::from(collected);
-    next.run(request).await
+    let mut response = next.run(request).await;
+    if let Some((remaining, scope)) = fairness_headers {
+        let headers = response.headers_mut();
+        headers.insert(
+            "x-eggpool-admission-remaining",
+            HeaderValue::from_str(&remaining.to_string())
+                .unwrap_or_else(|_| HeaderValue::from_static("0")),
+        );
+        headers.insert("x-eggpool-admission-scope", HeaderValue::from_static(scope));
+        headers.insert(
+            "x-eggpool-admission-window-seconds",
+            HeaderValue::from_static("60"),
+        );
+    }
+    response
 }
 
 pub(super) fn is_inference_path(path: &str) -> bool {
@@ -456,6 +496,46 @@ fn backpressure_response(surface: crate::wire::ir::ClientSurface, detail: Vec<u8
         .headers_mut()
         .insert(header::RETRY_AFTER, HeaderValue::from_static("1"));
     response
+}
+
+fn fairness_limited_response(
+    surface: crate::wire::ir::ClientSurface,
+    retry_after_seconds: u64,
+    scope: &'static str,
+) -> Response {
+    let message = "Short-window inference admission limit reached";
+    let body = if surface == crate::wire::ir::ClientSurface::Messages {
+        serde_json::json!({
+            "type": "error",
+            "error": {
+                "type": "api_error",
+                "message": message,
+                "code": "short_window_rate_limited"
+            }
+        })
+    } else {
+        serde_json::json!({
+            "error": {
+                "type": "rate_limit_error",
+                "message": message,
+                "code": "short_window_rate_limited"
+            }
+        })
+    };
+    let bytes = serde_json::to_vec(&body)
+        .unwrap_or_else(|_| br#"{"error":{"code":"short_window_rate_limited"}}"#.to_vec());
+    let mut headers = HeaderMap::new();
+    headers.insert(
+        header::CONTENT_TYPE,
+        HeaderValue::from_static("application/json"),
+    );
+    headers.insert(
+        header::RETRY_AFTER,
+        HeaderValue::from_str(&retry_after_seconds.to_string())
+            .unwrap_or_else(|_| HeaderValue::from_static("1")),
+    );
+    headers.insert("x-eggpool-admission-scope", HeaderValue::from_static(scope));
+    (StatusCode::TOO_MANY_REQUESTS, headers, Bytes::from(bytes)).into_response()
 }
 
 pub(super) fn validate_server_key(config: &Config) -> Result<(), ServerError> {

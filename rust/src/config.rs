@@ -367,6 +367,26 @@ impl Default for LimitsConfig {
         }
     }
 }
+
+/// Optional process-local fairness controls for authenticated inference.
+/// Both rates use a 60-second token bucket; `None` keeps that rule disabled.
+#[derive(Debug, Clone, Deserialize, Serialize)]
+#[serde(deny_unknown_fields, default)]
+pub struct AdmissionFairnessConfig {
+    pub requests_per_minute_per_principal: Option<u32>,
+    pub global_requests_per_minute: Option<u32>,
+    pub max_tracked_principals: usize,
+}
+
+impl Default for AdmissionFairnessConfig {
+    fn default() -> Self {
+        Self {
+            requests_per_minute_per_principal: None,
+            global_requests_per_minute: None,
+            max_tracked_principals: 4096,
+        }
+    }
+}
 #[derive(Debug, Clone, Deserialize, Serialize)]
 #[serde(deny_unknown_fields, default)]
 pub struct DispatchSpansConfig {
@@ -1430,6 +1450,7 @@ pub struct Config {
     pub model_routers: BTreeMap<String, ModelRouterConfig>,
     pub routing: RoutingConfig,
     pub limits: LimitsConfig,
+    pub admission_fairness: AdmissionFairnessConfig,
     pub pricing: PricingConfig,
     pub dashboard: DashboardConfig,
     pub security: SecurityConfig,
@@ -1571,6 +1592,27 @@ impl Config {
     }
 
     pub fn validate(&mut self) -> Result<(), ConfigError> {
+        for (name, rate) in [
+            (
+                "admission_fairness.requests_per_minute_per_principal",
+                self.admission_fairness.requests_per_minute_per_principal,
+            ),
+            (
+                "admission_fairness.global_requests_per_minute",
+                self.admission_fairness.global_requests_per_minute,
+            ),
+        ] {
+            if rate.is_some_and(|rate| rate == 0 || rate > 60_000) {
+                return Err(ConfigError::validation(format!(
+                    "{name} must be between 1 and 60000 when set"
+                )));
+            }
+        }
+        if !(1..=65_536).contains(&self.admission_fairness.max_tracked_principals) {
+            return Err(ConfigError::validation(
+                "admission_fairness.max_tracked_principals must be between 1 and 65536",
+            ));
+        }
         for proxy in &self.security.trusted_proxies {
             if proxy.parse::<std::net::IpAddr>().is_err() {
                 return Err(ConfigError::validation(
@@ -2450,6 +2492,11 @@ mod tests {
         assert!(config.transcoder.enabled);
         assert!(config.model_info.enabled);
         assert_eq!(config.server.max_request_body_bytes, 10 * 1024 * 1024);
+        assert_eq!(config.admission_fairness.max_tracked_principals, 4096);
+        assert_eq!(
+            config.admission_fairness.requests_per_minute_per_principal,
+            None
+        );
     }
 
     #[test]
@@ -2459,6 +2506,32 @@ mod tests {
         assert!(config.validate().is_ok());
         config.server.max_request_body_bytes += 1;
         assert!(config.validate().is_err());
+    }
+
+    #[test]
+    fn short_window_fairness_values_are_bounded_and_optional() {
+        let mut config = Config::default();
+        assert!(config.validate().is_ok());
+
+        config.admission_fairness.requests_per_minute_per_principal = Some(1);
+        config.admission_fairness.global_requests_per_minute = Some(60_000);
+        config.admission_fairness.max_tracked_principals = 65_536;
+        assert!(config.validate().is_ok());
+
+        for rate in [Some(0), Some(60_001)] {
+            let mut invalid = Config::default();
+            invalid.admission_fairness.requests_per_minute_per_principal = rate;
+            assert!(invalid.validate().is_err());
+            let mut invalid = Config::default();
+            invalid.admission_fairness.global_requests_per_minute = rate;
+            assert!(invalid.validate().is_err());
+        }
+
+        for limit in [0, 65_537] {
+            let mut invalid = Config::default();
+            invalid.admission_fairness.max_tracked_principals = limit;
+            assert!(invalid.validate().is_err());
+        }
     }
 
     #[test]
