@@ -1,0 +1,522 @@
+{
+  "schema_version": "on-prem-ordinary-server-summary.v1",
+  "plan": "on-prem-concurrency-performance M002",
+  "candidate": {
+    "sha256": "d7bec9bf508e9b9ccfd1c9ac53ae25b1ef37a5af266f2d4b0cf048c2816f7b73",
+    "repository_commit_sha": "f08a760e2cd995ac9b3416b571d092e3315b6524",
+    "build_profile": "release",
+    "build_mode": "locked release candidate"
+  },
+  "target": {
+    "target_class": "ordinary-server",
+    "architecture": "x86_64",
+    "kernel": "6.8.0-147-generic",
+    "os": "Ubuntu 24.04.5 LTS",
+    "os_version_id": "24.04",
+    "cpu_model": "Intel(R) Core(TM) i9-9900K CPU @ 3.60GHz",
+    "logical_cpu_count": 16,
+    "ram_bytes": 16622407680,
+    "system_vendor": "Gigabyte Technology Co., Ltd.",
+    "product_name": "Z390 AORUS MASTER",
+    "board_name": "Z390 AORUS MASTER-CF",
+    "root_filesystem": "ext4",
+    "root_storage_medium_class": "non-rotational",
+    "root_storage_device_class": "nvme",
+    "root_storage_device_model": "Samsung SSD 980 1TB",
+    "root_mount_options": "rw,relatime,stripe=32",
+    "virtualization_type": "none",
+    "container_type": "none",
+    "attestation": "Linux host metadata from procfs, sysfs, DMI and systemd-detect-virt"
+  },
+  "workload": {
+    "fresh_root_per_run": true,
+    "named_principal_counts": [
+      1,
+      5,
+      10,
+      25,
+      49
+    ],
+    "principal_separation_condition": "concurrency=1",
+    "concurrent_request_counts": [
+      1,
+      2,
+      4,
+      8,
+      16
+    ],
+    "concurrency_separation_condition": "principals=5",
+    "requests_per_condition": 1000,
+    "repetitions_per_condition": 3,
+    "sequential_wire_samples_per_surface": 30,
+    "provider_latency_profile": "mixed-0-10-50ms",
+    "budget_mode": "user-global hard request limits",
+    "surfaces": [
+      "native Responses finite",
+      "native Responses streaming",
+      "translated Responses-to-Messages streaming"
+    ]
+  },
+  "lifecycle": {
+    "artifact": "lifecycle.json",
+    "status": "pass",
+    "phases": [
+      "faults",
+      "restart"
+    ],
+    "provider": {
+      "request_count": 13,
+      "requests_by_model": {
+        "q009-abrupt": 1,
+        "q009-absent": 1,
+        "q009-disconnect": 1,
+        "q009-fault-408": 2,
+        "q009-fault-429": 1,
+        "q009-fault-5xx": 2,
+        "q009-malformed": 1,
+        "q009-partial": 1,
+        "q009-timeout": 1,
+        "q009-wire": 2
+      }
+    },
+    "ownership_convergence": {
+      "active_leases": null,
+      "active_reservations": 0,
+      "finalization_jobs": null,
+      "logical_leaks": false,
+      "pending_requests": 0,
+      "retiring_generations": null,
+      "terminal_references": 0
+    },
+    "workload_policy": {
+      "budget_mode": "hard user and global request ceilings",
+      "initial_global_request_limit": 100,
+      "initial_user_request_limit": 100,
+      "principal_count": 2
+    },
+    "denial_counts": {
+      "provider_429": 1,
+      "user_budget_429": 1,
+      "global_budget_429": 1,
+      "identity_denial": 1
+    },
+    "identity_denial_http_status": 401
+  },
+  "interpretation": "Descriptive loopback capacity characterization for this host and synthetic workload; not an SLA or provider-throughput promise.",
+  "conditions": [
+    {
+      "principals": 1,
+      "concurrency": 1,
+      "repetitions": 3,
+      "requests_per_run": 1000,
+      "median_requests_per_second": 32.164,
+      "median_cpu_percent": 26.33,
+      "median_p50_ms": 15,
+      "median_p95_ms": 120,
+      "median_p99_ms": 180,
+      "maximum_ms": 628,
+      "maximum_peak_rss_bytes": 26112000,
+      "sequential_surfaces": {
+        "native_responses_finite": {
+          "sample_count": 30,
+          "p50_elapsed_ms": 13,
+          "p95_elapsed_ms": 94,
+          "p50_ttft_ms": 13,
+          "p95_ttft_ms": 93
+        },
+        "native_responses_streaming": {
+          "sample_count": 30,
+          "p50_elapsed_ms": 12,
+          "p95_elapsed_ms": 127,
+          "p50_ttft_ms": 11,
+          "p95_ttft_ms": 57
+        },
+        "translated_responses_to_messages_streaming": {
+          "sample_count": 30,
+          "p50_elapsed_ms": 13,
+          "p95_elapsed_ms": 93,
+          "p50_ttft_ms": 11,
+          "p95_ttft_ms": 57
+        }
+      },
+      "median_io_pressure_full_avg10_after_percent": 5.48,
+      "median_root_device_write_delta_bytes": 389615616,
+      "maximum_observed_wal_bytes": 4408432,
+      "median_durable_attempts": 1113,
+      "settlement": "zero pending requests and active reservations in every run",
+      "raw_runs": [
+        "u1-c1-run-1.json",
+        "u1-c1-run-2.json",
+        "u1-c1-run-3.json"
+      ]
+    },
+    {
+      "principals": 5,
+      "concurrency": 1,
+      "repetitions": 3,
+      "requests_per_run": 1000,
+      "median_requests_per_second": 36.941,
+      "median_cpu_percent": 30.73,
+      "median_p50_ms": 15,
+      "median_p95_ms": 62,
+      "median_p99_ms": 151,
+      "maximum_ms": 254,
+      "maximum_peak_rss_bytes": 46530560,
+      "sequential_surfaces": {
+        "native_responses_finite": {
+          "sample_count": 30,
+          "p50_elapsed_ms": 12,
+          "p95_elapsed_ms": 94,
+          "p50_ttft_ms": 12,
+          "p95_ttft_ms": 94
+        },
+        "native_responses_streaming": {
+          "sample_count": 30,
+          "p50_elapsed_ms": 12,
+          "p95_elapsed_ms": 120,
+          "p50_ttft_ms": 12,
+          "p95_ttft_ms": 57
+        },
+        "translated_responses_to_messages_streaming": {
+          "sample_count": 30,
+          "p50_elapsed_ms": 12,
+          "p95_elapsed_ms": 122,
+          "p50_ttft_ms": 8,
+          "p95_ttft_ms": 57
+        }
+      },
+      "median_io_pressure_full_avg10_after_percent": 2.94,
+      "median_root_device_write_delta_bytes": 394305536,
+      "maximum_observed_wal_bytes": 4367232,
+      "median_durable_attempts": 1113,
+      "settlement": "zero pending requests and active reservations in every run",
+      "raw_runs": [
+        "u5-c1-run-1.json",
+        "u5-c1-run-2.json",
+        "u5-c1-run-3.json"
+      ]
+    },
+    {
+      "principals": 5,
+      "concurrency": 2,
+      "repetitions": 3,
+      "requests_per_run": 1000,
+      "median_requests_per_second": 92.816,
+      "median_cpu_percent": 54.3,
+      "median_p50_ms": 15,
+      "median_p95_ms": 62,
+      "median_p99_ms": 82,
+      "maximum_ms": 285,
+      "maximum_peak_rss_bytes": 46489600,
+      "sequential_surfaces": {
+        "native_responses_finite": {
+          "sample_count": 30,
+          "p50_elapsed_ms": 13,
+          "p95_elapsed_ms": 60,
+          "p50_ttft_ms": 12,
+          "p95_ttft_ms": 59
+        },
+        "native_responses_streaming": {
+          "sample_count": 30,
+          "p50_elapsed_ms": 13,
+          "p95_elapsed_ms": 60,
+          "p50_ttft_ms": 11,
+          "p95_ttft_ms": 57
+        },
+        "translated_responses_to_messages_streaming": {
+          "sample_count": 30,
+          "p50_elapsed_ms": 14,
+          "p95_elapsed_ms": 60,
+          "p50_ttft_ms": 8,
+          "p95_ttft_ms": 57
+        }
+      },
+      "median_io_pressure_full_avg10_after_percent": 1.9,
+      "median_root_device_write_delta_bytes": 390238208,
+      "maximum_observed_wal_bytes": 4375472,
+      "median_durable_attempts": 1113,
+      "settlement": "zero pending requests and active reservations in every run",
+      "raw_runs": [
+        "u5-c2-run-1.json",
+        "u5-c2-run-2.json",
+        "u5-c2-run-3.json"
+      ]
+    },
+    {
+      "principals": 5,
+      "concurrency": 4,
+      "repetitions": 3,
+      "requests_per_run": 1000,
+      "median_requests_per_second": 190.485,
+      "median_cpu_percent": 62.75,
+      "median_p50_ms": 15,
+      "median_p95_ms": 60,
+      "median_p99_ms": 82,
+      "maximum_ms": 383,
+      "maximum_peak_rss_bytes": 46751744,
+      "sequential_surfaces": {
+        "native_responses_finite": {
+          "sample_count": 30,
+          "p50_elapsed_ms": 14,
+          "p95_elapsed_ms": 59,
+          "p50_ttft_ms": 14,
+          "p95_ttft_ms": 59
+        },
+        "native_responses_streaming": {
+          "sample_count": 30,
+          "p50_elapsed_ms": 12,
+          "p95_elapsed_ms": 59,
+          "p50_ttft_ms": 11,
+          "p95_ttft_ms": 57
+        },
+        "translated_responses_to_messages_streaming": {
+          "sample_count": 30,
+          "p50_elapsed_ms": 14,
+          "p95_elapsed_ms": 60,
+          "p50_ttft_ms": 8,
+          "p95_ttft_ms": 57
+        }
+      },
+      "median_io_pressure_full_avg10_after_percent": 2.34,
+      "median_root_device_write_delta_bytes": 389214208,
+      "maximum_observed_wal_bytes": 4412552,
+      "median_durable_attempts": 1113,
+      "settlement": "zero pending requests and active reservations in every run",
+      "raw_runs": [
+        "u5-c4-run-1.json",
+        "u5-c4-run-2.json",
+        "u5-c4-run-3.json"
+      ]
+    },
+    {
+      "principals": 5,
+      "concurrency": 8,
+      "repetitions": 3,
+      "requests_per_run": 1000,
+      "median_requests_per_second": 295.215,
+      "median_cpu_percent": 66.02,
+      "median_p50_ms": 22,
+      "median_p95_ms": 73,
+      "median_p99_ms": 85,
+      "maximum_ms": 1021,
+      "maximum_peak_rss_bytes": 47181824,
+      "sequential_surfaces": {
+        "native_responses_finite": {
+          "sample_count": 30,
+          "p50_elapsed_ms": 19,
+          "p95_elapsed_ms": 59,
+          "p50_ttft_ms": 19,
+          "p95_ttft_ms": 59
+        },
+        "native_responses_streaming": {
+          "sample_count": 30,
+          "p50_elapsed_ms": 14,
+          "p95_elapsed_ms": 59,
+          "p50_ttft_ms": 12,
+          "p95_ttft_ms": 57
+        },
+        "translated_responses_to_messages_streaming": {
+          "sample_count": 30,
+          "p50_elapsed_ms": 19,
+          "p95_elapsed_ms": 60,
+          "p50_ttft_ms": 11,
+          "p95_ttft_ms": 57
+        }
+      },
+      "median_io_pressure_full_avg10_after_percent": 2.04,
+      "median_root_device_write_delta_bytes": 389931008,
+      "maximum_observed_wal_bytes": 4433152,
+      "median_durable_attempts": 1113,
+      "settlement": "zero pending requests and active reservations in every run",
+      "raw_runs": [
+        "u5-c8-run-1.json",
+        "u5-c8-run-2.json",
+        "u5-c8-run-3.json"
+      ]
+    },
+    {
+      "principals": 5,
+      "concurrency": 16,
+      "repetitions": 3,
+      "requests_per_run": 1000,
+      "median_requests_per_second": 326.388,
+      "median_cpu_percent": 75.72,
+      "median_p50_ms": 38,
+      "median_p95_ms": 91,
+      "median_p99_ms": 119,
+      "maximum_ms": 1119,
+      "maximum_peak_rss_bytes": 48058368,
+      "sequential_surfaces": {
+        "native_responses_finite": {
+          "sample_count": 30,
+          "p50_elapsed_ms": 15,
+          "p95_elapsed_ms": 59,
+          "p50_ttft_ms": 15,
+          "p95_ttft_ms": 59
+        },
+        "native_responses_streaming": {
+          "sample_count": 30,
+          "p50_elapsed_ms": 14,
+          "p95_elapsed_ms": 60,
+          "p50_ttft_ms": 11,
+          "p95_ttft_ms": 57
+        },
+        "translated_responses_to_messages_streaming": {
+          "sample_count": 30,
+          "p50_elapsed_ms": 12,
+          "p95_elapsed_ms": 60,
+          "p50_ttft_ms": 11,
+          "p95_ttft_ms": 57
+        }
+      },
+      "median_io_pressure_full_avg10_after_percent": 2.79,
+      "median_root_device_write_delta_bytes": 392114176,
+      "maximum_observed_wal_bytes": 4470232,
+      "median_durable_attempts": 1113,
+      "settlement": "zero pending requests and active reservations in every run",
+      "raw_runs": [
+        "u5-c16-run-1.json",
+        "u5-c16-run-2.json",
+        "u5-c16-run-3.json"
+      ]
+    },
+    {
+      "principals": 10,
+      "concurrency": 1,
+      "repetitions": 3,
+      "requests_per_run": 1000,
+      "median_requests_per_second": 41.592,
+      "median_cpu_percent": 32.11,
+      "median_p50_ms": 13,
+      "median_p95_ms": 61,
+      "median_p99_ms": 109,
+      "maximum_ms": 235,
+      "maximum_peak_rss_bytes": 46370816,
+      "sequential_surfaces": {
+        "native_responses_finite": {
+          "sample_count": 30,
+          "p50_elapsed_ms": 19,
+          "p95_elapsed_ms": 59,
+          "p50_ttft_ms": 19,
+          "p95_ttft_ms": 59
+        },
+        "native_responses_streaming": {
+          "sample_count": 30,
+          "p50_elapsed_ms": 14,
+          "p95_elapsed_ms": 60,
+          "p50_ttft_ms": 11,
+          "p95_ttft_ms": 57
+        },
+        "translated_responses_to_messages_streaming": {
+          "sample_count": 30,
+          "p50_elapsed_ms": 16,
+          "p95_elapsed_ms": 60,
+          "p50_ttft_ms": 11,
+          "p95_ttft_ms": 57
+        }
+      },
+      "median_io_pressure_full_avg10_after_percent": 2.21,
+      "median_root_device_write_delta_bytes": 389709824,
+      "maximum_observed_wal_bytes": 4457872,
+      "median_durable_attempts": 1113,
+      "settlement": "zero pending requests and active reservations in every run",
+      "raw_runs": [
+        "u10-c1-run-1.json",
+        "u10-c1-run-2.json",
+        "u10-c1-run-3.json"
+      ]
+    },
+    {
+      "principals": 25,
+      "concurrency": 1,
+      "repetitions": 3,
+      "requests_per_run": 1000,
+      "median_requests_per_second": 43.399,
+      "median_cpu_percent": 34.55,
+      "median_p50_ms": 14,
+      "median_p95_ms": 61,
+      "median_p99_ms": 66,
+      "maximum_ms": 90,
+      "maximum_peak_rss_bytes": 46665728,
+      "sequential_surfaces": {
+        "native_responses_finite": {
+          "sample_count": 30,
+          "p50_elapsed_ms": 13,
+          "p95_elapsed_ms": 60,
+          "p50_ttft_ms": 13,
+          "p95_ttft_ms": 59
+        },
+        "native_responses_streaming": {
+          "sample_count": 30,
+          "p50_elapsed_ms": 13,
+          "p95_elapsed_ms": 60,
+          "p50_ttft_ms": 11,
+          "p95_ttft_ms": 57
+        },
+        "translated_responses_to_messages_streaming": {
+          "sample_count": 30,
+          "p50_elapsed_ms": 13,
+          "p95_elapsed_ms": 60,
+          "p50_ttft_ms": 11,
+          "p95_ttft_ms": 57
+        }
+      },
+      "median_io_pressure_full_avg10_after_percent": 0.22,
+      "median_root_device_write_delta_bytes": 386707456,
+      "maximum_observed_wal_bytes": 4408432,
+      "median_durable_attempts": 1113,
+      "settlement": "zero pending requests and active reservations in every run",
+      "raw_runs": [
+        "u25-c1-run-1.json",
+        "u25-c1-run-2.json",
+        "u25-c1-run-3.json"
+      ]
+    },
+    {
+      "principals": 49,
+      "concurrency": 1,
+      "repetitions": 3,
+      "requests_per_run": 1000,
+      "median_requests_per_second": 40.76,
+      "median_cpu_percent": 8.19,
+      "median_p50_ms": 12,
+      "median_p95_ms": 126,
+      "median_p99_ms": 172,
+      "maximum_ms": 654,
+      "maximum_peak_rss_bytes": 47112192,
+      "sequential_surfaces": {
+        "native_responses_finite": {
+          "sample_count": 30,
+          "p50_elapsed_ms": 12,
+          "p95_elapsed_ms": 52,
+          "p50_ttft_ms": 12,
+          "p95_ttft_ms": 52
+        },
+        "native_responses_streaming": {
+          "sample_count": 30,
+          "p50_elapsed_ms": 6,
+          "p95_elapsed_ms": 52,
+          "p50_ttft_ms": 6,
+          "p95_ttft_ms": 52
+        },
+        "translated_responses_to_messages_streaming": {
+          "sample_count": 30,
+          "p50_elapsed_ms": 12,
+          "p95_elapsed_ms": 52,
+          "p50_ttft_ms": 6,
+          "p95_ttft_ms": 52
+        }
+      },
+      "median_io_pressure_full_avg10_after_percent": 6.6,
+      "median_root_device_write_delta_bytes": 605548544,
+      "maximum_observed_wal_bytes": 4420792,
+      "median_durable_attempts": 1113,
+      "settlement": "zero pending requests and active reservations in every run",
+      "raw_runs": [
+        "u49-c1-run-1.json",
+        "u49-c1-run-2.json",
+        "u49-c1-run-3.json"
+      ]
+    }
+  ]
+}

@@ -1,0 +1,308 @@
+{
+  "schema_version": "m023-ordinary-server-performance-comparison.v1",
+  "candidate": {
+    "sha256": "d7bec9bf508e9b9ccfd1c9ac53ae25b1ef37a5af266f2d4b0cf048c2816f7b73",
+    "repository_commit_sha": "f08a760e2cd995ac9b3416b571d092e3315b6524",
+    "build_profile": "release",
+    "build_mode": "locked release candidate"
+  },
+  "target": {
+    "target_class": "ordinary-server",
+    "architecture": "x86_64",
+    "kernel": "6.8.0-147-generic",
+    "os": "Ubuntu 24.04.5 LTS",
+    "os_version_id": "24.04",
+    "cpu_model": "Intel(R) Core(TM) i9-9900K CPU @ 3.60GHz",
+    "logical_cpu_count": 16,
+    "ram_bytes": 16622407680,
+    "system_vendor": "Gigabyte Technology Co., Ltd.",
+    "product_name": "Z390 AORUS MASTER",
+    "board_name": "Z390 AORUS MASTER-CF",
+    "root_filesystem": "ext4",
+    "root_storage_medium_class": "non-rotational",
+    "root_storage_device_class": "nvme",
+    "root_storage_device_model": "Samsung SSD 980 1TB",
+    "root_mount_options": "rw,relatime,stripe=32",
+    "virtualization_type": "none",
+    "container_type": "none",
+    "attestation": "Linux host metadata from procfs, sysfs, DMI and systemd-detect-virt"
+  },
+  "interpretation": "Same-host descriptive comparison against M002; no latency SLA or team capacity claim.",
+  "matrix": {
+    "conditions": 9,
+    "repetitions_per_condition": 3,
+    "requests_per_run": 1000,
+    "raw_summary": "summary.json",
+    "cells": [
+      {
+        "principals": 1,
+        "concurrency": 1,
+        "m002": {
+          "p50_ms": 15,
+          "p95_ms": 82,
+          "p99_ms": 148,
+          "requests_per_second": 36.495
+        },
+        "m023_no_limit": {
+          "p50_ms": 15,
+          "p95_ms": 120,
+          "p99_ms": 180,
+          "requests_per_second": 32.164
+        }
+      },
+      {
+        "principals": 5,
+        "concurrency": 1,
+        "m002": {
+          "p50_ms": 15,
+          "p95_ms": 61,
+          "p99_ms": 89,
+          "requests_per_second": 42.179
+        },
+        "m023_no_limit": {
+          "p50_ms": 15,
+          "p95_ms": 62,
+          "p99_ms": 151,
+          "requests_per_second": 36.941
+        }
+      },
+      {
+        "principals": 5,
+        "concurrency": 2,
+        "m002": {
+          "p50_ms": 14,
+          "p95_ms": 61,
+          "p99_ms": 79,
+          "requests_per_second": 93.976
+        },
+        "m023_no_limit": {
+          "p50_ms": 15,
+          "p95_ms": 62,
+          "p99_ms": 82,
+          "requests_per_second": 92.816
+        }
+      },
+      {
+        "principals": 5,
+        "concurrency": 4,
+        "m002": {
+          "p50_ms": 14,
+          "p95_ms": 59,
+          "p99_ms": 75,
+          "requests_per_second": 193.683
+        },
+        "m023_no_limit": {
+          "p50_ms": 15,
+          "p95_ms": 60,
+          "p99_ms": 82,
+          "requests_per_second": 190.485
+        }
+      },
+      {
+        "principals": 5,
+        "concurrency": 8,
+        "m002": {
+          "p50_ms": 19,
+          "p95_ms": 69,
+          "p99_ms": 76,
+          "requests_per_second": 335.268
+        },
+        "m023_no_limit": {
+          "p50_ms": 22,
+          "p95_ms": 73,
+          "p99_ms": 85,
+          "requests_per_second": 295.215
+        }
+      },
+      {
+        "principals": 5,
+        "concurrency": 16,
+        "m002": {
+          "p50_ms": 35,
+          "p95_ms": 88,
+          "p99_ms": 106,
+          "requests_per_second": 341.347
+        },
+        "m023_no_limit": {
+          "p50_ms": 38,
+          "p95_ms": 91,
+          "p99_ms": 119,
+          "requests_per_second": 326.388
+        }
+      },
+      {
+        "principals": 10,
+        "concurrency": 1,
+        "m002": {
+          "p50_ms": 14,
+          "p95_ms": 61,
+          "p99_ms": 77,
+          "requests_per_second": 42.858
+        },
+        "m023_no_limit": {
+          "p50_ms": 13,
+          "p95_ms": 61,
+          "p99_ms": 109,
+          "requests_per_second": 41.592
+        }
+      },
+      {
+        "principals": 25,
+        "concurrency": 1,
+        "m002": {
+          "p50_ms": 16,
+          "p95_ms": 61,
+          "p99_ms": 81,
+          "requests_per_second": 42.495
+        },
+        "m023_no_limit": {
+          "p50_ms": 14,
+          "p95_ms": 61,
+          "p99_ms": 66,
+          "requests_per_second": 43.399
+        }
+      },
+      {
+        "principals": 49,
+        "concurrency": 1,
+        "m002": {
+          "p50_ms": 15,
+          "p95_ms": 61,
+          "p99_ms": 81,
+          "requests_per_second": 42.322
+        },
+        "m023_no_limit": {
+          "p50_ms": 12,
+          "p95_ms": 126,
+          "p99_ms": 172,
+          "requests_per_second": 40.76
+        }
+      }
+    ]
+  },
+  "controlled_single_concurrency_repeats": {
+    "u1-c1": {
+      "repetitions": 3,
+      "median": {
+        "p50_ms": 13,
+        "p95_ms": 96,
+        "p99_ms": 164,
+        "requests_per_second": 35.987
+      },
+      "runs": [
+        {
+          "artifact": "u1-c1-repeat-1.json",
+          "preflight_full_io_psi_avg10": 0.93,
+          "p50_ms": 13,
+          "p95_ms": 96,
+          "p99_ms": 164,
+          "requests_per_second": 35.987,
+          "post_run_full_io_psi_avg10": 5.29
+        },
+        {
+          "artifact": "u1-c1-repeat-2.json",
+          "preflight_full_io_psi_avg10": 3.07,
+          "p50_ms": 13,
+          "p95_ms": 126,
+          "p99_ms": 171,
+          "requests_per_second": 33.164,
+          "post_run_full_io_psi_avg10": 6.3
+        },
+        {
+          "artifact": "u1-c1-repeat-3.json",
+          "preflight_full_io_psi_avg10": 4.45,
+          "p50_ms": 13,
+          "p95_ms": 62,
+          "p99_ms": 112,
+          "requests_per_second": 39.933,
+          "post_run_full_io_psi_avg10": 1.79
+        }
+      ]
+    },
+    "u5-c1": {
+      "repetitions": 3,
+      "median": {
+        "p50_ms": 15,
+        "p95_ms": 62,
+        "p99_ms": 123,
+        "requests_per_second": 38.753
+      },
+      "runs": [
+        {
+          "artifact": "u5-c1-repeat-1.json",
+          "preflight_full_io_psi_avg10": 0.17,
+          "p50_ms": 15,
+          "p95_ms": 65,
+          "p99_ms": 123,
+          "requests_per_second": 38.753,
+          "post_run_full_io_psi_avg10": 4.32
+        },
+        {
+          "artifact": "u5-c1-repeat-2.json",
+          "preflight_full_io_psi_avg10": 3.6,
+          "p50_ms": 14,
+          "p95_ms": 61,
+          "p99_ms": 66,
+          "requests_per_second": 43.178,
+          "post_run_full_io_psi_avg10": 0.88
+        },
+        {
+          "artifact": "u5-c1-repeat-3.json",
+          "preflight_full_io_psi_avg10": 0.32,
+          "p50_ms": 15,
+          "p95_ms": 62,
+          "p99_ms": 145,
+          "requests_per_second": 37.399,
+          "post_run_full_io_psi_avg10": 3.48
+        }
+      ]
+    },
+    "u49-c1": {
+      "repetitions": 3,
+      "median": {
+        "p50_ms": 14,
+        "p95_ms": 61,
+        "p99_ms": 81,
+        "requests_per_second": 43.498
+      },
+      "runs": [
+        {
+          "artifact": "u49-c1-repeat-1.json",
+          "preflight_full_io_psi_avg10": 0.02,
+          "p50_ms": 14,
+          "p95_ms": 61,
+          "p99_ms": 73,
+          "requests_per_second": 43.739,
+          "post_run_full_io_psi_avg10": 0.48
+        },
+        {
+          "artifact": "u49-c1-repeat-2.json",
+          "preflight_full_io_psi_avg10": 0.36,
+          "p50_ms": 15,
+          "p95_ms": 61,
+          "p99_ms": 81,
+          "requests_per_second": 43.498,
+          "post_run_full_io_psi_avg10": 0.47
+        },
+        {
+          "artifact": "u49-c1-repeat-3.json",
+          "preflight_full_io_psi_avg10": 0.21,
+          "p50_ms": 14,
+          "p95_ms": 79,
+          "p99_ms": 149,
+          "requests_per_second": 37.963,
+          "post_run_full_io_psi_avg10": 3.1
+        }
+      ]
+    }
+  },
+  "comparison_baseline_candidate": {
+    "sha256": "43cdf634d1ffcd6759ad14adca072869101b379f074e8001b4a28cf52f10bce3",
+    "repository_commit_sha": "1c3d15b8911f1f0f3e003c9e918282c0363736e3",
+    "build_profile": "release",
+    "build_mode": "locked release candidate"
+  },
+  "measurement_policy": {
+    "admission_fairness": "disabled; no [admission_fairness] section in the benchmark fixture"
+  }
+}

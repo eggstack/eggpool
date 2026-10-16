@@ -1,6 +1,6 @@
 # On-Prem User Access Roadmap
 
-Status: active
+Status: closed
 
 Long-term references:
 
@@ -346,21 +346,21 @@ behavior and adding actionable hard-budget diagnostics. No output cap is
 injected; M008/M015 proof-or-reject guarantees remain in force.
 Source: `plans/implementation/on-prem-user-access/022-hard-budget-agent-compatibility.md`.
 
-#### M023 — Short-window team fairness controls (conditionally closed)
+#### M023 — Short-window team fairness controls (closed)
 
-Class: capability. Hard M022 dependency is closed, and the operational
-ordinary-server Linux/SSD-or-NVMe baseline gate is satisfied by concurrency
-M002. Production implementation and local verification are complete. The
-post-change ordinary-Linux p50/p95/p99 comparison remains outstanding, so no
-new capacity claim is made. M002 provides a host-specific synthetic reference,
-not a universal capacity guarantee.
+Class: capability. Hard M022 dependency and the operational ordinary-server
+Linux/SSD-or-NVMe baseline gate are closed. Production implementation,
+functional verification, the post-change no-rule comparison, and active
+throttle measurement are complete. The qualification is host-specific and
+synthetic; it establishes no universal capacity or latency guarantee.
 Source: `plans/implementation/on-prem-user-access/023-short-window-fairness-controls.md`.
+Final performance evidence: `plans/closure/on-prem-user-access/023-performance-qualification.md`.
 
 ### Post-merge dependency and hardware policy
 
-- M017–M022 are closed; M023 is conditionally closed on its post-change
-  ordinary-Linux comparison. M022 did not depend on a Pi/Le Potato run; it became
-  ready after M017 closed.
+- M017–M023 are closed. M022 did not depend on a Pi/Le Potato run; it became
+  ready after M017 closed. The separate M023 host comparison is recorded in its
+  final closure pass.
 - Hard: M017 + M019 -> M020 -> M021; M017 -> M022 -> M023.
 - Interface: M018's privileged local transport must not broaden HTTP rights;
   any new auth authority stops for ADR review. M022 hard-cost proof contract
@@ -462,4 +462,4 @@ A ready plan is not an implemented capability.
 | M020 | closed | `plans/implementation/on-prem-user-access/020-managed-transition-headless-admin.md` | `plans/closure/on-prem-user-access/020-status.md` | Headless member lifecycle and first-member transition are atomic and audited; M021 unblocked. |
 | M021 | closed | `plans/implementation/on-prem-user-access/021-default-member-policy-provisioning.md` | `plans/closure/on-prem-user-access/021-status.md` | Transactional future-only profile default; CLI/browser and no-profile journeys, migration, policy and budget boundaries verified. |
 | M022 | closed | `plans/implementation/on-prem-user-access/022-hard-budget-agent-compatibility.md` | `plans/closure/on-prem-user-access/022-status.md` | Captured Codex/OpenCode output-cap behavior; preserved hard proof-or-reject semantics and added actionable error codes. |
-| M023 | conditionally closed | `plans/implementation/on-prem-user-access/023-short-window-fairness-controls.md` | `plans/closure/on-prem-user-access/023-status.md` | Production and local verification pass; post-change ordinary-Linux p50/p95/p99 comparison remains the named condition. No successor is registered. |
+| M023 | closed | `plans/implementation/on-prem-user-access/023-short-window-fairness-controls.md` | `plans/closure/on-prem-user-access/023-performance-qualification.md` | Modified-binary no-rule matrix and active-throttle measurements pass on ordinary Linux/NVMe. No successor is registered; no universal capacity claim. |
