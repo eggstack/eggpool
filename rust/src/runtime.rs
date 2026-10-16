@@ -2616,22 +2616,10 @@ async fn onboard(path: &Path, args: crate::cli::OnboardArgs) -> Result<(), Boots
             .map_err(|error| mutation_error(error, EXIT_VALIDATION))?;
         println!("  Created configuration at {}", path.display());
     }
-    if config_mutation::read_server_key(path)
-        .map_err(|error| mutation_error(error, EXIT_VALIDATION))?
-        .is_none()
-    {
-        let key = config_mutation::generate_key()
-            .map_err(|error| mutation_error(error, EXIT_VALIDATION))?;
-        if config_mutation::write_server_key(path, &key)
-            .map_err(|error| mutation_error(error, EXIT_VALIDATION))?
-        {
-            println!("  Generated server API key");
-        }
-    }
     let preflight_config = config::Config::from_toml(path).map_err(BootstrapError::from)?;
     let preflight_database_path = config::Config::runtime_path(&preflight_config.database.path);
-    let bootstrap_admin = if !preflight_database_path.exists() {
-        true
+    let (bootstrap_admin, identity_initialized) = if !preflight_database_path.exists() {
+        (true, false)
     } else {
         let database = open_operational_database(&preflight_config, true).await?;
         let access_state = crate::identity::access_state(&database)
@@ -2644,8 +2632,24 @@ async fn onboard(path: &Path, args: crate::cli::OnboardArgs) -> Result<(), Boots
             .close()
             .await
             .map_err(|error| command_error(EXIT_VALIDATION, error.to_string()))?;
-        access_state == "fresh_uninitialized" && users.is_empty()
+        (
+            access_state == "fresh_uninitialized" && users.is_empty(),
+            matches!(access_state.as_str(), "admin_initialized" | "managed"),
+        )
     };
+    if should_generate_legacy_server_key(identity_initialized)
+        && config_mutation::read_server_key(path)
+            .map_err(|error| mutation_error(error, EXIT_VALIDATION))?
+            .is_none()
+    {
+        let key = config_mutation::generate_key()
+            .map_err(|error| mutation_error(error, EXIT_VALIDATION))?;
+        if config_mutation::write_server_key(path, &key)
+            .map_err(|error| mutation_error(error, EXIT_VALIDATION))?
+        {
+            println!("  Generated server API key");
+        }
+    }
     let admin_password = if bootstrap_admin {
         println!("Create the local administrator for this new installation.");
         Some(read_user_password(
@@ -2726,6 +2730,10 @@ async fn onboard(path: &Path, args: crate::cli::OnboardArgs) -> Result<(), Boots
         },
     )
     .await
+}
+
+fn should_generate_legacy_server_key(identity_initialized: bool) -> bool {
+    !identity_initialized
 }
 
 async fn serve(path: &Path, args: &ServeArgs) -> Result<(), BootstrapError> {
@@ -3856,7 +3864,7 @@ fn format_bytes(value: Option<&Value>) -> String {
 
 #[cfg(test)]
 mod tests {
-    use super::{EXIT_VALIDATION, mutation_error};
+    use super::{EXIT_VALIDATION, mutation_error, should_generate_legacy_server_key};
     use crate::operations::config_mutation::MutationError;
 
     #[test]
@@ -3871,5 +3879,11 @@ mod tests {
     fn ordinary_mutation_errors_keep_caller_exit_code() {
         let error = mutation_error(MutationError::Invalid("bad value".into()), EXIT_VALIDATION);
         assert_eq!(error.exit_code(), EXIT_VALIDATION);
+    }
+
+    #[test]
+    fn onboarding_does_not_create_a_legacy_key_after_admin_initialization() {
+        assert!(should_generate_legacy_server_key(false));
+        assert!(!should_generate_legacy_server_key(true));
     }
 }
