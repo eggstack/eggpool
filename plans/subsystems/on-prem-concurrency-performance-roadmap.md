@@ -138,15 +138,13 @@ claims. Source:
 
 ### M002 — Ordinary-server small-team baseline
 
-Class: polish. Conditionally closed for the tooling/setup slice. The physical
-measurement and operating envelope remain unmeasured because the available
-host was shared and crossed the frozen I/O-pressure stop gate during required
-build verification. A future isolated run must use durable SSD/NVMe and cover
-1/5/10/25/49 named principal records separately from 1/2/4/8/16 concurrent
-requests, with three fresh-root repetitions per condition, adequate p99 sample
-counts, active-load recovery evidence, and sanitized summary output. SBC
-microSD remains the solo low-end performance/durability reference; it is
-**not** a gate for team capacity or server release.
+Class: polish. Closed with a measured one-host synthetic envelope across
+1/5/10/25/49 named principals and 1/2/4/8/16 concurrent requests, three
+fresh-root repetitions per condition, managed lifecycle/recovery checks, and a
+bounded competing-I/O observation. Use the host-specific result for relative
+sizing only; it is not an SLA or a provider-throughput promise. SBC microSD
+remains the solo low-end performance/durability reference; it is **not** a
+gate for team capacity or server release.
 Source: `plans/implementation/on-prem-concurrency-performance/002-ordinary-server-team-baseline.md`.
 Closure: `plans/closure/on-prem-concurrency-performance/002-status.md`.
 
@@ -212,4 +210,4 @@ the Pi/MMC solo latency tail. No optimization promise or new
 | Milestone | Status | Implementation plan | Closure record | Blockers |
 |---|---|---|---|---|
 | M001 | conditionally closed | `plans/implementation/on-prem-concurrency-performance/001-pi5-mmc-tail-latency-attribution.md` | `plans/closure/on-prem-concurrency-performance/001-status.md` | Four-way microSD/MMC tail attributed to durable storage; controlled competing-I/O and broader account/budget matrix remain conditions. SSD/NVMe is optional and not a closure dependency. No dependency edge to post-merge on-prem operability plans. |
-| M002 | conditionally closed | `plans/implementation/on-prem-concurrency-performance/002-ordinary-server-team-baseline.md` | `plans/closure/on-prem-concurrency-performance/002-status.md` | Tooling/setup complete; ordinary-server performance, active-load recovery, and capacity envelope remain unmeasured pending an isolated target below the frozen I/O-pressure stop gate. |
+| M002 | closed | `plans/implementation/on-prem-concurrency-performance/002-ordinary-server-team-baseline.md` | `plans/closure/on-prem-concurrency-performance/002-status.md` | One-host synthetic ordinary-server baseline and managed recovery evidence recorded; no universal capacity promise and no production optimization authorized. |

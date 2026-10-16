@@ -1,6 +1,6 @@
 # On-Prem User Access M023 — Short-window team fairness and admission controls
 
-Status: blocked
+Status: ready
 
 Repository baseline: `88f58bbf2e9095cf46437945edf83e580270bdb6` (`main`, post-PR #7).
 
@@ -18,11 +18,11 @@ Prevent one user's bursty coding agents from monopolizing shared provider capaci
 
 ## 2. Dependencies
 
-Hard: M022 client/budget interoperability closure. Interface: existing principal authentication, M008/M009 durable reservations and `coordinator/endpoints.rs` admission order. Operational: qualify on representative ordinary on-prem Linux server; Pi/microSD is a solo low-end reference, not the team load-release gate.
+Hard: M022 client/budget interoperability closure (closed). Interface: existing principal authentication, M008/M009 durable reservations and `coordinator/endpoints.rs` admission order. Operational: satisfied by the measured ordinary-server baseline in `plans/closure/on-prem-concurrency-performance/002-status.md`; Pi/microSD is a solo low-end reference, not the team load-release gate.
 
 ## 3. Current evidence
 
-`rust/src/user_budget.rs` and `rust/src/instance_budget.rs` already handle daily/monthly and max-concurrent rules transactionally. `routing/` owns provider-account quota fairness, not downstream-user fairness. An authorized user's burst may exhaust provider throughput or dominate latency without violating day/month budgets. Existing single-gate SQLite performance, particularly Pi microSD write tails, argues against persisting per-request rolling-window rows by default.
+`rust/src/user_budget.rs` and `rust/src/instance_budget.rs` already handle daily/monthly and max-concurrent rules transactionally. `routing/` owns provider-account quota fairness, not downstream-user fairness. An authorized user's burst may exhaust provider throughput or dominate latency without violating day/month budgets. The ordinary-server M002 baseline supplies a host-specific shared-team reference, while its bounded SQLite publication diagnostic recorded low gate wait on that target. Existing single-gate SQLite performance, particularly Pi microSD write tails, argues against persisting per-request rolling-window rows by default.
 
 ## 4. Invariants
 

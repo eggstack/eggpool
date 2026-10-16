@@ -1,0 +1,7 @@
+{
+  "manifest": "runtime-q001.v1",
+  "plan": "SBC qualification",
+  "reason": "second workload chat_completions failed with HTTP 429 (budget-exceeded; user_rules=1,instance_rules=1)",
+  "schema_version": "runtime-q008.v2",
+  "status": "fail"
+}

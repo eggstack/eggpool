@@ -346,14 +346,14 @@ behavior and adding actionable hard-budget diagnostics. No output cap is
 injected; M008/M015 proof-or-reject guarantees remain in force.
 Source: `plans/implementation/on-prem-user-access/022-hard-budget-agent-compatibility.md`.
 
-#### M023 — Short-window team fairness controls
+#### M023 — Short-window team fairness controls (ready)
 
-Class: capability. Hard M022 dependency is closed. Remains blocked by the
-source plan's stop condition until ordinary-server Linux/SSD-or-NVMe evidence
-is recorded through concurrency M002. Then implement an optional
-per-principal short-window admission throttle and stable 429/Retry-After,
-bounded in-memory state, no unbounded queues or new SQLite write pressure;
-preserve solo no-rule behavior.
+Class: capability. Hard M022 dependency is closed, and the operational
+ordinary-server Linux/SSD-or-NVMe evidence gate is satisfied by concurrency
+M002. Implement an optional per-principal short-window admission throttle and
+stable 429/Retry-After, bounded in-memory state, no unbounded queues or new
+SQLite write pressure; preserve solo no-rule behavior. M002 provides a
+host-specific synthetic reference, not a universal capacity guarantee.
 Source: `plans/implementation/on-prem-user-access/023-short-window-fairness-controls.md`.
 
 ### Post-merge dependency and hardware policy
@@ -461,4 +461,4 @@ A ready plan is not an implemented capability.
 | M020 | closed | `plans/implementation/on-prem-user-access/020-managed-transition-headless-admin.md` | `plans/closure/on-prem-user-access/020-status.md` | Headless member lifecycle and first-member transition are atomic and audited; M021 unblocked. |
 | M021 | closed | `plans/implementation/on-prem-user-access/021-default-member-policy-provisioning.md` | `plans/closure/on-prem-user-access/021-status.md` | Transactional future-only profile default; CLI/browser and no-profile journeys, migration, policy and budget boundaries verified. |
 | M022 | closed | `plans/implementation/on-prem-user-access/022-hard-budget-agent-compatibility.md` | `plans/closure/on-prem-user-access/022-status.md` | Captured Codex/OpenCode output-cap behavior; preserved hard proof-or-reject semantics and added actionable error codes. |
-| M023 | blocked | `plans/implementation/on-prem-user-access/023-short-window-fairness-controls.md` | — | Hard M022 is closed; ordinary-server M002 Linux/SSD-or-NVMe operational evidence remains outstanding. |
+| M023 | ready | `plans/implementation/on-prem-user-access/023-short-window-fairness-controls.md` | — | Hard M022 is closed; ordinary-server M002 operational evidence is recorded in its closure. |

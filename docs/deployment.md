@@ -520,7 +520,7 @@ model payloads, login rate, and policy/budget profile before deployment. The
 Pi microSD envelope remains a separate solo-device reference in
 [`raspberry-pi.md`](raspberry-pi.md). See the
 [M002 closure record](../plans/closure/on-prem-concurrency-performance/002-status.md)
-for its measured/unmeasured status and required follow-up evidence.
+for its evidence, scope and interpretation limits.
 
 To repeat the frozen corpus from a release binary, run
 `uv run python scripts/qualification_ordinary_server.py --binary <release-binary>`.
@@ -529,8 +529,9 @@ root for each run, requires three repetitions per condition, validates p99
 sample counts and settlement, derives `summary.json` from the raw Q008
 reports, and runs deterministic Q009 provider-fault, hard-budget, user-disable,
 and abrupt-restart phases against the same binary. The summary requires the
-matching `lifecycle.json` artifact. It refuses non-Linux hosts and non-durable or rotational qualification
-storage, and stops before load when initial full I/O pressure exceeds 25% over
+matching `lifecycle.json` artifact. It refuses non-Linux hosts and
+non-durable or rotational qualification storage, and stops before load when
+initial full I/O pressure exceeds 25% over
 the 10-second window. Qualification does not send requests to a real provider
 or charge a provider account.
 

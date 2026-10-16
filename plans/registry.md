@@ -58,14 +58,15 @@ No new runtime, schema or performance claim lands with these plans.
 | Persistence | active | `plans/subsystems/persistence-roadmap.md` | M011 ready — post-M010 roadmap/documentation reconciliation | M009/M010 closures accepted. Documentation/tooling-only corrective; production remains WAL/NORMAL. No technical persistence successor is registered. |
 | Deployment and packaging | closed | `plans/subsystems/deployment-packaging-roadmap.md` | M005 closed — active PATH integration detection corrective | M001–M005 closed; no successor registered. |
 | Dashboard | closed | `plans/subsystems/dashboard-roadmap.md` | M012 closed — lifecycle closure and documentation polish | M001–M012 closed; no registered successor; future dashboard work requires a new bounded plan. |
-| On-prem user access | active | `plans/subsystems/on-prem-user-access-roadmap.md` | M023 blocked — short-window fairness controls; M022 closed | M017–M022 closed; M023 awaits ordinary-server operational evidence. PR #7 and M001–M016 closure records remain immutable. Solo SBC/microSD is not the ordinary-server team-capacity gate. |
-| On-prem concurrency performance | active | `plans/subsystems/on-prem-concurrency-performance-roadmap.md` | M002 conditionally closed — qualification tooling implemented; isolated ordinary-server baseline still unmeasured | M001's Pi/microSD solo tail attribution stays conditionally closed; M002 authorizes no WAL/SQLite topology change. |
+| On-prem user access | active | `plans/subsystems/on-prem-user-access-roadmap.md` | M023 ready — short-window fairness controls; M022 and ordinary-server operational gate closed | M017–M022 closed; M023 may begin against measured M002 host evidence. PR #7 and M001–M016 closure records remain immutable. Solo SBC/microSD is not the ordinary-server team-capacity gate. |
+| On-prem concurrency performance | active | `plans/subsystems/on-prem-concurrency-performance-roadmap.md` | M002 closed — ordinary-server synthetic baseline recorded | M001's Pi/microSD solo tail attribution stays conditionally closed; M002 authorizes no WAL/SQLite topology change. |
 
 ## Dependency-ready implementation plans
 
 | Subsystem | Milestone | Status | Implementation plan | Dependencies / handoff note |
 |---|---|---|---|---|
 | Persistence | M011 — post-M010 roadmap and documentation reconciliation | ready | `plans/implementation/persistence/011-post-m010-roadmap-documentation-reconciliation.md` | Hard: M009/M010 closures accepted. Documentation/tooling only; no runtime or physical target dependency. |
+| On-prem user access | M023 — short-window team fairness | ready | `plans/implementation/on-prem-user-access/023-short-window-fairness-controls.md` | Hard M022 is closed; the operational ordinary-server gate is satisfied by `plans/closure/on-prem-concurrency-performance/002-status.md`. |
 
 ## Active implementation plans
 
@@ -77,7 +78,6 @@ No new runtime, schema or performance claim lands with these plans.
 
 | Subsystem | Milestone | Blocker |
 |---|---|---|
-| On-prem user access | M023 — short-window team fairness | Ordinary-server M002 operational evidence: representative Linux server with durable SSD/NVMe and measured baseline; M022 is closed. |
 
 
 Unblock audit (on-prem user access reopening after M012 closure, baseline
@@ -109,7 +109,8 @@ Historical M007 blocker assessment at baseline `7e241ad` (`plans/closure/persist
 
 | Subsystem / plan | Disposition | Evidence |
 |---|---|---|
-| On-prem user access M022 — hard-budget agent interoperability | closed — Codex CLI 0.162.1 omitted a Responses output cap; OpenCode 1.18.35 sent configured `max_output_tokens`; stable proof-failure and exhausted-budget codes added; default/no-default verification passes; M023 remains blocked on ordinary-server evidence | `plans/closure/on-prem-user-access/022-status.md`, implementation `dee65ae` |
+| On-prem concurrency performance M002 — ordinary-server team baseline | closed — 27 passing Q008 runs across nine cells; Q009 hard-budget, provider-fault, user-disable and restart evidence; bounded competing-I/O and SQLite gate diagnostics; measured host-specific sizing guidance; M023 promoted to ready | `plans/closure/on-prem-concurrency-performance/002-status.md`, artifacts under `artifacts/qualification/on-prem-concurrency-performance/ordinary-server/` |
+| On-prem user access M022 — hard-budget agent interoperability | closed — Codex CLI 0.162.1 omitted a Responses output cap; OpenCode 1.18.35 sent configured `max_output_tokens`; stable proof-failure and exhausted-budget codes added; default/no-default verification passes; M023 is now ready after M002 operational evidence | `plans/closure/on-prem-user-access/022-status.md`, implementation `dee65ae` |
 | On-prem user access M021 — default member policy and provisioning | closed — transactional future-only default profile selection, CLI/browser creation, explicit no-profile override, additive schema 63 migration, policy visibility and budget-separation behavior pass; M022 subsequently closed; M023 remains blocked on ordinary-server evidence | `plans/closure/on-prem-user-access/021-status.md`, implementation `b76d359`, CLI journey `ee563be`, race test `3f1ca54` |
 | On-prem user access M020 — managed transition and headless administration | closed — first member transition, profile assignment and audit are atomic; headless add/show/disable/enable workflow and stale-config auth rejection pass; M021 promoted to ready | `plans/closure/on-prem-user-access/020-status.md`, implementation `8a875a1` |
 | On-prem user access M019 — login transport and solo LAN operability corrective | closed — remote plaintext login GET returns no credential form; loopback and configured HTTPS-proxy paths pass; solo SSH tunnel and team proxy guidance documented; M020 promoted to ready | `plans/closure/on-prem-user-access/019-status.md`, implementation `b18a561` |
@@ -119,7 +120,6 @@ Historical M007 blocker assessment at baseline `7e241ad` (`plans/closure/persist
 | On-prem user access M015 — independent authentication/authorization threat review | closed — independent review findings on hard-cost proof bounds and browser-session access corrected and re-reviewed; default 1,024 / no-default 1,025 tests pass (one ignored each); exact-SHA CI, installer and dependency audit pass on `d8fd9c2a`; no M015 security findings remain; M016 promoted to ready | `plans/closure/on-prem-user-access/015-status.md`, implementation `a526980c`, `deb1622f`, `d8fd9c2a`, security scan `52bd79cc`, CI `38720507683`, installer `38720509034`, audit `38720507720` |
 | On-prem user access M014 — Rustls dependency security-advisory corrective | closed — lockfile-only Rustls 0.23.46 patch, unchanged transport feature graph; local default/no-default and 1,009/1,010-test workspace suites, provider TLS (trusted root, wrong-root and hostname rejection), budget/coordinator suites, release build and tooling pass; hosted cargo-deny, CI and both installers pass on `7462263ec482c5fda4bd1a70a9a55b0efc313cd3`; main remains pending PR merge | `plans/closure/on-prem-user-access/014-status.md`, implementation `7462263e`, audit `38671345587`, CI `38671345679`, installers `38671345597` |
 | On-prem concurrency performance M001 — Pi 5/microSD concurrent tail attribution | conditionally closed — three paired physical microSD/tmpfs runs identify durable publication/SQLite/storage as the dominant tested four-way tail contributor; no production change or capacity claim; SSD/NVMe is not required | `plans/closure/on-prem-concurrency-performance/001-status.md`, six Q008 reports + manifest under `artifacts/qualification/on-prem-concurrency-performance/`, artifact guard `tests/tooling/test_on_prem_mmc_tail_attribution.py` |
-| On-prem concurrency performance M002 — ordinary-server team baseline | conditionally closed — ordinary-host attestation, safe frozen 27-run driver, raw-to-summary guard, and deployment guidance implemented; no release build or measurement because the shared host crossed the I/O-pressure stop gate; no capacity or SLA claim | `plans/closure/on-prem-concurrency-performance/002-status.md`, implementation `cdfb6fa8`, tests `tests/tooling/test_qualification_ordinary_server.py` |
 | On-prem user access M012 — physical SBC small-team qualification and final disposition | closed — Pi 5 managed envelope measured (functional 25 cells + 3×30 benchmark batches all pass, 145/145 each, 0 pending/active; Argon2id 51 ms 1-way / 71–73 ms 2-way; 49 named users at 51 ms p50 with spot logins passing; concurrency 1/2/4/8 completes with 8-way saturating at p50 4.1 s); runner managed-auth corrective + 2 contract tests; solo practical, 49 users inexpensive metadata, no 50-concurrent claim; one medium (MMC tails exceed Sep-21 gates, envelope restricted) + six low findings, no high | `plans/closure/on-prem-user-access/012-status.md`, artifacts `artifacts/qualification/on-prem-m012-pi5-functional.json` + `on-prem-m012-pi5-benchmark-run-{1,2,3}.json`, docs `docs/raspberry-pi.md` envelope |
 | On-prem user access M011 — admin/member dashboard browser qualification | closed — frozen Python oracle rebuilt and run against head with 54 parity gaps, identical to the pre-M011 baseline (0 new, 0 resolved); on-prem admin/member pages qualified against a Rust-owned approved reference (70 observations, 22 captures) covering both roles, the negative matrix, no-JS sign-in, HiDPI/mobile/themed viewports, and a DOM credential-leak guard; browser sign-in, top-nav overflow at 1280px, unstyled usage pages, missing viewport declarations, unbounded tables, and budget labelling all corrected; 967 serial Rust tests and 175 tooling tests pass at the M011 baseline (re-verified post-integration — see integration note) | `plans/closure/on-prem-user-access/011-status.md` |
 | On-prem user access M010 — budget crash recovery and schema-54 restore | closed
@@ -550,3 +550,14 @@ requirement, but the evidence remains unmeasured and M023 remains blocked on
 its hard M022 dependency. No plan was promoted or unblocked. A future isolated
 server run remains required before M023 can use M002 as its operational
 capacity evidence.
+
+Unblock audit (on-prem concurrency performance M002 closed,
+`plans/closure/on-prem-concurrency-performance/002-status.md`): searched
+`plans/implementation/`, the on-prem concurrency and user-access roadmap
+dependency sections, and the dependency-ready, active, and blocked registry
+tables. M023's hard M022 dependency is closed and its named operational M002
+requirement is satisfied by the durable-NVMe host matrix and Q009 lifecycle
+evidence, so M023 moves `blocked` → `ready`. No other registered future plan
+declares M002 as a hard, interface, or soft dependency. M001 remains
+conditionally closed; no production storage optimization is authorized by
+this evidence.
