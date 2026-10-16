@@ -300,6 +300,74 @@ def summarize(manifest_path: Path) -> dict[str, Any]:
                 return None
             return statistics.median(values)
 
+        sequential_keys = (
+            "native_responses_finite",
+            "native_responses_streaming",
+            "translated_responses_to_messages_streaming",
+        )
+        sequential_surfaces: dict[str, dict[str, int | float | None]] = {}
+        for surface_key in sequential_keys:
+            surface_runs = [
+                run["document"]
+                .get("benchmark", {})
+                .get("runs", {})
+                .get(surface_key, {})
+                for run in runs
+            ]
+            surface_summary: dict[str, int | float | None] = {
+                "sample_count": min(
+                    (
+                        surface.get("sample_count", 0)
+                        for surface in surface_runs
+                        if isinstance(surface.get("sample_count"), int)
+                    ),
+                    default=0,
+                )
+            }
+            for field in (
+                "p50_elapsed_ms",
+                "p95_elapsed_ms",
+                "p50_ttft_ms",
+                "p95_ttft_ms",
+            ):
+                values = [surface.get(field) for surface in surface_runs]
+                surface_summary[field] = (
+                    statistics.median(values)
+                    if len(values) == REPETITIONS
+                    and all(isinstance(value, (int, float)) for value in values)
+                    else None
+                )
+            sequential_surfaces[surface_key] = surface_summary
+
+        io_pressure_values = [
+            run["load"]
+            .get("host_io", {})
+            .get("io_pressure_after", {})
+            .get("full", {})
+            .get("avg10")
+            for run in runs
+        ]
+        write_delta_values = [
+            run["load"].get("host_io", {}).get("root_device_write_delta_bytes")
+            for run in runs
+        ]
+
+        wal_bytes: list[int] = []
+        for run in runs:
+            raw_samples = run["document"].get("resource_samples", [])
+            if not isinstance(raw_samples, list):
+                continue
+            for raw_sample in cast("list[Any]", raw_samples):
+                if not isinstance(raw_sample, dict):
+                    continue
+                sample = cast("dict[str, Any]", raw_sample)
+                value = sample.get("wal_bytes")
+                if isinstance(value, int):
+                    wal_bytes.append(value)
+        durable_attempts = [
+            run["document"].get("durable", {}).get("attempts") for run in runs
+        ]
+
         summaries.append(
             {
                 "principals": principals,
@@ -321,6 +389,23 @@ def summarize(manifest_path: Path) -> dict[str, Any]:
                     run["document"]["benchmark"]["resource_summary"]["peak_rss_bytes"]
                     for run in runs
                 ),
+                "sequential_surfaces": sequential_surfaces,
+                "median_io_pressure_full_avg10_after_percent": (
+                    statistics.median(io_pressure_values)
+                    if all(
+                        isinstance(value, (int, float)) for value in io_pressure_values
+                    )
+                    else None
+                ),
+                "median_root_device_write_delta_bytes": (
+                    statistics.median(write_delta_values)
+                    if all(isinstance(value, int) for value in write_delta_values)
+                    else None
+                ),
+                "maximum_observed_wal_bytes": max(wal_bytes, default=None),
+                "median_durable_attempts": statistics.median(durable_attempts)
+                if all(isinstance(value, int) for value in durable_attempts)
+                else None,
                 "settlement": (
                     "zero pending requests and active reservations in every run"
                 ),
@@ -359,7 +444,7 @@ def run(binary: Path, output_dir: Path) -> int:
             previous = _load(manifest_path)
             resumable = (
                 previous.get("schema_version") == SCHEMA_VERSION
-                and previous.get("status") == "incomplete"
+                and previous.get("status") in {"incomplete", "complete"}
                 and previous.get("candidate", {}).get("sha256")
                 == fresh_manifest["candidate"]["sha256"]
                 and previous.get("target") == fresh_manifest["target"]

@@ -51,6 +51,10 @@ def _run(principals: int, concurrency: int, p95: int) -> dict[str, Any]:
                     "failed_count": 0,
                     "requests_per_second": 100.0,
                     "cpu": {"cpu_percent": 50.0},
+                    "host_io": {
+                        "io_pressure_after": {"full": {"avg10": 1.0}},
+                        "root_device_write_delta_bytes": 2048,
+                    },
                     "timings": {
                         "sample_count": REQUESTS_PER_CELL,
                         "p50_elapsed_ms": 10,
@@ -58,10 +62,36 @@ def _run(principals: int, concurrency: int, p95: int) -> dict[str, Any]:
                         "p99_elapsed_ms": p95 + 1,
                         "maximum_elapsed_ms": p95 + 2,
                     },
-                }
+                },
+                "native_responses_finite": {
+                    "sample_count": 30,
+                    "p50_elapsed_ms": 10,
+                    "p95_elapsed_ms": p95,
+                    "p50_ttft_ms": 9,
+                    "p95_ttft_ms": p95 - 1,
+                },
+                "native_responses_streaming": {
+                    "sample_count": 30,
+                    "p50_elapsed_ms": 11,
+                    "p95_elapsed_ms": p95 + 1,
+                    "p50_ttft_ms": 8,
+                    "p95_ttft_ms": p95,
+                },
+                "translated_responses_to_messages_streaming": {
+                    "sample_count": 30,
+                    "p50_elapsed_ms": 12,
+                    "p95_elapsed_ms": p95 + 2,
+                    "p50_ttft_ms": 9,
+                    "p95_ttft_ms": p95 + 1,
+                },
             },
         },
-        "durable": {"pending_requests": 0, "active_reservations": 0},
+        "durable": {
+            "pending_requests": 0,
+            "active_reservations": 0,
+            "attempts": 1113,
+        },
+        "resource_samples": [{"wal_bytes": 42}],
     }
 
 
@@ -135,6 +165,13 @@ def test_m002_raw_to_summary_requires_three_durable_p99_runs(tmp_path: Path) -> 
     assert cell["median_p95_ms"] == 22
     assert cell["median_p99_ms"] == 23
     assert cell["settlement"].startswith("zero pending")
+    assert (
+        cell["sequential_surfaces"]["native_responses_streaming"]["p95_ttft_ms"] == 22
+    )
+    assert cell["median_io_pressure_full_avg10_after_percent"] == 1.0
+    assert cell["median_root_device_write_delta_bytes"] == 2048
+    assert cell["maximum_observed_wal_bytes"] == 42
+    assert cell["median_durable_attempts"] == 1113
     assert summary["lifecycle"]["phases"] == ["faults", "restart"]
 
 
