@@ -2626,6 +2626,7 @@ def _concurrent_finite_benchmark(
     competing_io_mib_per_second: int = 0,
     competing_io_max_mib: int = 0,
     api_tokens: Sequence[str] = (),
+    expected_rate_limited_count: int | None = None,
 ) -> dict[str, Any]:
     """Run a bounded finite batch with optional same-filesystem I/O load."""
     if not 1 <= client_concurrency <= CONCURRENCY_WORKERS_MAX:
@@ -2720,16 +2721,29 @@ def _concurrent_finite_benchmark(
     elapsed_ms = [result[2] for result in results]
     ttft_ms = [result[3] for result in results if result[3] is not None]
     completed = sum(1 for status, body, _, _ in results if status == 200 and body)
+    rate_limited = sum(
+        1
+        for status, body, _, _ in results
+        if status == 429 and b"short_window_rate_limited" in body
+    )
     status_counts: dict[str, int] = {}
     for status, _, _, _ in results:
         key = str(status)
         status_counts[key] = status_counts.get(key, 0) + 1
+    expected_throttle_pass = _expected_short_window_throttle_counts(
+        results, expected_rate_limited_count, request_count
+    )
     return {
-        "status": "measured" if completed == request_count else "fail",
+        "status": "measured"
+        if completed == request_count or expected_throttle_pass
+        else "fail",
         "request_count": request_count,
         "client_concurrency": client_concurrency,
         "completed_count": completed,
         "failed_count": request_count - completed,
+        "rate_limited_count": rate_limited,
+        "expected_rate_limited_count": expected_rate_limited_count,
+        "expected_throttle_pass": expected_throttle_pass,
         "http_status_counts": status_counts,
         "batch_elapsed_ms": round(elapsed_seconds * 1000),
         "requests_per_second": round(request_count / elapsed_seconds, 3),
@@ -2749,6 +2763,25 @@ def _concurrent_finite_benchmark(
             ),
         },
     }
+
+
+def _expected_short_window_throttle_counts(
+    results: Sequence[tuple[int, bytes, int, int | None]],
+    expected_rate_limited_count: int | None,
+    request_count: int,
+) -> bool:
+    if expected_rate_limited_count is None or len(results) != request_count:
+        return False
+    admitted = sum(status == 200 and bool(body) for status, body, _, _ in results)
+    limited = sum(
+        status == 429 and b"short_window_rate_limited" in body
+        for status, body, _, _ in results
+    )
+    return (
+        admitted == request_count - expected_rate_limited_count
+        and limited == expected_rate_limited_count
+        and all(status in {200, 429} for status, _, _, _ in results)
+    )
 
 
 def _command_token(
@@ -3203,6 +3236,7 @@ def run_qualification(
     competing_io_max_mib: int = 0,
     benchmark_principals: int = 1,
     benchmark_budget_mode: str = "none",
+    admission_fairness_rate_per_minute_per_principal: int | None = None,
     target_class: str = "sbc",
     provider_latency_profile: str = "instant",
 ) -> dict[str, Any]:
@@ -3225,6 +3259,20 @@ def run_qualification(
         raise ValueError("benchmark principals must be between 1 and 49")
     if benchmark_budget_mode not in {"none", "user", "global", "user-global"}:
         raise ValueError("invalid benchmark budget mode")
+    if admission_fairness_rate_per_minute_per_principal is not None and not (
+        1 <= admission_fairness_rate_per_minute_per_principal <= 60_000
+    ):
+        raise ValueError("admission fairness rate must be between 1 and 60000")
+    if admission_fairness_rate_per_minute_per_principal is not None and (
+        benchmark_samples <= 0
+        or benchmark_budget_mode != "user-global"
+        or benchmark_principals < 2
+        or concurrency_requests < benchmark_principals
+    ):
+        raise ValueError(
+            "active fairness qualification requires benchmark mode, multiple "
+            "principals, and user-global budgets"
+        )
     if target_class not in {"sbc", "ordinary-server"}:
         raise ValueError("target class must be sbc or ordinary-server")
     if provider_latency_profile not in {"instant", "mixed-0-10-50ms"}:
@@ -4619,6 +4667,42 @@ def run_qualification(
                     )
                     benchmark["principal_count"] = benchmark_principals
                     benchmark["budget_mode"] = benchmark_budget_mode
+                    expected_rate_limited_count = None
+                    if admission_fairness_rate_per_minute_per_principal is not None:
+                        # Keep setup and warm-up work outside the measured policy.
+                        # Rehash installs the limiter immediately before the
+                        # concurrent batch, whose fresh principals each start
+                        # with exactly one token at the selected 1/minute rate.
+                        with config.open("a", encoding="utf-8") as config_file:
+                            config_file.write(
+                                "\n[admission_fairness]\n"
+                                "requests_per_minute_per_principal = "
+                                f"{admission_fairness_rate_per_minute_per_principal}\n"
+                            )
+                        rehash_result = _command(
+                            "activate-admission-fairness",
+                            binary,
+                            config,
+                            env,
+                            ("rehash", "--json"),
+                            timeout,
+                        )
+                        commands.append(rehash_result)
+                        if rehash_result.status != "pass":
+                            raise QualificationError(
+                                "could not activate the measured admission policy"
+                            )
+                        expected_rate_limited_count = (
+                            concurrency_requests - benchmark_principals
+                        )
+                        benchmark["admission_fairness"] = {
+                            "requests_per_minute_per_principal": (
+                                admission_fairness_rate_per_minute_per_principal
+                            ),
+                            "configuration": "live rehash immediately before batch",
+                            "expected_initially_admitted": benchmark_principals,
+                            "expected_rate_limited": expected_rate_limited_count,
+                        }
                     concurrent = _concurrent_finite_benchmark(
                         benchmark_process,
                         port,
@@ -4629,6 +4713,7 @@ def run_qualification(
                         competing_io_mib_per_second=competing_io_mib_per_second,
                         competing_io_max_mib=competing_io_max_mib,
                         api_tokens=principal_tokens,
+                        expected_rate_limited_count=expected_rate_limited_count,
                     )
                     benchmark["runs"]["concurrent_native_responses_finite"] = concurrent
                     if diagnose_finite_tail is not None:
@@ -5057,6 +5142,16 @@ def _parser() -> argparse.ArgumentParser:
         help="Apply no budget, hard per-user, hard global, or both request budgets.",
     )
     parser.add_argument(
+        "--admission-fairness-rate-per-minute-per-principal",
+        type=int,
+        metavar="N",
+        help=(
+            "For an ordinary-server benchmark, enable the 60-second short-window "
+            "limiter immediately before the concurrent batch and measure expected "
+            "429 rejections at this per-principal rate."
+        ),
+    )
+    parser.add_argument(
         "--diagnose-finite-tail",
         type=_diagnose_sample_count,
         default=None,
@@ -5212,6 +5307,9 @@ def main(argv: Sequence[str] | None = None) -> int:
             competing_io_max_mib=args.competing_io_max_mib,
             benchmark_principals=args.benchmark_principals,
             benchmark_budget_mode=args.benchmark_budget_mode,
+            admission_fairness_rate_per_minute_per_principal=(
+                args.admission_fairness_rate_per_minute_per_principal
+            ),
             target_class=args.target_class,
             provider_latency_profile=args.provider_latency_profile,
         )

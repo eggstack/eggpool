@@ -44,6 +44,7 @@ from scripts.qualification_sbc import (
     _diagnose_sample_count,
     _diagnostic_phase_summary,
     _direct_provider_control,
+    _expected_short_window_throttle_counts,
     _m007_candidate_gates_pass,
     _ns_to_ms,
     _percentile,
@@ -74,6 +75,21 @@ from scripts.qualification_sbc import (
     resource_sample,
     run_qualification,
 )
+
+
+def test_m023_throttle_measurement_requires_expected_429_code_and_admission_count() -> (
+    None
+):
+    results = [
+        (200, b"{}", 3, None),
+        (200, b"{}", 4, None),
+        (429, b'{"code":"short_window_rate_limited"}', 1, None),
+        (429, b'{"code":"short_window_rate_limited"}', 1, None),
+    ]
+    assert _expected_short_window_throttle_counts(results, 2, 4)
+    assert not _expected_short_window_throttle_counts(results, 1, 4)
+    wrong_code = [*results[:-1], (429, b'{"code":"budget_exceeded"}', 1, None)]
+    assert not _expected_short_window_throttle_counts(wrong_code, 2, 4)
 
 
 def test_q008_refuses_non_linux_or_non_aarch64_without_claiming_pass() -> None:
