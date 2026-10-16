@@ -16,13 +16,14 @@ Related ADRs:
 
 ## 1. Purpose and ownership boundary
 
-Improve the *measured* concurrent latency envelope of one local/SBC
-EggPool instance without regressing the fast single-user path or
-introducing SaaS/cluster complexity. This is a **separate non-release-
+Provide evidence for two distinct profiles: a solo owner using a lightweight
+SBC (microSD included) and a small team using an ordinary on-prem server
+with durable SSD/NVMe storage, without regressing single-user response latency
+or introducing SaaS/cluster complexity. This is a **separate non-release-
 blocking diagnostic workstream**, opened because the original on-prem
 M012 Pi 5/MMC qualification exceeded predeclared tail-latency gates.
 It does **not** retroactively reopen the M012 closure or block
-on-prem M016 final security/merge-readiness reconciliation. It may
+post-merge user access corrective milestones M017–M022. It may
 find a new bounded optimization opportunity; no such implementation
 is authorized until evidence isolates cause and a plan is accepted.
 
@@ -112,10 +113,10 @@ claiming a runtime optimization.
   target using microSD/MMC boot storage, controlled host
   activity and performance counters. SSD/external storage is
   optional exploratory evidence, not a completion dependency.
-- Soft/interface: ongoing Persistence roadmap owns any
-  architectural storage-policy experiment; a future M002
-  must not be registered until M001 identifies measurable
-  cause and independently accepted constraints.
+- Interface: Persistence roadmap owns any architectural storage-policy
+  experiment; M002 is a separate **ordinary-server measurement** plan, not
+  the previously deferred production optimization. M001's storage
+  attribution supplies a baseline; no new WAL/SQLite change is authorized.
 - **No dependency edge** from this subsystem to on-prem
   M014/M015/M016 security or merge readiness. The current
   documented small-team envelope is limited but truthful.
@@ -135,9 +136,21 @@ budget cases remain conditions for future optimization or broader operating
 claims. Source:
 `plans/implementation/on-prem-concurrency-performance/001-pi5-mmc-tail-latency-attribution.md`.
 
-Future optimization milestone: **not registered**. Requires
-separate scoped plan, architectural check and measurable
-regression guard; not authorized by the diagnostic alone.
+### M002 — Ordinary-server small-team baseline
+
+Class: polish. Closed with a measured one-host synthetic envelope across
+1/5/10/25/49 named principals and 1/2/4/8/16 concurrent requests, three
+fresh-root repetitions per condition, managed lifecycle/recovery checks, and a
+bounded competing-I/O observation. Use the host-specific result for relative
+sizing only; it is not an SLA or a provider-throughput promise. SBC microSD
+remains the solo low-end performance/durability reference; it is **not** a
+gate for team capacity or server release.
+Source: `plans/implementation/on-prem-concurrency-performance/002-ordinary-server-team-baseline.md`.
+Closure: `plans/closure/on-prem-concurrency-performance/002-status.md`.
+
+Future **production** optimization milestone: not registered. Requires a
+separate scope and measurable regression guard; no journal, checkpoint,
+worker, or storage topology change is authorized by either M001 or M002.
 
 ## 8. Cross-cutting requirements
 
@@ -185,14 +198,16 @@ a normal developer workstation.
 
 ## 11. Completion definition
 
-M001 accepted closure with reproducible physical artifacts
-and an explicit causal/no-causal conclusion; scope can close
-even when an environment-only tail remains, provided
-the restricted Pi/MMC envelope continues to be documented.
-No optimization promise or new 8-way SLA is inferred.
+M001 preserves its conditionally closed microSD attribution.
+M002's eventual disposition must publish a separately measured,
+realistically sized ordinary-server team envelope (or honestly mark
+unavailable hardware unmeasured). It does not require eliminating
+the Pi/MMC solo latency tail. No optimization promise or new
+8-way/49-concurrent SLA is inferred.
 
 ## 12. Milestone status
 
 | Milestone | Status | Implementation plan | Closure record | Blockers |
 |---|---|---|---|---|
-| M001 | conditionally closed | `plans/implementation/on-prem-concurrency-performance/001-pi5-mmc-tail-latency-attribution.md` | `plans/closure/on-prem-concurrency-performance/001-status.md` | Four-way microSD/MMC tail attributed to durable storage; controlled competing-I/O and broader account/budget matrix remain conditions. SSD/NVMe is optional and not a closure dependency. No dependency edge to on-prem M016. |
+| M001 | conditionally closed | `plans/implementation/on-prem-concurrency-performance/001-pi5-mmc-tail-latency-attribution.md` | `plans/closure/on-prem-concurrency-performance/001-status.md` | Four-way microSD/MMC tail attributed to durable storage; controlled competing-I/O and broader account/budget matrix remain conditions. SSD/NVMe is optional and not a closure dependency. No dependency edge to post-merge on-prem operability plans. |
+| M002 | closed | `plans/implementation/on-prem-concurrency-performance/002-ordinary-server-team-baseline.md` | `plans/closure/on-prem-concurrency-performance/002-status.md` | One-host synthetic ordinary-server baseline and managed recovery evidence recorded; no universal capacity promise and no production optimization authorized. |

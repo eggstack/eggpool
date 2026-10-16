@@ -126,6 +126,16 @@ impl ControlRequest {
         }
     }
 
+    pub fn readback(request_id: impl Into<String>, command: &str) -> Self {
+        Self {
+            protocol_version: PROTOCOL_VERSION,
+            request_id: request_id.into(),
+            command: command.to_owned(),
+            validated_digest: None,
+            params: None,
+        }
+    }
+
     pub fn parse_frame(frame: &[u8]) -> Result<Self, ProtocolError> {
         if frame.is_empty() || frame == b"\n" || frame == b"\r\n" {
             return Err(ProtocolError::Empty);
@@ -173,7 +183,12 @@ impl ControlRequest {
         let command = object
             .get("command")
             .and_then(Value::as_str)
-            .filter(|value| *value == "reload_config")
+            .filter(|value| {
+                matches!(
+                    *value,
+                    "reload_config" | "read_status" | "read_runtime_status"
+                )
+            })
             .ok_or(ProtocolError::UnknownCommand)?;
         let validated_digest = match object.get("validated_digest") {
             None | Some(Value::Null) => None,
@@ -192,6 +207,9 @@ impl ControlRequest {
             Some(Value::Object(value)) => Some(value.clone().into_iter().collect()),
             _ => return Err(ProtocolError::InvalidParams),
         };
+        if command != "reload_config" && (validated_digest.is_some() || params.is_some()) {
+            return Err(ProtocolError::InvalidParams);
+        }
         Ok(Self {
             protocol_version,
             request_id: request_id.to_owned(),
@@ -214,6 +232,8 @@ pub struct ControlResponse {
     pub restart_required: Vec<String>,
     pub retirement_pending: bool,
     pub message: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub payload: Option<Value>,
 }
 
 impl ControlResponse {
@@ -229,6 +249,7 @@ impl ControlResponse {
             restart_required: Vec::new(),
             retirement_pending: false,
             message: message.to_owned(),
+            payload: None,
         }
     }
 
@@ -259,6 +280,23 @@ impl ControlResponse {
             restart_required: result.restart_required_paths,
             retirement_pending: result.retirement_pending,
             message: message.to_owned(),
+            payload: None,
+        }
+    }
+
+    pub fn with_payload(request_id: impl Into<String>, payload: Value) -> Self {
+        Self {
+            protocol_version: PROTOCOL_VERSION,
+            request_id: request_id.into(),
+            ok: true,
+            stage: "readback".to_owned(),
+            generation: None,
+            changed_sections: Vec::new(),
+            warnings: Vec::new(),
+            restart_required: Vec::new(),
+            retirement_pending: false,
+            message: "local status snapshot".to_owned(),
+            payload: Some(payload),
         }
     }
 }
@@ -323,6 +361,23 @@ impl ControlClient {
         );
         self.send(ControlRequest::reload(request_id, validated_digest))
             .await
+    }
+
+    pub async fn read_status(&self, runtime: bool) -> Result<ControlResponse, ControlClientError> {
+        let request_id = format!(
+            "rust-{}-{}",
+            std::process::id(),
+            NEXT_REQUEST_ID.fetch_add(1, Ordering::Relaxed)
+        );
+        self.send(ControlRequest::readback(
+            request_id,
+            if runtime {
+                "read_runtime_status"
+            } else {
+                "read_status"
+            },
+        ))
+        .await
     }
 
     pub async fn send(

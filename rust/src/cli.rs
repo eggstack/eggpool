@@ -145,6 +145,14 @@ pub struct OnboardArgs {
 pub enum UsersCommand {
     /// Create the first administrator and personal inference credential.
     Bootstrap(UserPasswordArgs),
+    /// Create a member with a temporary password and optional initial profile.
+    Add(UserAddArgs),
+    /// Disable a user, revoking sessions and personal credentials.
+    Disable(UserLifecycleArgs),
+    /// Reactivate a disabled user; issue a new personal token separately.
+    Enable(UserLifecycleArgs),
+    /// Show one local user's non-secret status.
+    Show(UserNameArgs),
     /// Show local account names and status without secrets.
     List,
     /// Reset a user's password and revoke their API credentials.
@@ -154,7 +162,7 @@ pub enum UsersCommand {
     /// Revoke every API credential owned by one user.
     Revoke(UserNameArgs),
     /// Retire legacy access after public dashboard access is disabled.
-    EnableManaged,
+    EnableManaged(UserActorArgs),
     /// Create and assign model-policy profiles during the CLI-only M004 phase.
     #[command(subcommand)]
     Policy(UsersPolicyCommand),
@@ -165,6 +173,26 @@ pub enum UsersCommand {
     /// per-user rule. Requires an active administrator.
     #[command(subcommand)]
     GlobalBudget(UsersGlobalBudgetCommand),
+    /// Show, select, or clear the default profile for newly created members.
+    #[command(subcommand)]
+    Defaults(UsersDefaultsCommand),
+}
+
+#[derive(Debug, Subcommand)]
+pub enum UsersDefaultsCommand {
+    /// Show the default member profile, if one is selected.
+    Show,
+    /// Apply a profile to members created from now on.
+    Set(UserDefaultProfileSetArgs),
+    /// Leave future members without a profile (deny by default).
+    Clear(UserActorArgs),
+}
+
+#[derive(Debug, clap::Args)]
+pub struct UserDefaultProfileSetArgs {
+    pub profile_id: String,
+    #[arg(long, default_value = "admin")]
+    pub actor: String,
 }
 
 #[derive(Debug, Subcommand)]
@@ -306,6 +334,35 @@ pub struct UserPasswordArgs {
     /// Allow one-time token output when stdout is not a TTY.
     #[arg(long)]
     pub show_secret: bool,
+}
+
+#[derive(Debug, clap::Args)]
+pub struct UserAddArgs {
+    pub username: String,
+    /// Read the temporary password from stdin instead of prompting on a TTY.
+    #[arg(long)]
+    pub password_stdin: bool,
+    /// Assign an existing model-policy profile in the same transaction.
+    #[arg(long)]
+    pub profile_id: Option<String>,
+    /// Create with no profile even when an instance default exists.
+    #[arg(long, conflicts_with = "profile_id")]
+    pub no_profile: bool,
+    #[arg(long, default_value = "admin")]
+    pub actor: String,
+}
+
+#[derive(Debug, clap::Args)]
+pub struct UserLifecycleArgs {
+    pub username: String,
+    #[arg(long, default_value = "admin")]
+    pub actor: String,
+}
+
+#[derive(Debug, clap::Args)]
+pub struct UserActorArgs {
+    #[arg(long, default_value = "admin")]
+    pub actor: String,
 }
 
 #[derive(Debug, clap::Args)]

@@ -17,14 +17,20 @@ Back to [Architecture](README.md). See also the review index in [overview.md §1
 
 ## Control socket
 
-`rust/src/operations/control.rs` owns the Unix-domain JSON protocol, one request per connection, `PROTOCOL_VERSION = 1`, `MAX_REQUEST_BYTES = 65_536`, `CONTROL_TIMEOUT = 30s` (`rust/src/operations/control.rs:31-34`):
+`rust/src/operations/control.rs` owns the Unix-domain JSON protocol, one request per connection, `PROTOCOL_VERSION = 1`, `MAX_REQUEST_BYTES = 65_536`, `CONTROL_TIMEOUT = 30s`:
 
-- `ControlRequest` (`reload`, `parse_frame`): the only accepted command is `reload_config` (`control.rs:173-177`), with an optional 64-char lowercase hex `validated_digest`. Depth pre-checks bound parsing before DOM allocation.
-- `ControlResponse` (`error`, `from_reload`): bounded metadata-only outcomes (stage, generation, changed sections, restart-required paths, retirement flag); no secrets, bodies, or provider error text.
-- `ControlClient` (`new`, `with_timeout`, `reload`, `send`): typed one-shot client used by `rehash`.
+- `ControlRequest` (`reload`, `readback`, `parse_frame`): accepts `reload_config`, `read_status`, and `read_runtime_status`. Reload alone accepts an optional 64-char lowercase hex `validated_digest`; readback requests reject parameters. Depth pre-checks bound parsing before DOM allocation.
+- `ControlResponse` (`error`, `from_reload`, `with_payload`): bounded reload metadata or sanitized status projections; no secrets, bodies, or provider error text. Readback is capped below the 65,536-byte frame limit.
+- `ControlClient` (`new`, `with_timeout`, `reload`, `read_status`, `send`): typed one-shot client used by `rehash`, `status`, and `runtime-status`.
 - `ControlServerHandle` (`path`, `close`) via `start`: sole process-local listener, socket mode `0o600`, runtime dir `0o700`, stale-socket identity checks; `close` unlinks only its own socket while a retained reload may still finish.
 
-The control plane carries reload only. `runtime-status` is not a control command: `runtime.rs::fetch_runtime_status` (`rust/src/runtime.rs:2759-2761`) reads the authenticated `GET /api/stats/runtime` projection (`server/health.rs::runtime_status` at `rust/src/server/health.rs:129`), which renders `RuntimeDiagnosticsSnapshot`.
+The same-user local operator reads status through this socket after identity
+initialization; HTTP `/api/status` and `/api/stats/runtime` keep their existing
+browser-session authorization. The socket resides in a private runtime
+directory and is mode `0o600`, so possession of the OS-owned local identity is
+the authority. Missing/stale sockets are reported as unavailable; malformed
+or oversized protocol responses fail closed. Member tokens never gain status
+or runtime-diagnostics access.
 
 ## Config mutation
 

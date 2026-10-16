@@ -208,7 +208,9 @@ async fn two_user_browser_journey_fences_admin_data_and_personal_credentials() {
         identity::bootstrap_admin(&database, "admin", "M006 strong admin password passphrase")
             .await
             .unwrap();
-    identity::enable_managed(&database).await.unwrap();
+    identity::enable_managed(&database, &admin.id)
+        .await
+        .unwrap();
 
     let process = ProcessRuntime::new(database.clone()).expect("process runtime");
     let mut config = Config::default();
@@ -278,9 +280,39 @@ async fn two_user_browser_journey_fences_admin_data_and_personal_credentials() {
         "{profile_created}"
     );
 
-    let create_form = format!(
-        "username=member&password=M006+temporary+member+password&profile_id=team&csrf={csrf}"
+    let default_form = format!("profile_id=team&csrf={csrf}");
+    let default_saved = http_request(
+        address,
+        "POST",
+        "/admin/profiles/default",
+        &default_form,
+        Some(&admin_cookies),
+        Some(&origin),
+        None,
+    )
+    .await;
+    assert!(default_saved.starts_with("HTTP/1.1 303"), "{default_saved}");
+    let profiles_page = http_request(
+        address,
+        "GET",
+        "/profiles",
+        "",
+        Some(&admin_cookies),
+        None,
+        None,
+    )
+    .await;
+    assert!(
+        profiles_page.contains("Default for newly created members"),
+        "{profiles_page}"
     );
+    assert!(
+        profiles_page.contains("Clear default for future members"),
+        "{profiles_page}"
+    );
+
+    let create_form =
+        format!("username=member&password=M006+temporary+member+password&profile_id=&csrf={csrf}");
     let created = http_request(
         address,
         "POST",
@@ -292,6 +324,51 @@ async fn two_user_browser_journey_fences_admin_data_and_personal_credentials() {
     )
     .await;
     assert!(created.starts_with("HTTP/1.1 303"), "{created}");
+    let assigned_default: bool = database
+        .call(|connection| {
+            connection.query_row(
+                "SELECT EXISTS(SELECT 1 FROM user_profile_assignments a JOIN users u ON u.id = a.user_id WHERE u.username = 'member' AND a.profile_id = 'team')",
+                [],
+                |row| row.get(0),
+            )
+        })
+        .await
+        .unwrap();
+    assert!(
+        assigned_default,
+        "browser creation applies the selected instance default"
+    );
+    let explicit_none_form = format!(
+        "username=without-profile&password=M006+temporary+member+password&profile_id=__none&csrf={csrf}"
+    );
+    let explicit_none_created = http_request(
+        address,
+        "POST",
+        "/admin/users/create",
+        &explicit_none_form,
+        Some(&admin_cookies),
+        Some(&origin),
+        None,
+    )
+    .await;
+    assert!(
+        explicit_none_created.starts_with("HTTP/1.1 303"),
+        "{explicit_none_created}"
+    );
+    let explicitly_unassigned: bool = database
+        .call(|connection| {
+            connection.query_row(
+                "SELECT EXISTS(SELECT 1 FROM user_profile_assignments a JOIN users u ON u.id = a.user_id WHERE u.username = 'without-profile')",
+                [],
+                |row| row.get(0),
+            )
+        })
+        .await
+        .unwrap();
+    assert!(
+        !explicitly_unassigned,
+        "explicit no-profile choice bypasses default"
+    );
     let user_page = http_request(
         address,
         "GET",
@@ -694,10 +771,13 @@ async fn managed_server(
 async fn browser_sign_in_accepts_the_origin_and_referer_pair_a_real_browser_sends() {
     let (_directory, database) = database().await;
     identity::mark_fresh_uninitialized(&database).await.unwrap();
-    identity::bootstrap_admin(&database, "admin", "M011 strong admin password passphrase")
+    let (admin, _) =
+        identity::bootstrap_admin(&database, "admin", "M011 strong admin password passphrase")
+            .await
+            .unwrap();
+    identity::enable_managed(&database, &admin.id)
         .await
         .unwrap();
-    identity::enable_managed(&database).await.unwrap();
     let (address, handle, task) = managed_server(&database).await;
     let origin = format!("http://{address}");
     let form = "username=admin&password=M011+strong+admin+password+passphrase";

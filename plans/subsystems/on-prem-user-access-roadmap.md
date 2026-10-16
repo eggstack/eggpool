@@ -1,6 +1,6 @@
 # On-Prem User Access Roadmap
 
-Status: active
+Status: closed
 
 Long-term references:
 
@@ -73,44 +73,31 @@ as authority, custom upstream per-user provider secrets, or a published
 
 ## 4. Current state
 
-M001–M007 were implemented on PR #7 from baseline
-`c18dcc2051ae4987a2cb95a7cd046b8aff2095ff` and
-each has a retained closure record. M002 and M004 are closed.
-M001, M003, M005, M006 and M007 are **conditionally closed**,
-not equivalent to release qualification.
+PR #7 landed on `main` as merge commit `88f58bbf2e9095cf46437945edf83e580270bdb6`
+on 2026-10-15. M001–M016 closure records remain immutable historical
+evidence; M016's pre-merge review hold no longer describes the live branch.
+The current runtime includes SQLite identity/session/policy/budget/audit
+migrations 0055–0062, browser and personal-token auth, user/model/instance
+budgets, CSRF-fenced administration and scoped discovery. Physical Pi 5
+qualification measured solo/lightweight footprint and microSD saturation,
+not ordinary-server small-team capacity; see M012 closure and separate
+on-prem concurrency M001.
 
-The current Rust implementation contains:
-- Append-only SQLite identity/session/request-attribution/policy/budget/admin
-  migrations **0055–0060**; `rust/src/identity.rs`, `web_session.rs`,
-  `model_policy.rs`, `user_budget.rs`.
-- `rust/src/server/middleware.rs` / `auth.rs`: personal agent tokens,
-  opaque browser sessions, CSRF and managed-route role fencing.
-- `rust/src/coordinator/endpoints.rs`, `publication.rs`,
-  `finalization.rs`: per-request principal, concrete-model authorization
-  and downstream-user budget holds/usage settlement.
-- `rust/src/server/dashboard/admin.rs` and `render/admin.rs`:
-  admin/member user, profile, budget, usage and audit views.
-- `rust/tests/on_prem_*.rs` and successful local/hosted default CI;
-  the M007 synthetic provider artifact exercises seven loopback requests.
+A post-merge integration audit found independent correctness gaps not covered
+by the M016 pre-merge checks: `configsetup`/`configremote`/`getkey`
+still rely on the retired shared server key; `status` and
+`runtime-status` authenticate via that key and fail after bootstrap;
+remote plaintext `GET /login` renders a password form that cannot safely
+submit; first-member web transition and CLI `enable-managed` disagree
+about config prerequisites; headless member CRUD and safe default provisioning
+are incomplete. Hard-cost admission is already proof-or-reject (M008/M015),
+but coding-agent compatibility needs bounded qualification.
 
-Remaining verified gaps (see immutable closure records M001/M003/M005–M007):
-- M005 token/USD hard-limit semantics are not proven from estimated holds;
-  unknown-price models can receive generic USD estimates; **global instance
-  ceilings are absent**.
-- Budget-specific process-crash and actual schema-54 restored-backup
-  qualification, plus ordinary-host SQLite-gate overhead measurements,
-  were not performed.
-- M006 new admin/member pages lack browser screenshot/interaction
-  qualification. The Python oracle applies to pre-existing pages only.
-- Physical Pi/Le Potato Argon2/SQLite/WAL/TTFT and 1/5/10/25/49 **named**
-  user workloads are unmeasured. No concurrency/capacity claim is authorized.
-- M003 records local `operations::update` failures; the latest hosted
-  branch CI is green, but reproducible platform classification is not yet
-  documented.
-
-Correctives M008–M012 were created by explicit user direction;
-the predecessor closures remain immutable. This roadmap is **active**
-until required corrective closure evidence exists.
+Product/hardware scope clarified 2026-10-15: **SBC/microSD is primarily
+the solo-owner/lightweight reference**. Small teams are expected primarily
+on ordinary on-prem Linux servers with durable SSD/NVMe and operator-managed
+HTTPS for browsers. None of the new plans assumes 49 concurrent requests or
+relaxes the single-process/SQLite/WAL architecture.
 
 ## 5. Target architecture
 
@@ -288,13 +275,13 @@ remaining M015 finding. Closure evidence:
 
 ### M016 — Final integration and merge-readiness reconciliation
 
-Class: polish. Closed as a pre-merge reconciliation on exact
-head `3d68c715`. Local, browser, release-doc, Q007 and exact-head
-hosted CI/installer/**cargo-deny** evidence pass. Recommendation:
-**merge held pending maintainer review** because GitHub has no
-submitted PR review. PR #7 remains open; the subsystem roadmap stays
-active until a maintainer decides whether to merge. No automatic merge
-was performed and no 49-concurrent capacity claim is made. Closure:
+Class: polish. Closed as a **historical pre-merge reconciliation**
+on exact head `3d68c715`. Local, browser, release-doc, Q007 and exact-head
+hosted CI/installer/**cargo-deny** evidence passed. The M016 closure
+recommended holding for maintainer review at that point; the PR was
+subsequently merged on 2026-10-15 as `88f58bbf`. This current roadmap
+tracks new M017–M023 post-merge work, not the old merge hold. No 49-concurrent
+capacity claim was made. Closure:
 `plans/closure/on-prem-user-access/016-status.md`. Source:
 `plans/implementation/on-prem-user-access/016-final-pr7-merge-reconciliation.md`.
 
@@ -308,6 +295,85 @@ was performed and no 49-concurrent capacity claim is made. Closure:
   M001 Pi 5/MMC tail attribution, does **not** block M014–M016
   or revise M012's closed physical evidence. Any new storage
   topology needs a separate accepted ADR.
+
+### Post-merge M017–M023 corrective and team-utility milestones
+
+#### M017 — Managed client credential reconciliation (closed)
+
+Class: capability. Ready independently. Repair `onboard`,
+`getkey/newkey`, `configsetup`, `configremote` and `eggpool-connect`
+to use valid personal keys after bootstrap, preserve `EGGPOOL_API_KEY`
+and secret-free `epc1`, and test real end-to-end agent requests.
+Source: `plans/implementation/on-prem-user-access/017-managed-client-credential-reconciliation.md`.
+
+#### M018 — Local operator status corrective
+
+Class: capability. Ready independently. Restore `eggpool status` and
+`runtime-status` for OS-authorized local operators without granting agent
+tokens browser/admin rights. Prefer existing owner-protected local control
+channel; new privilege decisions require ADR review.
+Source: `plans/implementation/on-prem-user-access/018-local-operator-status-corrective.md`.
+
+#### M019 — Login transport and solo LAN operability (closed)
+
+Class: invariant. Ready independently. Prevent remote plaintext
+`GET /login` rendering credential fields, verify proxy/CSRF invariants,
+and document a clear SSH/loopback solo SBC browser path plus ordinary-server
+TLS-proxy team path. No native TLS server or insecure LAN default.
+Source: `plans/implementation/on-prem-user-access/019-login-transport-solo-lan-corrective.md`.
+
+#### M020 — Managed transition and headless administration (closed)
+
+Class: capability. Closed after hard M017/M019 closure. Unify
+`enable-managed` with member-create transition requirements and add local
+CLI create/disable/enable/show member workflows; preserve audit, CSRF,
+password-stdin, last-admin and atomic creation guarantees.
+Source: `plans/implementation/on-prem-user-access/020-managed-transition-headless-admin.md`.
+
+#### M021 — Default member policy and provisioning UX (closed)
+
+Class: capability. Closed after hard M020 closure. One audited, instance-local
+default profile applies transactionally to future members only, with explicit
+profile and no-profile choices, admin/CLI consistency, and understandable
+catalog-empty/deny feedback. No budget template is copied; existing budget
+scopes remain independently configured. Never grant unaudited model access.
+Source: `plans/implementation/on-prem-user-access/021-default-member-policy-provisioning.md`.
+
+#### M022 — Hard-budget agent interoperability (closed)
+
+Class: polish. Closed after measuring supported client/surface output-cap
+behavior and adding actionable hard-budget diagnostics. No output cap is
+injected; M008/M015 proof-or-reject guarantees remain in force.
+Source: `plans/implementation/on-prem-user-access/022-hard-budget-agent-compatibility.md`.
+
+#### M023 — Short-window team fairness controls (closed)
+
+Class: capability. Hard M022 dependency and the operational ordinary-server
+Linux/SSD-or-NVMe baseline gate are closed. Production implementation,
+functional verification, the post-change no-rule comparison, and active
+throttle measurement are complete. The qualification is host-specific and
+synthetic; it establishes no universal capacity or latency guarantee.
+Source: `plans/implementation/on-prem-user-access/023-short-window-fairness-controls.md`.
+Final performance evidence: `plans/closure/on-prem-user-access/023-performance-qualification.md`.
+
+### Post-merge dependency and hardware policy
+
+- M017–M023 are closed. M022 did not depend on a Pi/Le Potato run; it became
+  ready after M017 closed. The separate M023 host comparison is recorded in its
+  final closure pass.
+- Hard: M017 + M019 -> M020 -> M021; M017 -> M022 -> M023.
+- Interface: M018's privileged local transport must not broaden HTTP rights;
+  any new auth authority stops for ADR review. M022 hard-cost proof contract
+  is fixed by M008/M015.
+- Operational: ordinary-server M002 performance qualification in
+  `plans/subsystems/on-prem-concurrency-performance-roadmap.md` is independent
+  and nonblocking to M017–M022; it supplies evidence for M023 and future
+  team-capacity claims. Pi microSD tail investigation is a solo benchmark,
+  not a team-server release gate.
+- Deferred, not silently bundled: optional personal-token expiry/rotation,
+  secondary administrators (requires admin uniqueness migration and security
+  review), notifications and SSO; take them as separate bounded plans only
+  after core operability closure.
 
 ## 8. Cross-cutting requirements
 
@@ -389,4 +455,11 @@ A ready plan is not an implemented capability.
 | M013 | closed | `plans/implementation/on-prem-user-access/013-transcode-eligibility-corrective.md` | `plans/closure/on-prem-user-access/013-status.md` | One-line transcode-protocol restoration plus admission bridge guard; Q007 green. |
 | M014 | closed | `plans/implementation/on-prem-user-access/014-rustls-advisory-dependency-corrective.md` | `plans/closure/on-prem-user-access/014-status.md` | Rustls 0.23.46; exact-SHA hosted cargo-deny, CI, and installer jobs pass. Main receives the fix when PR #7 merges. |
 | M015 | closed | `plans/implementation/on-prem-user-access/015-authz-threat-review-corrective.md` | `plans/closure/on-prem-user-access/015-status.md` | Exact candidate `d8fd9c2a`; findings fixed and independently re-reviewed; exact-SHA hosted gates pass. |
-| M016 | closed | `plans/implementation/on-prem-user-access/016-final-pr7-merge-reconciliation.md` | `plans/closure/on-prem-user-access/016-status.md` | Exact candidate checks pass; merge held pending maintainer PR review. The roadmap remains active until the PR decision. |
+| M016 | closed | `plans/implementation/on-prem-user-access/016-final-pr7-merge-reconciliation.md` | `plans/closure/on-prem-user-access/016-status.md` | Exact candidate checks pass; merge held pending maintainer PR review. PR #7 subsequently merged at `88f58bbf`; historical M016 closure remains unchanged. |
+| M017 | closed | `plans/implementation/on-prem-user-access/017-managed-client-credential-reconciliation.md` | `plans/closure/on-prem-user-access/017-status.md` | Managed credential selection and keyless remote export; serial/default/no-default suites pass. |
+| M018 | closed | `plans/implementation/on-prem-user-access/018-local-operator-status-corrective.md` | `plans/closure/on-prem-user-access/018-status.md` | Private local control readback restores status after identity cutover; no HTTP privilege change; no successor unblocked. |
+| M019 | closed | `plans/implementation/on-prem-user-access/019-login-transport-solo-lan-corrective.md` | `plans/closure/on-prem-user-access/019-status.md` | Unsafe remote HTTP login GET returns no credential form; M020 unblocked. |
+| M020 | closed | `plans/implementation/on-prem-user-access/020-managed-transition-headless-admin.md` | `plans/closure/on-prem-user-access/020-status.md` | Headless member lifecycle and first-member transition are atomic and audited; M021 unblocked. |
+| M021 | closed | `plans/implementation/on-prem-user-access/021-default-member-policy-provisioning.md` | `plans/closure/on-prem-user-access/021-status.md` | Transactional future-only profile default; CLI/browser and no-profile journeys, migration, policy and budget boundaries verified. |
+| M022 | closed | `plans/implementation/on-prem-user-access/022-hard-budget-agent-compatibility.md` | `plans/closure/on-prem-user-access/022-status.md` | Captured Codex/OpenCode output-cap behavior; preserved hard proof-or-reject semantics and added actionable error codes. |
+| M023 | closed | `plans/implementation/on-prem-user-access/023-short-window-fairness-controls.md` | `plans/closure/on-prem-user-access/023-performance-qualification.md` | Modified-binary no-rule matrix and active-throttle measurements pass on ordinary Linux/NVMe. No successor is registered; no universal capacity claim. |

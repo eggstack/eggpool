@@ -174,6 +174,201 @@ async fn concurrent_policy_edit_keeps_each_snapshot_consistent_and_refreshes_new
 }
 
 #[tokio::test]
+async fn default_profile_provisions_future_members_only_and_is_audited() {
+    let database = database().await;
+    identity::mark_fresh_uninitialized(&database).await.unwrap();
+    let (admin, _) =
+        identity::bootstrap_admin(&database, "admin-a", "M021 strong administrator password")
+            .await
+            .unwrap();
+    identity::enable_managed(&database, &admin.id)
+        .await
+        .unwrap();
+    let policy = ModelPolicyService::new(database.clone());
+    policy
+        .create_profile("team", "Team", "allow", &admin.id)
+        .await
+        .unwrap();
+    policy
+        .set_profile_rule("team", "model-a/provider-a", "deny", &admin.id)
+        .await
+        .unwrap();
+    policy
+        .create_profile("unused", "Unused", "deny", &admin.id)
+        .await
+        .unwrap();
+
+    let before_default = identity::create_member_with_profile(
+        &database,
+        &admin.id,
+        "before-default",
+        "M021 temporary password",
+        None,
+    )
+    .await
+    .unwrap();
+    let before = policy.snapshot(&before_default.id).await.unwrap();
+    assert!(!before.has_profile());
+    assert!(!before.allows("model-a", None));
+
+    policy
+        .set_default_member_profile(Some("team"), &admin.id)
+        .await
+        .unwrap();
+    assert!(
+        policy
+            .snapshot(&before_default.id)
+            .await
+            .unwrap()
+            .revision()
+            > before.revision()
+    );
+    let profiles = policy.list_profiles().await.unwrap();
+    assert!(
+        profiles
+            .iter()
+            .any(|profile| profile.id == "team" && profile.is_default_member_profile)
+    );
+    assert!(!policy.delete_profile("team", 2, &admin.id).await.unwrap());
+
+    let created = identity::create_member_with_profile(
+        &database,
+        &admin.id,
+        "after-default",
+        "M021 temporary password",
+        None,
+    )
+    .await
+    .unwrap();
+    let provisioned = policy.snapshot(&created.id).await.unwrap();
+    assert!(provisioned.has_profile());
+    assert!(provisioned.allows("model-a", None));
+    assert!(!provisioned.allows("model-a", Some("provider-a")));
+    assert!(!before.has_profile(), "existing snapshot stays unchanged");
+    let still_unassigned = policy.snapshot(&before_default.id).await.unwrap();
+    assert!(
+        !still_unassigned.has_profile(),
+        "default does not reassign existing members"
+    );
+    let explicitly_unassigned = identity::create_member_without_profile(
+        &database,
+        &admin.id,
+        "explicit-no-profile",
+        "M021 temporary password",
+    )
+    .await
+    .unwrap();
+    assert!(
+        !policy
+            .snapshot(&explicitly_unassigned.id)
+            .await
+            .unwrap()
+            .has_profile(),
+        "explicit no-profile bypasses the instance default"
+    );
+
+    policy
+        .set_default_member_profile(None, &admin.id)
+        .await
+        .unwrap();
+    let no_default_member = identity::create_member_with_profile(
+        &database,
+        &admin.id,
+        "after-clear",
+        "M021 temporary password",
+        None,
+    )
+    .await
+    .unwrap();
+    assert!(
+        !policy
+            .snapshot(&no_default_member.id)
+            .await
+            .unwrap()
+            .has_profile()
+    );
+    assert!(policy.delete_profile("unused", 1, &admin.id).await.unwrap());
+    let audit = identity::admin_audit(&database, 100).await.unwrap();
+    assert!(
+        audit
+            .iter()
+            .any(|entry| entry.action == "set_default_member_profile")
+    );
+    assert!(
+        audit
+            .iter()
+            .any(|entry| entry.action == "clear_default_member_profile")
+    );
+    database.close().await.unwrap();
+}
+
+#[tokio::test]
+async fn member_creation_racing_default_change_observes_one_complete_policy() {
+    let database = database().await;
+    identity::mark_fresh_uninitialized(&database).await.unwrap();
+    let (admin, _) = identity::bootstrap_admin(
+        &database,
+        "admin-race",
+        "M021 strong administrator password",
+    )
+    .await
+    .unwrap();
+    identity::enable_managed(&database, &admin.id)
+        .await
+        .unwrap();
+    let policy = ModelPolicyService::new(database.clone());
+    policy
+        .create_profile("before", "Before", "deny", &admin.id)
+        .await
+        .unwrap();
+    policy
+        .create_profile("after", "After", "allow", &admin.id)
+        .await
+        .unwrap();
+    policy
+        .set_default_member_profile(Some("before"), &admin.id)
+        .await
+        .unwrap();
+
+    let (changed, created) = tokio::join!(
+        policy.set_default_member_profile(Some("after"), &admin.id),
+        identity::create_member_with_profile(
+            &database,
+            &admin.id,
+            "racing-member",
+            "M021 temporary password",
+            None,
+        ),
+    );
+    changed.unwrap();
+    let created = created.unwrap();
+    let assigned = database
+        .call(move |connection| {
+            let mut statement = connection
+                .prepare("SELECT profile_id FROM user_profile_assignments WHERE user_id = ?1")?;
+            statement
+                .query_map([created.id], |row| row.get::<_, String>(0))?
+                .collect::<Result<Vec<_>, _>>()
+        })
+        .await
+        .unwrap();
+    assert_eq!(assigned.len(), 1);
+    assert!(assigned[0] == "before" || assigned[0] == "after");
+    let member_policy = policy
+        .snapshot(
+            &identity::get_user_by_name(&database, "racing-member")
+                .await
+                .unwrap()
+                .unwrap()
+                .id,
+        )
+        .await
+        .unwrap();
+    assert!(member_policy.has_profile());
+    database.close().await.unwrap();
+}
+
+#[tokio::test]
 async fn revoked_admin_session_cannot_commit_a_policy_mutation() {
     let database = database().await;
     identity::mark_fresh_uninitialized(&database).await.unwrap();

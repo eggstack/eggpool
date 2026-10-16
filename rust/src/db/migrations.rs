@@ -203,9 +203,9 @@ mod tests {
     #[test]
     fn canonical_inventory_is_complete_and_immutable() {
         MigrationRunner::validate_embedded_checksums().expect("canonical checksums match");
-        assert_eq!(MigrationRunner::migrations().len(), 62);
+        assert_eq!(MigrationRunner::migrations().len(), 63);
         assert_eq!(MigrationRunner::migrations().first().unwrap().version, 1);
-        assert_eq!(MigrationRunner::migrations().last().unwrap().version, 62);
+        assert_eq!(MigrationRunner::migrations().last().unwrap().version, 63);
     }
 
     #[test]

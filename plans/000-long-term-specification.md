@@ -29,12 +29,17 @@ including `/v1/responses/compact`), and Anthropic Messages
 executable plus metadata/assets only. Repo-root `pyproject.toml` is
 tooling-only.
 
-EggPool's canonical operating profile is a single on-prem instance on SBC or ordinary
-local hardware, administered by one owner. An optional local-users mode serves
-small teams (target: fewer than approximately 50 named users) sharing
-operator-controlled routing to authorized provider APIs/subscriptions and
-self-hosted models. This is not a SaaS, enterprise IAM, or multi-organization
-hosting product; a 50-user capacity claim requires measured target evidence.
+EggPool's canonical operating profile is a single on-prem instance
+administered by a local owner. Single-user installations are especially suited
+to SBCs (including ordinary microSD-backed devices), which remain a useful
+lightweight performance/durability reference and should require no additional
+service or remote IAM. Optional local-users mode serves small teams (target:
+fewer than approximately 50 named users), typically on an ordinary on-prem
+server with durable storage, sharing operator-controlled routing to authorized
+provider APIs/subscriptions and self-hosted models. Named users are not
+simultaneous generations; any team throughput/concurrency claim requires
+representative ordinary-server hardware, workload and storage measurements.
+This is not a SaaS, enterprise IAM, or multi-organization hosting product.
 Provider topology, upstream credentials, and routing configuration remain in
 operator-owned TOML/environment files; human identity, access profiles,
 sessions, individual credentials, user quotas, and usage statistics belong in

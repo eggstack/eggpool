@@ -272,12 +272,26 @@ Le Potato and a separate ordinary-Linux reference host were not measured here
 deltas); 16-way concurrency was not attempted because 8-way already
 saturates.
 
+The ordinary-server team baseline is maintained separately from this Pi
+microSD solo envelope; do not use the Pi limits as the team-host sizing source.
+M002 now has a measured synthetic reference on one durable-NVMe ordinary Linux
+host. Its host-specific observations and limits are in the
+[closure record](../plans/closure/on-prem-concurrency-performance/002-status.md)
+and [deployment guidance](deployment.md#ordinary-server-team-sizing-evidence).
+
 ## Verify from LAN
 
 1. Find Pi IP: `hostname -I`
 2. Test: `curl http://<pi-ip>:11300/v1/healthz`
 3. Dashboard: `http://<pi-ip>:11300/`
 4. Point OpenCode at `http://<pi-ip>:11300`
+
+Browser password sign-in is not offered over remote plaintext HTTP. From a
+solo operator workstation, create a loopback tunnel with
+`ssh -L 11300:127.0.0.1:11300 operator@<pi-ip>`, then open
+`http://127.0.0.1:11300/login`. This adds no service to the Pi. Team browser
+administration should use an operator-managed HTTPS proxy or VPN; the LAN
+inference endpoint remains separate from browser password transport.
 
 ## Headless Pi + Desktop Clients
 

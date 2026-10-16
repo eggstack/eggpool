@@ -19,6 +19,15 @@ bodies, cache keys, token values, or raw upstream error prose.
 | Streaming-outcome counters | `rust/src/coordinator/streaming/diagnostics.rs` (`StreamDiagnostics`, `StreamDiagnosticEvent`) |
 | Operator rollups, explain plans, dashboard queries | `rust/src/operations/operator.rs` over `rust/src/db/` repositories |
 
+The offline M002 host-capacity corpus is owned by
+`scripts/qualification_ordinary_server.py` and its Q008 runner. It records
+sanitized host/build identity, storage class, host I/O pressure, response
+percentiles, and durable settlement for synthetic loopback workloads. These
+artifacts are qualification evidence, not runtime telemetry or a production
+capacity promise. One opt-in 60-request SQLite publication diagnostic records
+gate wait/hold phases for this target; those samples are supplementary and are
+not implied by, or substituted for, the per-cell host I/O counters.
+
 See [Metrics](deep-dive-metrics.md) for the coalescer contract (including
 the M002 ownership paragraph, which is authoritative) and
 [Dashboard](deep-dive-dashboard.md) for the HTTP/CLI presentation layer.

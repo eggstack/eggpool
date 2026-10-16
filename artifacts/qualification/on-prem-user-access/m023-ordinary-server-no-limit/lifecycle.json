@@ -1,0 +1,502 @@
+{
+  "candidate": {
+    "binary_size_bytes": 39042128,
+    "sha256": "d7bec9bf508e9b9ccfd1c9ac53ae25b1ef37a5af266f2d4b0cf048c2816f7b73"
+  },
+  "commands": [
+    {
+      "command": [
+        "check-config"
+      ],
+      "duration_ms": 3,
+      "reason": "Configuration loaded successfully from /tmp/eggpool-q009-3yi5_ah9/config.toml Server: 127.0.0.1:45817 Accounts: 3 Database: /tmp/eggpool-q009-3yi5_ah9/data-home/usage.sqlite3 Content digest: 1a1ef765acc71809d2fc6fa0ff01d23567a83140a4828ab207b0c5455e3a4377",
+      "returncode": 0,
+      "status": "pass"
+    },
+    {
+      "command": [
+        "migrate"
+      ],
+      "duration_ms": 144,
+      "reason": "Migrations completed successfully Applied migrations: 63 Current schema: 63",
+      "returncode": 0,
+      "status": "pass"
+    },
+    {
+      "command": [
+        "users",
+        "bootstrap"
+      ],
+      "duration_ms": 283,
+      "reason": "synthetic managed principal created",
+      "status": "pass"
+    },
+    {
+      "command": [
+        "users",
+        "policy",
+        "create",
+        "q009-disable-policy",
+        "Q009 Disable Qualification",
+        "allow",
+        "--actor",
+        "q009-admin"
+      ],
+      "duration_ms": 33,
+      "reason": "Model policy profile q009-disable-policy created.",
+      "returncode": 0,
+      "status": "pass"
+    },
+    {
+      "command": [
+        "users",
+        "add"
+      ],
+      "duration_ms": 376,
+      "reason": "synthetic disable principal setup",
+      "returncode": 0,
+      "status": "pass"
+    },
+    {
+      "command": [
+        "users",
+        "token"
+      ],
+      "duration_ms": 441,
+      "reason": "synthetic disable credential issued",
+      "returncode": 0,
+      "status": "pass"
+    },
+    {
+      "command": [
+        "users",
+        "budget",
+        "set",
+        "q009-admin",
+        "--window",
+        "day",
+        "--max-requests",
+        "100",
+        "--enforcement",
+        "hard",
+        "--actor",
+        "q009-admin"
+      ],
+      "duration_ms": 28,
+      "reason": "Budget rule for q009-admin saved (hard).",
+      "returncode": 0,
+      "status": "pass"
+    },
+    {
+      "command": [
+        "users",
+        "budget",
+        "set",
+        "q009-disablee",
+        "--window",
+        "day",
+        "--max-requests",
+        "100",
+        "--enforcement",
+        "hard",
+        "--actor",
+        "q009-admin"
+      ],
+      "duration_ms": 30,
+      "reason": "Budget rule for q009-disablee saved (hard).",
+      "returncode": 0,
+      "status": "pass"
+    },
+    {
+      "command": [
+        "users",
+        "global-budget",
+        "set",
+        "--window",
+        "day",
+        "--max-requests",
+        "100",
+        "--enforcement",
+        "hard",
+        "--actor",
+        "q009-admin"
+      ],
+      "duration_ms": 38,
+      "reason": "Instance budget ceiling saved (hard).",
+      "returncode": 0,
+      "status": "pass"
+    },
+    {
+      "command": [
+        "users",
+        "budget",
+        "set",
+        "q009-admin",
+        "--window",
+        "day",
+        "--max-requests",
+        "1",
+        "--enforcement",
+        "hard",
+        "--actor",
+        "q009-admin"
+      ],
+      "duration_ms": 5,
+      "reason": "Budget rule for q009-admin saved (hard).",
+      "returncode": 0,
+      "status": "pass"
+    },
+    {
+      "command": [
+        "users",
+        "budget",
+        "set",
+        "q009-admin",
+        "--window",
+        "day",
+        "--max-requests",
+        "100",
+        "--enforcement",
+        "hard",
+        "--actor",
+        "q009-admin"
+      ],
+      "duration_ms": 5,
+      "reason": "Budget rule for q009-admin saved (hard).",
+      "returncode": 0,
+      "status": "pass"
+    },
+    {
+      "command": [
+        "users",
+        "global-budget",
+        "set",
+        "--window",
+        "day",
+        "--max-requests",
+        "1",
+        "--enforcement",
+        "hard",
+        "--actor",
+        "q009-admin"
+      ],
+      "duration_ms": 6,
+      "reason": "Instance budget ceiling saved (hard).",
+      "returncode": 0,
+      "status": "pass"
+    },
+    {
+      "command": [
+        "users",
+        "global-budget",
+        "set",
+        "--window",
+        "day",
+        "--max-requests",
+        "100",
+        "--enforcement",
+        "hard",
+        "--actor",
+        "q009-admin"
+      ],
+      "duration_ms": 6,
+      "reason": "Instance budget ceiling saved (hard).",
+      "returncode": 0,
+      "status": "pass"
+    },
+    {
+      "command": [
+        "users",
+        "disable"
+      ],
+      "duration_ms": 6,
+      "reason": "User q009-disablee disabled; browser sessions and personal tokens were revoked.",
+      "returncode": 0,
+      "status": "pass"
+    }
+  ],
+  "configuration": {
+    "fault_cycles": 1,
+    "reload_cycles": 2,
+    "restart_cycles": 1,
+    "steady_cycles": 2,
+    "timeout_s": 20.0,
+    "warmup_cycles": 1
+  },
+  "durable": {
+    "active_reservations": 0,
+    "attempts": 14,
+    "pending_requests": 0,
+    "request_statuses": {
+      "completed": 4,
+      "error": 6,
+      "interrupted": 1
+    },
+    "requests": 11,
+    "reservations": 14
+  },
+  "duration_ms": 2177,
+  "environment": {
+    "architecture": "x86_64",
+    "network_policy": "loopback-only",
+    "platform": "Linux",
+    "system": "posix"
+  },
+  "findings": [],
+  "isolated_temporary_root": true,
+  "manifest": "runtime-q001.v1",
+  "ownership_convergence": {
+    "active_leases": null,
+    "active_reservations": 0,
+    "finalization_jobs": null,
+    "logical_leaks": false,
+    "pending_requests": 0,
+    "retiring_generations": null,
+    "terminal_references": 0
+  },
+  "phases": [
+    {
+      "cycles": 1,
+      "observations": [
+        {
+          "category": "provider",
+          "client_http_status": 200,
+          "expected_upstream_status": 408,
+          "model": "q009-fault-408",
+          "provider_requests": 2,
+          "response_bytes": 242
+        },
+        {
+          "category": "provider",
+          "client_http_status": 429,
+          "expected_upstream_status": 429,
+          "model": "q009-fault-429",
+          "post_fault_server_restart": "pass",
+          "provider_requests": 1,
+          "response_bytes": 37
+        },
+        {
+          "category": "provider",
+          "client_http_status": 200,
+          "expected_upstream_status": 503,
+          "model": "q009-fault-5xx",
+          "provider_requests": 2,
+          "response_bytes": 242
+        },
+        {
+          "category": "provider",
+          "client_http_status": 200,
+          "expected_upstream_status": "timeout",
+          "model": "q009-timeout",
+          "provider_requests": 1,
+          "response_bytes": 242
+        },
+        {
+          "http_status": 200,
+          "model": "q009-partial",
+          "terminal_evidence": false
+        },
+        {
+          "http_status": 200,
+          "model": "q009-disconnect",
+          "terminal_evidence": false
+        },
+        {
+          "model": "q009-cancel",
+          "status": "client-cancelled-and-write-aborted"
+        },
+        {
+          "http_status": 200,
+          "model": "q009-wire",
+          "status": "alternate-wire-success"
+        },
+        {
+          "http_status": 200,
+          "model": "q009-malformed",
+          "status": "malformed-incomplete"
+        },
+        {
+          "http_status": 404,
+          "model": "q009-absent",
+          "status": "model-absent"
+        },
+        {
+          "http_status": 503,
+          "model": "q009-connect/unreachable",
+          "status": "connect-failure"
+        },
+        {
+          "category": "budget",
+          "denial_kind": "user_budget",
+          "http_status": 429,
+          "provider_requests": 0
+        },
+        {
+          "category": "budget",
+          "denial_kind": "global_budget",
+          "http_status": 429,
+          "provider_requests": 0
+        }
+      ],
+      "phase": "faults",
+      "status": "pass"
+    },
+    {
+      "client_outcome": "cancelled-or-closed",
+      "credential_revocation_during_load": true,
+      "cycles": 1,
+      "hard_budgets_active": true,
+      "identity_denial_http_status": 401,
+      "phase": "restart",
+      "status": "pass",
+      "unknown_inflight_replayed": false,
+      "user_disabled_during_load": true
+    }
+  ],
+  "plan": "stability qualification",
+  "provider": {
+    "request_count": 13,
+    "requests_by_model": {
+      "q009-abrupt": 1,
+      "q009-absent": 1,
+      "q009-disconnect": 1,
+      "q009-fault-408": 2,
+      "q009-fault-429": 1,
+      "q009-fault-5xx": 2,
+      "q009-malformed": 1,
+      "q009-partial": 1,
+      "q009-timeout": 1,
+      "q009-wire": 2
+    }
+  },
+  "resource_analysis": {
+    "fd_counts": [
+      14,
+      14,
+      14
+    ],
+    "interpretation": "bounded characterization; warmup/high-water allocator RSS is not treated as a leak and no SLA is inferred",
+    "rss_bytes": [
+      21884928,
+      23457792,
+      21725184
+    ],
+    "sample_count": 3,
+    "thread_counts": [
+      2,
+      2,
+      2
+    ]
+  },
+  "resource_evidence": {
+    "runtime_read_errors": 0,
+    "semantics_affected": false,
+    "status": "pass"
+  },
+  "resource_samples": [
+    {
+      "active_generation_id": null,
+      "active_leases": null,
+      "active_reservations": 0,
+      "attempts": 0,
+      "cpu_percent": 0.0,
+      "db_bytes": 831488,
+      "finalization_capacity": null,
+      "finalization_jobs": null,
+      "generation_count": null,
+      "label": "before-warmup",
+      "open_fd_count": 14,
+      "pending_requests": 0,
+      "request_statuses": {},
+      "requests": 0,
+      "reservations": 0,
+      "retiring_generations": null,
+      "retiring_leases": 0,
+      "rss_bytes": 21884928,
+      "running_tasks": 0,
+      "runtime_read_error": false,
+      "runtime_tasks": 0,
+      "sample_window_ms": 50,
+      "terminal_references": 0,
+      "thread_count": 2,
+      "virtual_bytes": 103780352,
+      "wal_bytes": 111272,
+      "wire_flights": null
+    },
+    {
+      "active_generation_id": null,
+      "active_leases": null,
+      "active_reservations": 0,
+      "attempts": 13,
+      "cpu_percent": 0.0,
+      "db_bytes": 847872,
+      "finalization_capacity": null,
+      "finalization_jobs": null,
+      "generation_count": null,
+      "label": "after-faults",
+      "open_fd_count": 14,
+      "pending_requests": 0,
+      "request_statuses": {
+        "completed": 4,
+        "error": 6
+      },
+      "requests": 10,
+      "reservations": 13,
+      "retiring_generations": null,
+      "retiring_leases": 0,
+      "rss_bytes": 23457792,
+      "running_tasks": 0,
+      "runtime_read_error": false,
+      "runtime_tasks": 0,
+      "sample_window_ms": 50,
+      "terminal_references": 0,
+      "thread_count": 2,
+      "virtual_bytes": 103899136,
+      "wal_bytes": 2776912,
+      "wire_flights": null
+    },
+    {
+      "active_generation_id": null,
+      "active_leases": null,
+      "active_reservations": 0,
+      "attempts": 14,
+      "cpu_percent": 0.0,
+      "db_bytes": 872448,
+      "finalization_capacity": null,
+      "finalization_jobs": null,
+      "generation_count": null,
+      "label": "after-restart",
+      "open_fd_count": 14,
+      "pending_requests": 0,
+      "request_statuses": {
+        "completed": 4,
+        "error": 6,
+        "interrupted": 1
+      },
+      "requests": 11,
+      "reservations": 14,
+      "retiring_generations": null,
+      "retiring_leases": 0,
+      "rss_bytes": 21725184,
+      "running_tasks": 0,
+      "runtime_read_error": false,
+      "runtime_tasks": 0,
+      "sample_window_ms": 50,
+      "terminal_references": 0,
+      "thread_count": 2,
+      "virtual_bytes": 103780352,
+      "wal_bytes": 3114752,
+      "wire_flights": null
+    }
+  ],
+  "schema_version": "runtime-q009.v1",
+  "seed": 9009,
+  "status": "pass",
+  "temporary_leftovers": 0,
+  "workload_policy": {
+    "budget_mode": "hard user and global request ceilings",
+    "initial_global_request_limit": 100,
+    "initial_user_request_limit": 100,
+    "principal_count": 2
+  }
+}

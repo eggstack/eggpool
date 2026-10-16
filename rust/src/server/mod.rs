@@ -19,12 +19,13 @@ use dashboard::{
     grouped_timeseries_api, issue_admin_token, latency_page, model_detail_page, models_page,
     my_account_page, my_models_page, overview, pings_page, profiles_page, reliability_page,
     remove_instance_budget, remove_profile_rule, remove_user_override, reset_user_password,
-    revoke_personal_token, revoke_user_tokens, routing_page, runtime_page, set_instance_budget,
-    set_profile_preference, set_profile_rule, set_user_budget, set_user_override, set_user_state,
-    static_chart_js, static_css, static_favicon, static_js, stats_cache_observability,
-    stats_cache_stability, stats_request_segmentation, stats_request_shaping, stats_transcoding,
-    summary, sync_accounts, theme_css, timeseries_api, timeseries_page, traces_page,
-    update_profile, usage_page, users_page,
+    revoke_personal_token, revoke_user_tokens, routing_page, runtime_page,
+    set_default_member_profile, set_instance_budget, set_profile_preference, set_profile_rule,
+    set_user_budget, set_user_override, set_user_state, static_chart_js, static_css,
+    static_favicon, static_js, stats_cache_observability, stats_cache_stability,
+    stats_request_segmentation, stats_request_shaping, stats_transcoding, summary, sync_accounts,
+    theme_css, timeseries_api, timeseries_page, traces_page, update_profile, usage_page,
+    users_page,
 };
 use health::{
     healthz, integration_profile, models_api, readyz, runtime_status, status_api, update_status,
@@ -406,6 +407,7 @@ impl ServerRuntime {
             runtime: Arc::clone(&self.inner.manager),
             process: Some(self.inner.process.clone()),
             body_tasks: self.inner.body_tasks.clone(),
+            admission_fairness: crate::request::AdmissionFairnessLimiter::default(),
         });
         let runtime_config =
             eggserve_runtime_config().map_err(|error| ServerError::EggServe(Box::new(error)))?;
@@ -703,6 +705,7 @@ pub struct AppState {
     pub runtime: Arc<RuntimeManager>,
     process: Option<ProcessRuntime>,
     body_tasks: BodyTaskTracker,
+    admission_fairness: crate::request::AdmissionFairnessLimiter,
 }
 
 impl AppState {
@@ -720,6 +723,7 @@ impl AppState {
             runtime,
             process: None,
             body_tasks: BodyTaskTracker::new(),
+            admission_fairness: crate::request::AdmissionFairnessLimiter::default(),
         }
     }
 
@@ -745,6 +749,7 @@ impl AppState {
             runtime: Arc::new(RuntimeManager::new(generation)),
             process: None,
             body_tasks: BodyTaskTracker::new(),
+            admission_fairness: crate::request::AdmissionFairnessLimiter::default(),
         }
     }
 }
@@ -896,10 +901,65 @@ pub async fn run_with_digest(
     let reload_service = process.reload_service((*manager).clone());
     let config_path_for_control = process.config_path().map(Path::to_path_buf);
     let control_path = crate::operations::paths::RuntimePaths::resolve().control_socket;
+    let status_state = AppState {
+        server: ServerState::from_config(&config),
+        database: database.clone(),
+        runtime: Arc::clone(&manager),
+        process: Some(process.clone()),
+        body_tasks: BodyTaskTracker::new(),
+        admission_fairness: crate::request::AdmissionFairnessLimiter::default(),
+    };
     let control_server = match crate::operations::control::start(control_path, move |request| {
         let reload_service = reload_service.clone();
         let config_path = config_path_for_control.clone();
+        let status_state = status_state.clone();
         async move {
+            match request.command.as_str() {
+                "read_status" => {
+                    let snapshot = health::build_status_snapshot(&status_state).await;
+                    return match serde_json::to_value(snapshot) {
+                        Ok(payload)
+                            if serde_json::to_vec(&payload).is_ok_and(|bytes| {
+                                bytes.len() < crate::operations::control::MAX_REQUEST_BYTES - 2048
+                            }) =>
+                        {
+                            crate::operations::control::ControlResponse::with_payload(
+                                request.request_id,
+                                payload,
+                            )
+                        }
+                        Err(_) => crate::operations::control::ControlResponse::error(
+                            request.request_id,
+                            "readback",
+                            "local status projection failed",
+                        ),
+                        _ => crate::operations::control::ControlResponse::error(
+                            request.request_id,
+                            "readback",
+                            "status projection exceeds the control-response bound",
+                        ),
+                    };
+                }
+                "read_runtime_status" => {
+                    let payload = health::runtime_status_value(&status_state).await;
+                    let within_bound = serde_json::to_vec(&payload).is_ok_and(|bytes| {
+                        bytes.len() < crate::operations::control::MAX_REQUEST_BYTES
+                    });
+                    return if within_bound {
+                        crate::operations::control::ControlResponse::with_payload(
+                            request.request_id,
+                            payload,
+                        )
+                    } else {
+                        crate::operations::control::ControlResponse::error(
+                            request.request_id,
+                            "readback",
+                            "runtime status projection exceeds the control-response bound",
+                        )
+                    };
+                }
+                _ => {}
+            }
             let Some(config_path) = config_path else {
                 return crate::operations::control::ControlResponse::error(
                     request.request_id,
@@ -1168,6 +1228,7 @@ pub fn build_router(state: AppState) -> Router {
                 post(remove_instance_budget),
             )
             .route("/admin/profiles/create", post(create_profile))
+            .route("/admin/profiles/default", post(set_default_member_profile))
             .route("/admin/profiles/update", post(update_profile))
             .route("/admin/profiles/delete", post(delete_profile))
             .route("/admin/profiles/rule", post(set_profile_rule))

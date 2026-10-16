@@ -87,11 +87,12 @@ BENCHMARK_MAX_SAMPLES = 100
 BENCHMARK_WARMUPS = 5
 CONCURRENCY_BATCH_SIZE = 32
 CONCURRENCY_WORKERS = 4
-CONCURRENCY_WORKERS_MAX = 8
+CONCURRENCY_WORKERS_MAX = 16
 CONCURRENCY_REQUESTS_MAX = 4000
 P99_MIN_SAMPLES = 1000
 COMPETING_IO_MAX_MIB_PER_SECOND = 4
 COMPETING_IO_MAX_MIB = 128
+ORDINARY_SERVER_MAX_INITIAL_IO_PRESSURE_PERCENT = 25.0
 SYNTHETIC_ADMIN_PASSWORD = "SBC synthetic bootstrap password 123"
 STABILIZATION_SECONDS = 3.0
 DIAGNOSTIC_MIN_SAMPLES = 10
@@ -379,6 +380,70 @@ def _path_storage_metadata(path: Path) -> dict[str, str | None]:
     }
 
 
+def host_io_snapshot() -> dict[str, Any]:
+    """Read aggregate root-device bytes and Linux I/O pressure, when available."""
+    root_device = _root_block_device(_root_mount_source())
+    device_stats = (
+        _read_text(Path(f"/sys/class/block/{root_device}/stat"))
+        if root_device
+        else None
+    )
+    read_bytes = write_bytes = None
+    if device_stats:
+        fields = device_stats.split()
+        if len(fields) >= 7:
+            with contextlib.suppress(ValueError):
+                read_bytes = int(fields[2]) * 512
+                write_bytes = int(fields[6]) * 512
+    pressure: dict[str, dict[str, float]] = {}
+    pressure_text = _read_text(Path("/proc/pressure/io")) or ""
+    for line in pressure_text.splitlines():
+        fields = line.split()
+        if not fields or fields[0] not in {"some", "full"}:
+            continue
+        values: dict[str, float] = {}
+        for item in fields[1:]:
+            key, separator, raw = item.partition("=")
+            if separator and key in {"avg10", "avg60", "avg300"}:
+                with contextlib.suppress(ValueError):
+                    values[key] = float(raw)
+        pressure[fields[0]] = values
+    return {
+        "root_device_read_bytes": read_bytes,
+        "root_device_write_bytes": write_bytes,
+        "io_pressure": pressure,
+    }
+
+
+def host_io_full_avg10(snapshot: Mapping[str, Any]) -> float | None:
+    pressure = snapshot.get("io_pressure")
+    if not isinstance(pressure, Mapping):
+        return None
+    pressure = cast("Mapping[str, Any]", pressure)
+    full = pressure.get("full")
+    if not isinstance(full, Mapping):
+        return None
+    full = cast("Mapping[str, Any]", full)
+    value = full.get("avg10")
+    return float(value) if isinstance(value, (int, float)) else None
+
+
+def _host_io_delta(
+    before: Mapping[str, Any], after: Mapping[str, Any]
+) -> dict[str, Any]:
+    deltas: dict[str, Any] = {}
+    for key in ("root_device_read_bytes", "root_device_write_bytes"):
+        start, end = before.get(key), after.get(key)
+        deltas[key.removesuffix("_bytes") + "_delta_bytes"] = (
+            end - start
+            if isinstance(start, int) and isinstance(end, int) and end >= start
+            else None
+        )
+    deltas["io_pressure_before"] = before.get("io_pressure")
+    deltas["io_pressure_after"] = after.get("io_pressure")
+    return deltas
+
+
 def board_metadata() -> tuple[dict[str, Any] | None, str | None]:
     """Return board facts, or why physical SBC evidence is unavailable."""
     if platform.system().lower() != "linux":
@@ -477,6 +542,94 @@ def board_metadata() -> tuple[dict[str, Any] | None, str | None]:
     }, None
 
 
+def ordinary_server_metadata() -> tuple[dict[str, Any] | None, str | None]:
+    """Describe an ordinary Linux host without claiming it is bare metal."""
+    if platform.system().lower() != "linux":
+        return None, "ordinary-server qualification requires Linux"
+
+    root_source = _root_mount_source()
+    root_device = _root_block_device(root_source)
+    storage = _path_storage_metadata(Path("/"))
+    mem_total = _read_text(Path("/proc/meminfo")) or ""
+    memory_kib_match = re.search(r"(?m)^MemTotal:\s+(\d+)\s+kB", mem_total)
+    cpu_model = None
+    cpu_info = _read_text(Path("/proc/cpuinfo")) or ""
+    cpu_match = re.search(r"(?m)^(?:model name|Hardware)\s*:\s*(.+)$", cpu_info)
+    if cpu_match:
+        cpu_model = cpu_match.group(1).strip()[:160]
+    dmi = {
+        name: _read_text(Path(f"/sys/devices/virtual/dmi/id/{name}"))
+        for name in ("sys_vendor", "product_name", "board_name")
+    }
+    disk_model = (
+        _read_text(Path(f"/sys/class/block/{root_device}/device/model"))
+        if root_device
+        else None
+    )
+    mounts = _read_text(Path("/proc/mounts")) or ""
+    root_mount_options = None
+    for line in mounts.splitlines():
+        fields = line.split()
+        if len(fields) >= 4 and fields[1] == "/":
+            root_mount_options = fields[3][:128]
+            break
+    try:
+        virtualization = subprocess.run(
+            ["systemd-detect-virt"],
+            capture_output=True,
+            text=True,
+            timeout=2,
+            check=False,
+        )
+        virtualization_type = (
+            "none"
+            if virtualization.returncode == 1
+            else virtualization.stdout.strip()[:64]
+            if virtualization.returncode == 0
+            else "unavailable"
+        )
+    except (OSError, subprocess.TimeoutExpired):
+        virtualization_type = "unavailable"
+    container_type = (
+        _read_text(Path("/run/systemd/container"))
+        or ("docker-marker" if Path("/.dockerenv").exists() else None)
+        or (
+            "container-cgroup"
+            if re.search(
+                r"(?i)docker|containerd|kubepods|lxc",
+                _read_text(Path("/proc/1/cgroup")) or "",
+            )
+            else "none"
+        )
+    )
+    release = _os_release()
+    return {
+        "target_class": "ordinary-server",
+        "architecture": platform.machine().lower(),
+        "kernel": platform.release()[:128],
+        "os": release.get("PRETTY_NAME", "unknown"),
+        "os_version_id": release.get("VERSION_ID", "unknown"),
+        "cpu_model": cpu_model,
+        "logical_cpu_count": os.cpu_count(),
+        "ram_bytes": int(memory_kib_match.group(1)) * 1024
+        if memory_kib_match
+        else None,
+        "system_vendor": dmi["sys_vendor"],
+        "product_name": dmi["product_name"],
+        "board_name": dmi["board_name"],
+        "root_filesystem": storage["filesystem"],
+        "root_storage_medium_class": storage["storage_medium_class"],
+        "root_storage_device_class": storage["device_class"],
+        "root_storage_device_model": disk_model[:128] if disk_model else None,
+        "root_mount_options": root_mount_options,
+        "virtualization_type": virtualization_type,
+        "container_type": container_type,
+        "attestation": (
+            "Linux host metadata from procfs, sysfs, DMI and systemd-detect-virt"
+        ),
+    }, None
+
+
 class _LoopbackHandler(BaseHTTPRequestHandler):
     protocol_version = "HTTP/1.1"
     owner: ClassVar[LoopbackProvider]
@@ -503,7 +656,9 @@ class _LoopbackHandler(BaseHTTPRequestHandler):
         try:
             length = int(self.headers.get("content-length", "0"))
             body = self.rfile.read(min(length, MAX_HTTP_BODY_BYTES))
-            self.owner.record(self.path)
+            delay_ms = self.owner.record(self.path)
+            if delay_ms:
+                time.sleep(delay_ms / 1000)
             streaming = b'"stream":true' in body.replace(b" ", b"")
             if self.path.endswith("/chat/completions"):
                 response = (
@@ -601,7 +756,10 @@ class _LoopbackHandler(BaseHTTPRequestHandler):
 class LoopbackProvider:
     """Threaded loopback-only provider with fixed-bucket request counters."""
 
-    def __init__(self) -> None:
+    def __init__(self, latency_profile: str = "instant") -> None:
+        if latency_profile not in {"instant", "mixed-0-10-50ms"}:
+            raise ValueError("unknown loopback provider latency profile")
+        self.latency_profile = latency_profile
         self.requests = 0
         self._lock = threading.Lock()
         self._diagnostic_condition = threading.Condition(self._lock)
@@ -618,14 +776,17 @@ class LoopbackProvider:
         _LoopbackHandler.owner = self
         self.thread = threading.Thread(target=self.server.serve_forever, daemon=True)
 
-    def record(self, path: str) -> None:
-        """Count one loopback request in a fixed bucket; no URLs retained."""
+    def record(self, path: str) -> int:
+        """Count one request and return its deterministic synthetic service delay."""
         with self._lock:
             self.requests += 1
             for bucket in self._path_counts:
                 if path.endswith(bucket):
                     self._path_counts[bucket] += 1
                     break
+            if self.latency_profile == "mixed-0-10-50ms":
+                return (0, 0, 0, 10, 10, 50)[(self.requests - 1) % 6]
+            return 0
 
     def path_counts(self) -> dict[str, int]:
         with self._lock:
@@ -1042,11 +1203,19 @@ def _runtime_task_snapshot(value: Mapping[str, Any]) -> dict[str, dict[str, Any]
     return snapshot
 
 
-def _runtime_json(runtime_url: str, server_api_key: str) -> dict[str, Any] | None:
+def _runtime_json(
+    runtime_url: str,
+    server_api_key: str = "q008-server-key",
+    *,
+    session_cookie: str | None = None,
+) -> dict[str, Any] | None:
     try:
-        status, body = _http(
-            runtime_url, headers={"Authorization": f"Bearer {server_api_key}"}
+        headers = (
+            {"Cookie": session_cookie}
+            if session_cookie is not None
+            else {"Authorization": f"Bearer {server_api_key}"}
         )
+        status, body = _http(runtime_url, headers=headers)
         if status != 200:
             return None
         value = json.loads(body.decode("utf-8"))
@@ -1060,11 +1229,14 @@ def _wait_for_diagnostic_quiescence(
     *,
     timeout: float = DIAGNOSTIC_QUIESCENCE_TIMEOUT,
     server_api_key: str = "q008-server-key",
+    session_cookie: str | None = None,
 ) -> dict[str, dict[str, Any]]:
     """Wait for startup checkpoint/metrics work and a quiescent task window."""
     deadline = time.monotonic() + timeout
     while time.monotonic() < deadline:
-        value = _runtime_json(runtime_url, server_api_key)
+        value = _runtime_json(
+            runtime_url, server_api_key, session_cookie=session_cookie
+        )
         tasks = _runtime_task_snapshot(value or {})
         checkpoint = tasks.get("checkpoint")
         metrics_flush = tasks.get("metrics_flush")
@@ -1162,6 +1334,7 @@ def resource_sample(
     *,
     duration: float = SAMPLE_SECONDS,
     server_api_key: str = "q008-server-key",
+    session_cookie: str | None = None,
     include_peak: bool = False,
 ) -> dict[str, Any]:
     """Capture a bounded procfs/runtime/database snapshot.
@@ -1182,7 +1355,12 @@ def resource_sample(
     runtime_read_error = False
     try:
         _, body = _http(
-            runtime_url, headers={"Authorization": f"Bearer {server_api_key}"}
+            runtime_url,
+            headers=(
+                {"Cookie": session_cookie}
+                if session_cookie is not None
+                else {"Authorization": f"Bearer {server_api_key}"}
+            ),
         )
         runtime_value = json.loads(body.decode("utf-8"))
         runtime = (
@@ -2082,9 +2260,9 @@ def _finite_diagnostic_payload() -> bytes:
     ).encode()
 
 
-def _diagnostic_headers() -> dict[str, str]:
+def _diagnostic_headers(api_token: str = "q008-server-key") -> dict[str, str]:
     return {
-        "Authorization": "Bearer q008-server-key",
+        "Authorization": f"Bearer {api_token}",
         "Content-Type": "application/json",
     }
 
@@ -2213,10 +2391,10 @@ def _direct_provider_control(
     }
 
 
-def _diagnostic_finite_warmup(port: int) -> None:
+def _diagnostic_finite_warmup(port: int, api_token: str = "q008-server-key") -> None:
     for _ in range(DIAGNOSTIC_WARMUPS):
         status, body, _, _ = _benchmark_request(
-            port, MODELS["responses"], False, "responses"
+            port, MODELS["responses"], False, "responses", api_token=api_token
         )
         if status != 200 or not body:
             raise QualificationError(
@@ -2234,6 +2412,7 @@ def _diagnostic_finite_batch(
     timeout: float = DIAGNOSTIC_TIMEOUT,
     warmup: bool = True,
     wal_diagnostics: bool = True,
+    api_token: str = "q008-server-key",
 ) -> dict[str, Any]:
     """Run a sequential native-finite diagnostic batch with phase attribution.
 
@@ -2248,9 +2427,9 @@ def _diagnostic_finite_batch(
         )
     url = f"http://127.0.0.1:{port}/v1/responses"
     payload = _finite_diagnostic_payload()
-    headers = _diagnostic_headers()
+    headers = _diagnostic_headers(api_token)
     if warmup:
-        _diagnostic_finite_warmup(port)
+        _diagnostic_finite_warmup(port, api_token)
     provider.start_diagnostic(capacity=samples)
     observations: list[DiagnosticSample] = []
     wal_before = (
@@ -2447,10 +2626,11 @@ def _concurrent_finite_benchmark(
     competing_io_mib_per_second: int = 0,
     competing_io_max_mib: int = 0,
     api_tokens: Sequence[str] = (),
+    expected_rate_limited_count: int | None = None,
 ) -> dict[str, Any]:
     """Run a bounded finite batch with optional same-filesystem I/O load."""
     if not 1 <= client_concurrency <= CONCURRENCY_WORKERS_MAX:
-        raise ValueError("concurrent benchmark workers must be between 1 and 8")
+        raise ValueError("concurrent benchmark workers must be between 1 and 16")
     if not client_concurrency <= request_count <= CONCURRENCY_REQUESTS_MAX:
         raise ValueError(
             "concurrent benchmark requests must be between worker count and 4000"
@@ -2509,6 +2689,7 @@ def _concurrent_finite_benchmark(
             io_thread.join(timeout=5)
             raise QualificationError("competing I/O worker did not become ready")
 
+    host_io_before = host_io_snapshot()
     first_cpu = _proc_cpu(process.pid)
     started = time.monotonic()
 
@@ -2536,23 +2717,38 @@ def _concurrent_finite_benchmark(
         raise QualificationError("competing I/O worker failed")
     elapsed_seconds = max(time.monotonic() - started, 0.001)
     second_cpu = _proc_cpu(process.pid)
+    host_io_after = host_io_snapshot()
     elapsed_ms = [result[2] for result in results]
     ttft_ms = [result[3] for result in results if result[3] is not None]
     completed = sum(1 for status, body, _, _ in results if status == 200 and body)
+    rate_limited = sum(
+        1
+        for status, body, _, _ in results
+        if status == 429 and b"short_window_rate_limited" in body
+    )
     status_counts: dict[str, int] = {}
     for status, _, _, _ in results:
         key = str(status)
         status_counts[key] = status_counts.get(key, 0) + 1
+    expected_throttle_pass = _expected_short_window_throttle_counts(
+        results, expected_rate_limited_count, request_count
+    )
     return {
-        "status": "measured" if completed == request_count else "fail",
+        "status": "measured"
+        if completed == request_count or expected_throttle_pass
+        else "fail",
         "request_count": request_count,
         "client_concurrency": client_concurrency,
         "completed_count": completed,
         "failed_count": request_count - completed,
+        "rate_limited_count": rate_limited,
+        "expected_rate_limited_count": expected_rate_limited_count,
+        "expected_throttle_pass": expected_throttle_pass,
         "http_status_counts": status_counts,
         "batch_elapsed_ms": round(elapsed_seconds * 1000),
         "requests_per_second": round(request_count / elapsed_seconds, 3),
         "cpu": _cpu_batch_summary(first_cpu, second_cpu, elapsed_seconds),
+        "host_io": _host_io_delta(host_io_before, host_io_after),
         "timings": _timing_summary(elapsed_ms, ttft_ms, include_p99=True),
         "competing_io": {
             "enabled": bool(competing_io_max_mib),
@@ -2567,6 +2763,25 @@ def _concurrent_finite_benchmark(
             ),
         },
     }
+
+
+def _expected_short_window_throttle_counts(
+    results: Sequence[tuple[int, bytes, int, int | None]],
+    expected_rate_limited_count: int | None,
+    request_count: int,
+) -> bool:
+    if expected_rate_limited_count is None or len(results) != request_count:
+        return False
+    admitted = sum(status == 200 and bool(body) for status, body, _, _ in results)
+    limited = sum(
+        status == 429 and b"short_window_rate_limited" in body
+        for status, body, _, _ in results
+    )
+    return (
+        admitted == request_count - expected_rate_limited_count
+        and limited == expected_rate_limited_count
+        and all(status in {200, 429} for status, _, _, _ in results)
+    )
 
 
 def _command_token(
@@ -2601,6 +2816,36 @@ def _command_token(
     if result.returncode != 0 or match is None:
         raise QualificationError("synthetic personal token issuance failed")
     return match.group(0)
+
+
+def _synthetic_admin_session_cookie(port: int, password: str, timeout: float) -> str:
+    """Create an ephemeral browser session for protected runtime diagnostics."""
+    jar = http.cookiejar.CookieJar()
+    opener = urllib.request.build_opener(urllib.request.HTTPCookieProcessor(jar))
+    origin = f"http://127.0.0.1:{port}"
+    try:
+        opener.open(f"{origin}/login", timeout=timeout).read()
+        login = urllib.request.Request(
+            f"{origin}/login",
+            data=urllib.parse.urlencode(
+                {"username": "sbc-admin", "password": password}
+            ).encode(),
+            headers={
+                "Content-Type": "application/x-www-form-urlencoded",
+                "Origin": origin,
+                "Referer": f"{origin}/login",
+            },
+            method="POST",
+        )
+        opener.open(login, timeout=timeout).read()
+    except (OSError, urllib.error.URLError, TimeoutError) as error:
+        raise QualificationError(
+            "synthetic admin browser session could not be created"
+        ) from error
+    cookie = next((item for item in jar if item.name == "eggpool_session"), None)
+    if cookie is None:
+        raise QualificationError("synthetic admin browser session was not issued")
+    return f"eggpool_session={cookie.value}"
 
 
 def _configure_benchmark_principals(
@@ -2713,10 +2958,11 @@ def _configure_benchmark_principals(
             ) from error
 
     if budget_mode in {"user", "user-global"}:
-        # Keep the hard ceiling above the measured workload and Q008's bounded
-        # post-batch restart/recovery checks so those checks do not invalidate
-        # an otherwise complete budget-mode run.
-        max_requests = str(request_count + 100)
+        # Q008 runs functional smoke, sequential surface samples, the concurrent
+        # batch, and post-recovery requests. Keep the hard ceiling above those
+        # bounded checks so a successful benchmark does not accidentally turn
+        # its settlement verification into a budget-denial test.
+        max_requests = str(request_count * 3 + 100)
         for username in ["sbc-admin"] + [
             f"sbc-member-{index:02d}" for index in range(1, principal_count)
         ]:
@@ -2765,7 +3011,7 @@ def _configure_benchmark_principals(
                     "--window",
                     "day",
                     "--max-requests",
-                    str(request_count + 100),
+                    str(request_count * 3 + 100),
                     "--enforcement",
                     "hard",
                     "--actor",
@@ -2990,6 +3236,9 @@ def run_qualification(
     competing_io_max_mib: int = 0,
     benchmark_principals: int = 1,
     benchmark_budget_mode: str = "none",
+    admission_fairness_rate_per_minute_per_principal: int | None = None,
+    target_class: str = "sbc",
+    provider_latency_profile: str = "instant",
 ) -> dict[str, Any]:
     """Run SBC qualification and return a bounded machine-readable report."""
     if benchmark_samples < 0 or benchmark_samples > BENCHMARK_MAX_SAMPLES:
@@ -2997,7 +3246,7 @@ def run_qualification(
             f"benchmark sample count must be 0 or 1..{BENCHMARK_MAX_SAMPLES}"
         )
     if not 1 <= concurrency_workers <= CONCURRENCY_WORKERS_MAX:
-        raise ValueError("concurrency workers must be between 1 and 8")
+        raise ValueError("concurrency workers must be between 1 and 16")
     if not concurrency_workers <= concurrency_requests <= CONCURRENCY_REQUESTS_MAX:
         raise ValueError("concurrency requests must be between workers and 4000")
     if (competing_io_mib_per_second == 0) != (competing_io_max_mib == 0):
@@ -3010,6 +3259,24 @@ def run_qualification(
         raise ValueError("benchmark principals must be between 1 and 49")
     if benchmark_budget_mode not in {"none", "user", "global", "user-global"}:
         raise ValueError("invalid benchmark budget mode")
+    if admission_fairness_rate_per_minute_per_principal is not None and not (
+        1 <= admission_fairness_rate_per_minute_per_principal <= 60_000
+    ):
+        raise ValueError("admission fairness rate must be between 1 and 60000")
+    if admission_fairness_rate_per_minute_per_principal is not None and (
+        benchmark_samples <= 0
+        or benchmark_budget_mode != "user-global"
+        or benchmark_principals < 2
+        or concurrency_requests < benchmark_principals
+    ):
+        raise ValueError(
+            "active fairness qualification requires benchmark mode, multiple "
+            "principals, and user-global budgets"
+        )
+    if target_class not in {"sbc", "ordinary-server"}:
+        raise ValueError("target class must be sbc or ordinary-server")
+    if provider_latency_profile not in {"instant", "mixed-0-10-50ms"}:
+        raise ValueError("invalid provider latency profile")
     if benchmark_samples == 0 and (
         concurrency_workers != CONCURRENCY_WORKERS
         or concurrency_requests != CONCURRENCY_BATCH_SIZE
@@ -3147,7 +3414,11 @@ def run_qualification(
     )
     report: dict[str, Any] = {
         "schema_version": SCHEMA_V2 if benchmark_mode else SCHEMA_V1,
-        "plan": "SBC qualification",
+        "plan": (
+            "SBC qualification"
+            if target_class == "sbc"
+            else "ordinary-server qualification"
+        ),
         "manifest": MANIFEST_VERSION,
         "status": "blocked",
         "functional": [],
@@ -3155,7 +3426,10 @@ def run_qualification(
         "commands": [],
         "findings": [],
     }
-    board, block_reason = board_metadata()
+    if target_class == "sbc":
+        board, block_reason = board_metadata()
+    else:
+        board, block_reason = ordinary_server_metadata()
     if block_reason:
         report["reason"] = block_reason
         report["environment"] = {
@@ -3165,6 +3439,20 @@ def run_qualification(
         return report
     environment = cast("dict[str, Any]", board)
     report["environment"] = environment
+    if target_class == "ordinary-server" and benchmark_mode:
+        preflight_io = host_io_snapshot()
+        environment["preflight_io"] = preflight_io
+        pressure = host_io_full_avg10(preflight_io)
+        if (
+            pressure is None
+            or pressure >= ORDINARY_SERVER_MAX_INITIAL_IO_PRESSURE_PERCENT
+        ):
+            report["status"] = "blocked"
+            report["reason"] = (
+                "ordinary-server benchmark stopped before load because initial "
+                "full I/O pressure is missing or at/above the 25% avg10 gate"
+            )
+            return report
     if not binary.is_file():
         report["status"] = "fail"
         report["reason"] = "candidate binary does not exist"
@@ -3210,6 +3498,20 @@ def run_qualification(
         ):
             (root / name).mkdir()
         database = root / "data-home" / "usage.sqlite3"
+        if target_class == "ordinary-server" and benchmark_samples:
+            database_storage = _path_storage_metadata(database)
+            report["environment"]["qualification_database_storage"] = database_storage
+            if (
+                database_storage["storage_medium_class"] != "non-rotational"
+                or database_storage["device_class"] not in {"nvme", "scsi-disk"}
+                or database_storage["filesystem"] in {"tmpfs", "ramfs", "overlay"}
+            ):
+                report["status"] = "blocked"
+                report["reason"] = (
+                    "ordinary-server benchmark database must use durable "
+                    "SSD/NVMe storage, not an ephemeral filesystem"
+                )
+                return report
         backup_dir = root / "backups"
         config = root / "config.toml"
         recovery_root = root / "recovery"
@@ -3243,7 +3545,10 @@ def run_qualification(
             "second_workload_elapsed_ms": [],
             "second_workload_ttft_ms": [],
         }
-        with contextlib.ExitStack() as resources, LoopbackProvider() as provider:
+        with (
+            contextlib.ExitStack() as resources,
+            LoopbackProvider(provider_latency_profile) as provider,
+        ):
             if (
                 diagnose_publication_storage is not None or diagnose_publication_phases
             ) and diagnostic_database_dir is not None:
@@ -3352,6 +3657,14 @@ def run_qualification(
                 _wait_ready(process, f"http://127.0.0.1:{port}/v1/healthz", timeout)
                 report["startup_to_ready_ms"] = round(
                     (time.monotonic() - started) * 1000
+                )
+                diagnostic_session_cookie = (
+                    _synthetic_admin_session_cookie(
+                        port, SYNTHETIC_ADMIN_PASSWORD, timeout
+                    )
+                    if diagnose_publication_phases
+                    or diagnose_publication_storage is not None
+                    else None
                 )
                 for step_id, path in (
                     ("startup-readyz", "/v1/readyz"),
@@ -3602,18 +3915,21 @@ def run_qualification(
                             benchmark_process,
                             database,
                             diagnostic_runtime_url,
+                            session_cookie=diagnostic_session_cookie,
                             include_peak=True,
                         )
                     )
                     benchmark["runs"]["direct_provider_control"] = (
                         _direct_provider_control(provider)
                     )
-                    _diagnostic_finite_warmup(port)
+                    _diagnostic_finite_warmup(port, agent_token)
                     baseline_tasks = _wait_for_diagnostic_quiescence(
-                        diagnostic_runtime_url
+                        diagnostic_runtime_url,
+                        session_cookie=diagnostic_session_cookie,
                     )
                     baseline_runtime = _runtime_json(
-                        diagnostic_runtime_url, "q008-server-key"
+                        diagnostic_runtime_url,
+                        session_cookie=diagnostic_session_cookie,
                     )
                     if baseline_runtime is None:
                         raise QualificationError(
@@ -3665,6 +3981,7 @@ def run_qualification(
                         wal_diagnostics=(
                             qualification_persist_journal_mode != "candidate"
                         ),
+                        api_token=agent_token,
                     )
                     if (
                         phase_run["completed_count"] != PUBLICATION_PHASE_SAMPLES
@@ -3679,7 +3996,8 @@ def run_qualification(
                             f"failed={phase_run['failed_count']}"
                         )
                     final_runtime = _runtime_json(
-                        diagnostic_runtime_url, "q008-server-key"
+                        diagnostic_runtime_url,
+                        session_cookie=diagnostic_session_cookie,
                     )
                     if final_runtime is None:
                         raise QualificationError(
@@ -4132,6 +4450,7 @@ def run_qualification(
                             benchmark_process,
                             database,
                             diagnostic_runtime_url,
+                            session_cookie=diagnostic_session_cookie,
                             include_peak=True,
                         )
                     )
@@ -4140,6 +4459,7 @@ def run_qualification(
                         benchmark_process,
                         database,
                         diagnostic_runtime_url,
+                        session_cookie=diagnostic_session_cookie,
                         duration=STABILIZATION_SECONDS,
                         include_peak=True,
                     )
@@ -4270,6 +4590,7 @@ def run_qualification(
                         "client_concurrency": concurrency_workers,
                         "database_storage": _path_storage_metadata(database),
                         "config_fixture": Path(config_fixture).name,
+                        "provider_latency_profile": provider_latency_profile,
                         "cadence": benchmark_cadence_facts(content),
                         "runs": {},
                     }
@@ -4346,6 +4667,42 @@ def run_qualification(
                     )
                     benchmark["principal_count"] = benchmark_principals
                     benchmark["budget_mode"] = benchmark_budget_mode
+                    expected_rate_limited_count = None
+                    if admission_fairness_rate_per_minute_per_principal is not None:
+                        # Keep setup and warm-up work outside the measured policy.
+                        # Rehash installs the limiter immediately before the
+                        # concurrent batch, whose fresh principals each start
+                        # with exactly one token at the selected 1/minute rate.
+                        with config.open("a", encoding="utf-8") as config_file:
+                            config_file.write(
+                                "\n[admission_fairness]\n"
+                                "requests_per_minute_per_principal = "
+                                f"{admission_fairness_rate_per_minute_per_principal}\n"
+                            )
+                        rehash_result = _command(
+                            "activate-admission-fairness",
+                            binary,
+                            config,
+                            env,
+                            ("rehash", "--json"),
+                            timeout,
+                        )
+                        commands.append(rehash_result)
+                        if rehash_result.status != "pass":
+                            raise QualificationError(
+                                "could not activate the measured admission policy"
+                            )
+                        expected_rate_limited_count = (
+                            concurrency_requests - benchmark_principals
+                        )
+                        benchmark["admission_fairness"] = {
+                            "requests_per_minute_per_principal": (
+                                admission_fairness_rate_per_minute_per_principal
+                            ),
+                            "configuration": "live rehash immediately before batch",
+                            "expected_initially_admitted": benchmark_principals,
+                            "expected_rate_limited": expected_rate_limited_count,
+                        }
                     concurrent = _concurrent_finite_benchmark(
                         benchmark_process,
                         port,
@@ -4356,6 +4713,7 @@ def run_qualification(
                         competing_io_mib_per_second=competing_io_mib_per_second,
                         competing_io_max_mib=competing_io_max_mib,
                         api_tokens=principal_tokens,
+                        expected_rate_limited_count=expected_rate_limited_count,
                     )
                     benchmark["runs"]["concurrent_native_responses_finite"] = concurrent
                     if diagnose_finite_tail is not None:
@@ -4647,7 +5005,11 @@ def run_qualification(
         report["commands"] = [item.as_dict(root, binary, database) for item in commands]
         report["isolated_temporary_root"] = True
         if benchmark_mode:
-            end_board, _ = board_metadata()
+            end_board, _ = (
+                board_metadata()
+                if target_class == "sbc"
+                else ordinary_server_metadata()
+            )
             if end_board:
                 report["environment"]["power_thermal_mode_celsius_end"] = end_board.get(
                     "power_thermal_mode_celsius"
@@ -4700,6 +5062,12 @@ def _parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--binary", type=Path, required=True)
     parser.add_argument("--config-fixture", type=Path, default=DEFAULT_FIXTURE)
+    parser.add_argument(
+        "--target-class",
+        choices=("sbc", "ordinary-server"),
+        default="sbc",
+        help="Host evidence profile; SBC remains the default qualification target.",
+    )
     parser.add_argument("--expected-sha256")
     parser.add_argument(
         "--build-elapsed-ms",
@@ -4725,7 +5093,16 @@ def _parser() -> argparse.ArgumentParser:
         type=int,
         default=CONCURRENCY_WORKERS,
         metavar="N",
-        help="Concurrent finite-request workers, 1..8 (benchmark mode only).",
+        help="Concurrent finite-request workers, 1..16 (benchmark mode only).",
+    )
+    parser.add_argument(
+        "--provider-latency-profile",
+        choices=("instant", "mixed-0-10-50ms"),
+        default="instant",
+        help=(
+            "Deterministic loopback upstream service distribution; mixed profile "
+            "cycles 0/0/0/10/10/50 ms."
+        ),
     )
     parser.add_argument(
         "--concurrency-requests",
@@ -4763,6 +5140,16 @@ def _parser() -> argparse.ArgumentParser:
         choices=("none", "user", "global", "user-global"),
         default="none",
         help="Apply no budget, hard per-user, hard global, or both request budgets.",
+    )
+    parser.add_argument(
+        "--admission-fairness-rate-per-minute-per-principal",
+        type=int,
+        metavar="N",
+        help=(
+            "For an ordinary-server benchmark, enable the 60-second short-window "
+            "limiter immediately before the concurrent batch and measure expected "
+            "429 rejections at this per-principal rate."
+        ),
     )
     parser.add_argument(
         "--diagnose-finite-tail",
@@ -4920,6 +5307,11 @@ def main(argv: Sequence[str] | None = None) -> int:
             competing_io_max_mib=args.competing_io_max_mib,
             benchmark_principals=args.benchmark_principals,
             benchmark_budget_mode=args.benchmark_budget_mode,
+            admission_fairness_rate_per_minute_per_principal=(
+                args.admission_fairness_rate_per_minute_per_principal
+            ),
+            target_class=args.target_class,
+            provider_latency_profile=args.provider_latency_profile,
         )
     except (OSError, QualificationError, ValueError, sqlite3.Error) as error:
         requested_benchmark = (

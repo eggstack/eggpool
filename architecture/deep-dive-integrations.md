@@ -61,9 +61,10 @@ OpenCode are the exceptions: Codex TOML contains only
 `env_key = "EGGPOOL_API_KEY"` and OpenCode JSON uses
 `{env:EGGPOOL_API_KEY}` interpolation, so both snippets are non-secret, print
 by default, and `--print-secret` does not alter them. The delivery hints tell
-operators to set that environment variable and use `eggpool getkey` to
-retrieve the current value. Configsetup never executes a shell or writes a
-shell profile.
+operators to set that environment variable to the user's personal token.
+`eggpool getkey` remains a legacy-installation command and does not issue a
+managed-user credential. Configsetup never executes a shell or writes a shell
+profile.
 
 ## Provider-neutral agent projection
 

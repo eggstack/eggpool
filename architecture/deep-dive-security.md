@@ -69,6 +69,22 @@ values fall back to the proxy peer. No other forwarded header establishes
 trust.
 `security.allow_insecure_web_auth` is an explicit development override and
 emits a startup warning.
+
+The local operator CLI uses the data-directory owner's filesystem authority.
+`users add` commits a member, an explicit or configured default initial profile,
+the transition from
+`admin_initialized` to `managed`, and audit entries in one transaction; a
+failed profile assignment leaves the original state intact. The explicit
+`users enable-managed` path uses the same transition helper and records its
+own audit event. A remaining configured shared key is rejected after
+identity initialization, and `dashboard.public` cannot expose managed routes;
+removing those stale config values is cleanup, not a precondition for the
+atomic cutover. Default member profile selection is audited and revisioned,
+affects only future member creation, and does not alter existing assignments.
+Clearing restores deny-by-default for future unassigned members. No budget
+template is copied; budget scopes remain independently configured. Disabling a user revokes sessions and tokens and advances the
+auth epoch. Re-enabling does not un-revoke credentials, and the last active
+administrator remains protected.
 Session-authenticated responses carry `Cache-Control: no-store, max-age=0` so
 account and administration HTML containing identity, budget, or CSRF data is
 not retained by shared or browser caches. Privileged browser mutations also
@@ -79,6 +95,12 @@ between HTTP middleware authentication and database commit.
 Failed personal-token lookups use a 256-entry, one-second negative cache keyed
 by token digest. Successful token lookups are not cached, so revocation takes
 effect on the next request.
+
+Optional short-window fairness uses only the authenticated principal's
+database-owned user ID; credentials and request headers cannot choose a bucket.
+The process-local table is capacity-bounded, stale entries are reclaimed only
+after the full refill window, and a full table fails closed for new principals.
+No token, prompt, body, IP, or provider outcome is retained in limiter state.
 
 ## Headers, bodies, and redaction
 

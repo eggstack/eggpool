@@ -81,9 +81,12 @@ changes.
 ## Phase 5 — Optional on-prem small-team access and budgeting
 
 Objective: add identity-bound use of a single locally administered EggPool
-instance without regressing the single-owner SBC and LAN deployment.
-Authorized clients may route to operator-configured hosted or self-hosted LLMs;
-all provider secrets/topology remain under TOML/environment ownership.
+instance without regressing the solo owner's SBC/microSD and LAN experience.
+Small teams are expected primarily on ordinary on-prem servers with durable
+storage; Pi/microSD tests are a lightweight solo regression baseline, not the
+default team throughput acceptance target. Authorized clients may route to
+operator-configured hosted or self-hosted LLMs; all provider secrets/topology
+remain under TOML/environment ownership.
 
 - Authority: `plans/adrs/ADR-0002-on-prem-user-identity-and-policy-boundaries.md`
   and `plans/subsystems/on-prem-user-access-roadmap.md`.
@@ -98,10 +101,12 @@ all provider secrets/topology remain under TOML/environment ownership.
   mandatory cloud/SSO, native public internet access, and unqualified claims
   about 50 concurrent generations.
 - Completion: legacy upgrade preserves data and access; fresh bootstrap is
-  fail closed without defaults; user policy cannot be bypassed via virtual
-  routing or alternate surfaces; per-user budgets recover across cancellation/
-  restart; measured SBC and ordinary-hardware evidence scopes supported
-  team size and concurrent workload honestly.
+  fail closed without defaults; downstream credentials, agent configuration,
+  status CLI and browser access work after identity cutover; user policy
+  cannot be bypassed via virtual routing or alternate surfaces; per-user
+  budgets recover across cancellation/restart. Measured solo SBC/microSD
+  evidence demonstrates light footprint; representative ordinary on-prem
+  server evidence scopes team concurrency claims honestly.
 
 Phases 2–5 create NO automatic milestones. Subsystem roadmaps are written on
 demand when a slice is ready to be reasoned about, with typed dependencies

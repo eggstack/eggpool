@@ -4,6 +4,7 @@
 //! owns the bounded parse and the values that later layers may safely reuse.
 
 pub mod admission;
+pub(crate) mod admission_fairness;
 pub mod body;
 pub mod limits;
 pub(crate) mod resource_budget;
@@ -14,6 +15,9 @@ pub use admission::{
     admit_compact_request, admit_request, affinity_identity_input, budget_admission_facts,
     has_compaction_trigger, routing_request_facts, thinking_requirement_from_intent,
     validate_responses_stateless_policy,
+};
+pub(crate) use admission_fairness::{
+    AdmissionFairnessDecision, AdmissionFairnessLimiter, AdmissionFairnessPolicy,
 };
 
 pub(crate) use admission::{

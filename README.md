@@ -73,7 +73,10 @@ eggpool update 0.8.0   # exact historical-version switch
 eggpool serve
 eggpool status
 
-export EGGPOOL_API_KEY="$(eggpool getkey)"
+# For a managed installation, create a personal credential for this user and
+# set its one-time value in the client environment:
+eggpool users token USER --show-secret
+export EGGPOOL_API_KEY='<personal-token-shown-once>'
 
 # Liveness / readiness (no key needed)
 curl http://127.0.0.1:11300/v1/healthz
@@ -90,11 +93,10 @@ curl -H "Authorization: Bearer $EGGPOOL_API_KEY" \
   http://127.0.0.1:11300/v1/chat/completions
 ```
 
-Inference (`/v1/*` except `/v1/healthz` and `/v1/readyz`), integration
-(`/api/integrations/*`), and status endpoints (`/api/status`,
-`/api/stats/runtime`, `/api/stats/update`) require the server key as
-`Authorization: Bearer <key>` (OpenAI-style) or `x-api-key: <key>`
-(Anthropic-style); without it they return `401`. To pin a provider, qualify
+Managed inference and integration requests use the caller's personal token as
+`Authorization: Bearer <token>` (OpenAI-style) or `x-api-key: <token>`
+(Anthropic-style). Legacy, pre-bootstrap installs may continue using the
+shared server key until migration; it does not grant managed-user access. To pin a provider, qualify
 the model as `model/provider` (e.g. `"gpt-4o/openai"`); `eggpool accounts
 explain --model <id>` shows per-account eligibility. Full endpoint list:
 [API reference](docs/api-reference.md).
@@ -108,11 +110,17 @@ eggpool configsetup claude-code
 eggpool configremote codex            # secret-free remote profile for other machines
 ```
 
-Generated configs reference `EGGPOOL_API_KEY` without embedding the key (`export EGGPOOL_API_KEY="$(eggpool getkey)"`). See [Agent Configuration](docs/agent-configuration.md) for all targets, the managed `--apply`/`--sync`/`--check`/`--remove` lifecycle, remote profiles, and the transactional `eggpool-connect` desktop helper.
+Generated configs reference `EGGPOOL_API_KEY` without embedding the key. Set it to a personal token from `eggpool users token USER --show-secret`; `eggpool getkey` is only for legacy installs. See [Agent Configuration](docs/agent-configuration.md) for all targets, the managed `--apply`/`--sync`/`--check`/`--remove` lifecycle, remote profiles, and the transactional `eggpool-connect` desktop helper.
 
 ## Dashboard & LAN Access
 
 By default EggPool binds `0.0.0.0:11300` and serves a public read-only dashboard at `http://<lan-ip>:11300/`. To share with desktops on your LAN, set `[integrations].advertise_base_url = "http://<lan-ip>:11300/v1"`, run `eggpool rehash` (advertised URL is live-reloadable profile output; it never changes the listen socket), then export a profile with `eggpool configremote codex`. Lock it down with `[server].host = "127.0.0.1"` (local only) or `eggpool dashboard public --off` (key required on the dashboard too). See [Firewall](docs/firewall.md).
+
+Browser password sign-in is shown only over loopback or trusted HTTPS proxy
+transport. A remote plaintext HTTP visit to `/login` receives an explanation
+without a username or password form. For a solo headless device, use SSH port
+forwarding to loopback; teams should use an operator-managed HTTPS proxy or
+VPN. LAN inference tokens remain a separate API transport choice.
 
 ## CLI Essentials
 

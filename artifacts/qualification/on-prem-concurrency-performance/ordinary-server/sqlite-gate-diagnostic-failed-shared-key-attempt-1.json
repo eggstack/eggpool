@@ -1,0 +1,7 @@
+{
+  "manifest": "runtime-q001.v1",
+  "plan": "SBC qualification",
+  "reason": "diagnostic warm-up returned HTTP 401 without a body",
+  "schema_version": "runtime-q008.v2",
+  "status": "fail"
+}

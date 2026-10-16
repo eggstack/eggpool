@@ -23,6 +23,14 @@ Legacy archive latest: Plan 250
 241 remain historical per their own closure passes; the `146-*` duplicate
 pair is a known numbering accident.
 
+Post-merge planning reconciliation (2026-10-15): PR #7 has merged to
+`main` (`88f58bbf`). M016's closure accurately describes its historical
+pre-merge hold, not the current branch. M017–M023 register independent
+post-merge correctness, headless-administration and optional small-team
+capability passes. Solo SBC/microSD remains the lightweight reference; ordinary
+on-prem server hardware with durable storage is the expected team host.
+No new runtime, schema or performance claim lands with these plans.
+
 ## Status vocabulary
 
 - **proposed** — roadmap or plan exists but is not approved for execution.
@@ -50,8 +58,8 @@ pair is a known numbering accident.
 | Persistence | active | `plans/subsystems/persistence-roadmap.md` | M011 ready — post-M010 roadmap/documentation reconciliation | M009/M010 closures accepted. Documentation/tooling-only corrective; production remains WAL/NORMAL. No technical persistence successor is registered. |
 | Deployment and packaging | closed | `plans/subsystems/deployment-packaging-roadmap.md` | M005 closed — active PATH integration detection corrective | M001–M005 closed; no successor registered. |
 | Dashboard | closed | `plans/subsystems/dashboard-roadmap.md` | M012 closed — lifecycle closure and documentation polish | M001–M012 closed; no registered successor; future dashboard work requires a new bounded plan. |
-| On-prem user access | active | `plans/subsystems/on-prem-user-access-roadmap.md` | M016 closed — merge held pending maintainer review | M014/M015 and exact M016 candidate checks are closed/passed; PR #7 remains open pending maintainer review. M001–M013 history preserved; physical Pi 5 restricted envelope remains qualified only for solo/light concurrency. |
-| On-prem concurrency performance | active | `plans/subsystems/on-prem-concurrency-performance-roadmap.md` | M001 conditionally closed — Pi 5/microSD durable-storage tail attribution | Optional follow-up, **nonblocking** to PR #7 merge. Controlled competing-I/O and account/budget matrix evidence remain before broader claims or optimization. SSD/NVMe is optional, not a closure dependency. |
+| On-prem user access | closed | `plans/subsystems/on-prem-user-access-roadmap.md` | M023 closed — short-window fairness controls | M017–M023 complete. Modified-binary ordinary-Linux/NVMe no-rule and active-throttle qualification is recorded; no successor is registered. |
+| On-prem concurrency performance | active | `plans/subsystems/on-prem-concurrency-performance-roadmap.md` | M002 closed — ordinary-server synthetic baseline recorded | M001's Pi/microSD solo tail attribution stays conditionally closed; M002 authorizes no WAL/SQLite topology change. |
 
 ## Dependency-ready implementation plans
 
@@ -100,6 +108,14 @@ Historical M007 blocker assessment at baseline `7e241ad` (`plans/closure/persist
 
 | Subsystem / plan | Disposition | Evidence |
 |---|---|---|
+| On-prem user access M023 — short-window team fairness | closed — opt-in bounded token buckets, pre-body 429/Retry-After, modified-binary ordinary-Linux/NVMe no-rule matrix, and three active-throttle runs; no registered successor or capacity SLA | `plans/closure/on-prem-user-access/023-performance-qualification.md`; implementation `84482e9`, qualification tooling `83c0779` |
+| On-prem concurrency performance M002 — ordinary-server team baseline | closed — 27 passing Q008 runs across nine cells; Q009 hard-budget, provider-fault, user-disable and restart evidence; bounded competing-I/O and SQLite gate diagnostics; measured host-specific sizing guidance; M023 promoted to ready | `plans/closure/on-prem-concurrency-performance/002-status.md`, artifacts under `artifacts/qualification/on-prem-concurrency-performance/ordinary-server/` |
+| On-prem user access M022 — hard-budget agent interoperability | closed — Codex CLI 0.162.1 omitted a Responses output cap; OpenCode 1.18.35 sent configured `max_output_tokens`; stable proof-failure and exhausted-budget codes added; default/no-default verification passes; M023 is now ready after M002 operational evidence | `plans/closure/on-prem-user-access/022-status.md`, implementation `dee65ae` |
+| On-prem user access M021 — default member policy and provisioning | closed — transactional future-only default profile selection, CLI/browser creation, explicit no-profile override, additive schema 63 migration, policy visibility and budget-separation behavior pass; M022 subsequently closed; M023 remains blocked on ordinary-server evidence | `plans/closure/on-prem-user-access/021-status.md`, implementation `b76d359`, CLI journey `ee563be`, race test `3f1ca54` |
+| On-prem user access M020 — managed transition and headless administration | closed — first member transition, profile assignment and audit are atomic; headless add/show/disable/enable workflow and stale-config auth rejection pass; M021 promoted to ready | `plans/closure/on-prem-user-access/020-status.md`, implementation `8a875a1` |
+| On-prem user access M019 — login transport and solo LAN operability corrective | closed — remote plaintext login GET returns no credential form; loopback and configured HTTPS-proxy paths pass; solo SSH tunnel and team proxy guidance documented; M020 promoted to ready | `plans/closure/on-prem-user-access/019-status.md`, implementation `b18a561` |
+| On-prem user access M018 — local operator status corrective | closed — status and runtime status use bounded private control-socket readback without a server API key; managed HTTP authorization is unchanged; no successor unblocked | `plans/closure/on-prem-user-access/018-status.md`, implementation `8e2b66a`, CLI fixture `3be5d83` |
+| On-prem user access M017 — managed client credential reconciliation | closed — managed local config uses an explicitly supplied active personal token; keyless remote profiles remain read-only; client/helper suites and default/no-default serial workspace suites pass; M022 promoted to ready | `plans/closure/on-prem-user-access/017-status.md`, implementation `d726bce`, `218df45` |
 | On-prem user access M016 — final PR #7 integration and merge-readiness reconciliation | closed — local Rust/tooling, Q007, release-doc, browser and installed release-binary evidence pass; exact PR head `3d68c715` hosted CI, Linux/macOS installer and cargo-deny pass; merge held because no maintainer PR review has been submitted; no future plan depends on M016 | `plans/closure/on-prem-user-access/016-status.md`, PR #7, base `9a0a903c`, head `3d68c715`, CI `38721601336`, installer `38721601305`, audit `38721601318` |
 | On-prem user access M015 — independent authentication/authorization threat review | closed — independent review findings on hard-cost proof bounds and browser-session access corrected and re-reviewed; default 1,024 / no-default 1,025 tests pass (one ignored each); exact-SHA CI, installer and dependency audit pass on `d8fd9c2a`; no M015 security findings remain; M016 promoted to ready | `plans/closure/on-prem-user-access/015-status.md`, implementation `a526980c`, `deb1622f`, `d8fd9c2a`, security scan `52bd79cc`, CI `38720507683`, installer `38720509034`, audit `38720507720` |
 | On-prem user access M014 — Rustls dependency security-advisory corrective | closed — lockfile-only Rustls 0.23.46 patch, unchanged transport feature graph; local default/no-default and 1,009/1,010-test workspace suites, provider TLS (trusted root, wrong-root and hostname rejection), budget/coordinator suites, release build and tooling pass; hosted cargo-deny, CI and both installers pass on `7462263ec482c5fda4bd1a70a9a55b0efc313cd3`; main remains pending PR merge | `plans/closure/on-prem-user-access/014-status.md`, implementation `7462263e`, audit `38671345587`, CI `38671345679`, installers `38671345597` |
@@ -511,3 +527,49 @@ unblocked. On-prem user-access M016 is ready after M014/M015 closure and still
 requires final-SHA gates; this optional diagnostic workstream has no edge
 to that sequence. The concurrency-performance roadmap remains active for any
 future separately scoped controlled-I/O/media/budget work; none is registered.
+
+Unblock audit (on-prem user access M017 closed, `plans/closure/on-prem-user-access/017-status.md`): searched `plans/implementation/on-prem-user-access/`, the roadmap dependency graph, and the dependency-ready, active, and blocked registry tables. M022's sole hard dependency, M017, is closed and its shared client/wire and hard-budget proof interfaces were already stable, so M022 moves `blocked` → `ready`. M020 remains blocked on M019; M021 remains blocked on M020; M023 remains blocked on M022 and its ordinary-server operational evidence. No other registered plan became eligible. M018 and M019 were already independent ready plans. No 49-user, team-capacity, or generated-output cap claim is introduced by this audit.
+
+Unblock audit (on-prem user access M018 closed, `plans/closure/on-prem-user-access/018-status.md`): searched the on-prem implementation plans, roadmap dependency graph, and dependency-ready, active, and blocked registry tables. No registered plan has a hard M018 dependency, so no blocked row is promoted. M019 and M022 remain ready; M020 remains blocked on M019, M021 on M020, and M023 on M022 plus ordinary-server operational evidence. No capacity or generated-output cap claim is introduced.
+
+Unblock audit (on-prem user access M019 closed, `plans/closure/on-prem-user-access/019-status.md`): searched the on-prem implementation plans, roadmap dependency graph, and dependency-ready, active, and blocked registry tables. M020's hard dependencies M017 and M019 are both closed, so M020 moves `blocked` → `ready`. M021 remains blocked on M020. M023 remains blocked on M022 and ordinary-server operational evidence. M022 remains ready; no other plan is promoted and no capacity claim is introduced.
+
+Unblock audit (on-prem user access M020 closed, `plans/closure/on-prem-user-access/020-status.md`): searched the on-prem implementation plans, roadmap dependency graph, and dependency-ready, active, and blocked registry tables. M021's sole hard dependency, M020, is closed, so M021 moves `blocked` → `ready`. M023 remains blocked on M022 and ordinary-server operational evidence; M022 remains ready. No other plan is promoted and no team-capacity claim is introduced.
+
+Unblock audit (on-prem user access M021 closed, `plans/closure/on-prem-user-access/021-status.md`): searched the on-prem implementation plans, roadmap dependency graph, and dependency-ready, active, and blocked registry tables. M022 was already ready after M017 closed and remains ready; M021 was not a prerequisite. M023 remains blocked on hard M022 closure and the operational ordinary-server M002 evidence; M002's tooling readiness does not satisfy that evidence gate. No newly-ready plan is promoted and no team-capacity claim is introduced.
+
+Unblock audit (on-prem user access M022 closed, `plans/closure/on-prem-user-access/022-status.md`): searched the on-prem implementation plans, roadmap dependency graph, and dependency-ready, active, and blocked registry tables. M023's hard M022 dependency is satisfied, but its source-plan stop condition still requires measured ordinary-server Linux with durable SSD/NVMe storage. The M002 tooling/setup slice is conditionally closed; the attested Ubuntu host exceeded the predeclared I/O-pressure gate before qualification collection, so no capacity measurement exists. The available runner is a Darwin MacBook Pro and cannot supply the missing evidence. M023 therefore remains blocked pending an isolated ordinary-server result. No other registered on-prem user-access plan after M023 is eligible; no capacity claim is introduced.
+
+Unblock audit (on-prem concurrency performance M002 conditionally closed,
+`plans/closure/on-prem-concurrency-performance/002-status.md`): searched
+`plans/implementation/`, the on-prem concurrency and user-access roadmap
+dependency sections, and the dependency-ready, active, and blocked registry
+tables. No future plan declares M002 as a hard, interface, or soft dependency.
+On-prem user-access M023 names ordinary-server evidence as an operational
+requirement, but the evidence remains unmeasured and M023 remains blocked on
+its hard M022 dependency. No plan was promoted or unblocked. A future isolated
+server run remains required before M023 can use M002 as its operational
+capacity evidence.
+
+Unblock audit (on-prem concurrency performance M002 closed,
+`plans/closure/on-prem-concurrency-performance/002-status.md`): searched
+`plans/implementation/`, the on-prem concurrency and user-access roadmap
+dependency sections, and the dependency-ready, active, and blocked registry
+tables. M023's hard M022 dependency is closed and its named operational M002
+requirement is satisfied by the durable-NVMe host matrix and Q009 lifecycle
+evidence, so M023 moves `blocked` → `ready`. No other registered future plan
+declares M002 as a hard, interface, or soft dependency. M001 remains
+conditionally closed; no production storage optimization is authorized by
+this evidence.
+
+
+Unblock audit (on-prem user access M023 conditionally closed,
+`plans/closure/on-prem-user-access/023-status.md`): searched
+`plans/implementation/`, the on-prem user-access roadmap dependency graph,
+and the dependency-ready, active, and blocked registry tables. M023 has no
+registered successor or downstream plan, so no future work is newly
+unblocked and no status promotion is required. Its ordinary-Linux
+post-change performance comparison remains a closure condition, not a
+dependency for any registered plan. No capacity claim is introduced.
+
+M023 performance closure audit (`plans/closure/on-prem-user-access/023-performance-qualification.md`, baseline `83c0779a`): the modified release binary passed its 27-run no-rule ordinary-server matrix and three active-throttle runs on the attested Ubuntu/NVMe host. Reviewed the on-prem implementation plans, subsystem dependency graph, and dependency-ready, active, and blocked registry tables. M023 has no registered successor or downstream plan; no future work is newly unblocked, no blocked row is promoted, and no other plan status changes. The on-prem user-access roadmap is closed with its historical closure records retained. No capacity SLA is introduced.

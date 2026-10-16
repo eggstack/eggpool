@@ -367,6 +367,39 @@ extra
         ControlRequest::parse_frame(wrong),
         Err(ProtocolError::WrongVersion)
     );
+
+    let readback =
+        serde_json::to_vec(&ControlRequest::readback("status", "read_status")).expect("serializes");
+    assert_eq!(
+        ControlRequest::parse_frame(&[readback, vec![b'\n']].concat())
+            .expect("readback is accepted")
+            .command,
+        "read_status"
+    );
+}
+
+#[tokio::test]
+async fn local_control_returns_bounded_status_payload() {
+    let root = tempfile::tempdir().expect("temp root");
+    private_directory(root.path());
+    let socket = root.path().join("runtime/status.sock");
+    let server = start(&socket, |request| async move {
+        assert_eq!(request.command, "read_status");
+        ControlResponse::with_payload(request.request_id, serde_json::json!({"status":"ready"}))
+    })
+    .await
+    .expect("listener starts");
+
+    let response = ControlClient::new(socket)
+        .read_status(false)
+        .await
+        .expect("status readback succeeds");
+    assert!(response.ok);
+    assert_eq!(
+        response.payload,
+        Some(serde_json::json!({"status":"ready"}))
+    );
+    server.close().await.expect("listener closes");
 }
 
 #[tokio::test]

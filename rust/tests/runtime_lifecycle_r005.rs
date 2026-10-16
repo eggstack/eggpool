@@ -86,13 +86,13 @@ fn exact_r001_field_dispositions_are_ported() {
         .map(|(path, disposition)| ((*path).to_owned(), disposition.to_string()))
         .collect::<Vec<_>>();
     assert_eq!(actual, expected);
-    assert_eq!(actual.len(), 155);
+    assert_eq!(actual.len(), 158);
     assert_eq!(
         actual
             .iter()
             .filter(|(_, disposition)| disposition == "live")
             .count(),
-        61
+        64
     );
     assert_eq!(
         actual
@@ -173,6 +173,30 @@ fn live_restart_and_mixed_mutations_are_classified_without_partial_semantics() {
     assert_eq!(
         transition.restart_required_paths(),
         vec!["server.port".to_owned()]
+    );
+}
+
+#[test]
+fn admission_fairness_policy_is_live_reloaded_as_one_generation_contract() {
+    let old = Config::default();
+    let mut new = old.clone();
+    new.admission_fairness.requests_per_minute_per_principal = Some(120);
+    new.admission_fairness.global_requests_per_minute = Some(1200);
+    new.admission_fairness.max_tracked_principals = 2048;
+    let transition = classify_transition(&old, &new).expect("fairness transition");
+    assert!(!transition.has_restart_required());
+    assert_eq!(
+        transition
+            .diff()
+            .live()
+            .iter()
+            .map(|change| change.path.as_str())
+            .collect::<Vec<_>>(),
+        vec![
+            "admission_fairness.global_requests_per_minute",
+            "admission_fairness.max_tracked_principals",
+            "admission_fairness.requests_per_minute_per_principal",
+        ]
     );
 }
 

@@ -40,8 +40,19 @@ async fn fresh_database_migrates_idempotently_and_preserves_pragmas() {
         .run()
         .await
         .expect("migrations apply");
-    assert_eq!(first.applied_versions.len(), 62);
-    assert_eq!(first.applied_this_run.len(), 62);
+    assert_eq!(first.applied_versions.len(), 63);
+    assert_eq!(first.applied_this_run.len(), 63);
+    let default_member_profile: Option<String> = database
+        .call(|connection| {
+            connection.query_row(
+                "SELECT default_member_profile_id FROM policy_state WHERE singleton = 1",
+                [],
+                |row| row.get(0),
+            )
+        })
+        .await
+        .expect("fresh member default is readable");
+    assert_eq!(default_member_profile, None);
     database
         .quick_check()
         .await
@@ -259,7 +270,7 @@ async fn python_historical_fixture_upgrades_and_repositories_round_trip() {
         .await
         .expect("current migrations apply");
     assert_eq!(state.applied_this_run.first(), Some(&12));
-    assert_eq!(state.applied_this_run.last(), Some(&62));
+    assert_eq!(state.applied_this_run.last(), Some(&63));
 
     let account = AccountRepository::new(&database)
         .get_by_name("historical-account")
@@ -511,7 +522,7 @@ async fn current_database_can_be_opened_read_only_without_writes() {
 // forward, and recovers identity/policy/budgets without fabricating
 // history. The frozen image is `tests/fixtures/database/schema54-
 // pre-upgrade.sql` (SHA-256 recorded in the M010 closure); tests never run
-// migrations 1..54 themselves — only the production 55..62 upgrade path.
+// migrations 1..54 themselves — only the production 55..63 upgrade path.
 // ---------------------------------------------------------------------------
 
 use eggpool::{
@@ -628,14 +639,14 @@ async fn schema54_image_upgrades_with_legacy_state_preserved() {
         .archive;
     BackupService::validate_archive(&archive).expect("pre-upgrade archive validates");
 
-    // Forward-only production upgrade: exactly migrations 55..62.
+    // Forward-only production upgrade: exactly migrations 55..63.
     let state = MigrationRunner::new(&database)
         .run()
         .await
         .expect("production upgrade applies");
     assert_eq!(state.applied_this_run.first(), Some(&55));
-    assert_eq!(state.applied_this_run.last(), Some(&62));
-    assert_eq!(state.applied_this_run.len(), 8);
+    assert_eq!(state.applied_this_run.last(), Some(&63));
+    assert_eq!(state.applied_this_run.len(), 9);
     database
         .quick_check()
         .await

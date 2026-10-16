@@ -146,10 +146,63 @@ nothing is silently upgraded to a guarantee.
   max_microdollars_per_million_tokens`); unpriced providers fail closed, an
   explicit zero tariff means verified free, and estimator fallbacks are never
   a hard price. Requests that cannot be bounded — unbounded output, unknown
-  tariff, arithmetic overflow — are denied with a stable 429
-  (`User budget hard limit is not enforceable for this request`) before any
-  upstream submission. Observed provider usage above a hard hold is settled
-  visibly, never clamped.
+  tariff, arithmetic overflow — are denied with HTTP 429 and machine code
+  `hard_budget_not_enforceable` before any upstream submission. The response
+  advises callers to include a positive output cap supported by the API and
+  operators to configure a tariff when hard USD rules apply. `budget_exceeded`
+  identifies an exhausted rule. Observed provider usage above a hard hold is
+  settled visibly, never clamped.
+
+### Short-window admission fairness
+
+Operators can optionally cap bursty inference traffic before EggPool reads the
+request body or enters durable budget reservation. The rule is process-local,
+uses a monotonic 60-second token bucket, and defaults to disabled:
+
+```toml
+[admission_fairness]
+requests_per_minute_per_principal = 120
+global_requests_per_minute = 1200
+max_tracked_principals = 4096
+```
+
+Each principal's bucket is keyed by its authenticated user ID, so multiple
+agent credentials for one user share the same allowance. The global bucket,
+when configured, intersects the per-user rule. Rates are bounded to 1–60,000
+requests per minute; tracked principal state is bounded to 1–65,536 entries.
+If the state table is full of recently active principals, a new principal is
+rejected with 429 until stale state can be reclaimed; EggPool does not evict a
+live bucket to grant extra traffic. Limiter state resets on restart, while
+daily/monthly budgets remain durable and authoritative.
+
+Throttles return HTTP 429, `Retry-After`, machine code
+`short_window_rate_limited`, and `X-EggPool-Admission-Scope` (`principal`,
+`global`, or `principal_state_capacity`). Admitted responses expose remaining
+short-window allowance in `X-EggPool-Admission-Remaining`, plus the scope and
+60-second window. Malformed or oversized requests consume an admission token
+because the decision is made before body collection. No-rule installations
+take the existing admission path without allocating principal state.
+
+### Coding-agent compatibility
+
+The supported request fields used as output bounds are:
+
+| API surface | Explicit output bound fields |
+|-------------|-------------------------------|
+| Chat Completions | `max_completion_tokens`, `max_tokens` |
+| Responses | `max_output_tokens`, `max_completion_tokens`, `max_tokens` |
+| Compact Responses | `max_output_tokens`, `max_completion_tokens`, `max_tokens` |
+| Anthropic Messages | `max_tokens` |
+
+Synthetic loopback captures of Codex CLI 0.162.1 and OpenCode 1.18.35
+confirmed that behavior depends on client model configuration: Codex CLI sent
+a streaming Responses request without an output cap, while OpenCode sent
+`max_output_tokens: 1024` from its configured `limit.output`. The sanitized
+capture record is in
+[`rust/tests/fixtures/on_prem_budget_agent_compatibility.json`](../rust/tests/fixtures/on_prem_budget_agent_compatibility.json).
+An unbounded request continues to fail before dispatch under hard token rules.
+For OpenCode, configure a model output limit so its Responses request carries
+the bound. EggPool does not inject or infer a cap for any client.
 
 See the [API reference](api-reference.md#authentication) for the
 authenticated `/api/user-budget` view.
@@ -173,3 +226,7 @@ the per-user contract above. Global counters never depend on a user row, so
 disabling or deleting a user preserves history and remaining headroom. Members
 see only their own rules and usage; instance ceilings and aggregate usage are
 admin-visible only.
+
+Default member profiles do not create or copy budget rules. Configure user and
+instance ceilings separately; changing the default model profile leaves all
+existing budget rules and usage unchanged.

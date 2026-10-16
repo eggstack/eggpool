@@ -33,6 +33,49 @@ async fn runtime_fixture_with_body_limit(
     (directory, database, runtime)
 }
 
+async fn runtime_fixture_with_short_window_limit(
+    requests_per_minute_per_principal: Option<u32>,
+    global_requests_per_minute: Option<u32>,
+) -> (tempfile::TempDir, Database, ServerRuntime) {
+    let directory = tempfile::tempdir().expect("temporary state directory");
+    let database = Database::open(DatabaseConfig {
+        path: directory
+            .path()
+            .join("eggpool.db")
+            .to_string_lossy()
+            .into_owned(),
+        ..DatabaseConfig::default()
+    })
+    .await
+    .expect("database opens");
+    MigrationRunner::new(&database)
+        .run()
+        .await
+        .expect("migrations run");
+    let process = ProcessRuntime::new(database.clone()).expect("process runtime builds");
+    let mut config = Config::default();
+    config.server.api_key = Some("test-key-transport".to_owned());
+    config.admission_fairness.requests_per_minute_per_principal = requests_per_minute_per_principal;
+    config.admission_fairness.global_requests_per_minute = global_requests_per_minute;
+    let candidate = RuntimeGenerationFactory::prepare(
+        &process,
+        config.clone(),
+        "server-transport-fairness".to_owned(),
+        1,
+    )
+    .await
+    .expect("initial generation prepares");
+    let manager = Arc::new(RuntimeManager::new(
+        candidate.transfer().expect("generation transfers"),
+    ));
+    process
+        .install_initial_tasks((*manager).clone(), &config)
+        .await
+        .expect("initial tasks install");
+    let runtime = ServerRuntime::new(process, Arc::clone(&manager), config);
+    (directory, database, runtime)
+}
+
 async fn runtime_fixture_with_generation_components(
     max_request_body_bytes: u64,
 ) -> (
@@ -205,6 +248,51 @@ async fn dashboard_timeseries_routes_preserve_auth_and_validate_periods() {
         .close()
         .await
         .expect("database close is idempotent");
+}
+
+#[tokio::test]
+async fn short_window_fairness_rejects_before_dispatch_and_reports_retry_scope() {
+    let (_directory, database, runtime) =
+        runtime_fixture_with_short_window_limit(Some(1), None).await;
+    let handle = runtime.handle();
+    let listener = TcpListener::bind(("127.0.0.1", 0))
+        .await
+        .expect("bind listener");
+    let address = listener.local_addr().expect("listener address");
+    let task = tokio::spawn(async move { runtime.serve_listener(listener).await });
+    let body = br#"{"model":"missing-model","messages":[]}"#;
+    let raw = format!(
+        "POST /v1/chat/completions HTTP/1.1\r\nHost: localhost\r\nX-API-Key: test-key-transport\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}",
+        body.len(),
+        std::str::from_utf8(body).expect("fixture JSON")
+    );
+    let admitted = request(address, raw.as_bytes()).await;
+    assert!(admitted.starts_with("HTTP/1.1 503"), "{admitted}");
+    assert!(
+        admitted.contains("x-eggpool-admission-scope: principal"),
+        "{admitted}"
+    );
+    assert!(
+        admitted.contains("x-eggpool-admission-remaining: 0"),
+        "{admitted}"
+    );
+
+    let limited_without_body = format!(
+        "POST /v1/chat/completions HTTP/1.1\r\nHost: localhost\r\nX-API-Key: test-key-transport\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n",
+        body.len()
+    );
+    let limited = request(address, limited_without_body.as_bytes()).await;
+    assert!(limited.starts_with("HTTP/1.1 429"), "{limited}");
+    assert!(limited.contains("retry-after: 60"), "{limited}");
+    assert!(
+        limited.contains("x-eggpool-admission-scope: principal"),
+        "{limited}"
+    );
+    assert!(limited.contains("short_window_rate_limited"), "{limited}");
+
+    handle.request_shutdown(ShutdownReason::Requested);
+    let _ = task.await;
+    database.close().await.expect("database closes");
 }
 
 async fn streaming_fixture_provider(

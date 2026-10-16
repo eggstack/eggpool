@@ -38,6 +38,8 @@ pub enum ModelPolicyError {
     InvalidPolicyInput,
     #[error("preferred model is not allowed by its profile")]
     PreferredModelDenied,
+    #[error("member default profile was not found")]
+    DefaultProfileNotFound,
     #[error(transparent)]
     Database(#[from] crate::db::DatabaseError),
 }
@@ -62,6 +64,7 @@ pub struct PolicyProfileSummary {
     pub version: i64,
     pub assigned_users: i64,
     pub model_rules: i64,
+    pub is_default_member_profile: bool,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -75,6 +78,12 @@ impl ModelPolicySnapshot {
     /// Monotonic persisted revision used by discovery ETags and diagnostics.
     pub fn revision(&self) -> i64 {
         self.revision
+    }
+
+    /// Whether a member has an assigned profile policy. Administrators may
+    /// intentionally be unprofiled and retain the administrator default.
+    pub fn has_profile(&self) -> bool {
+        self.default_effect.is_some()
     }
 
     pub fn preferred_model_id(&self) -> Option<&str> {
@@ -223,7 +232,8 @@ impl ModelPolicyService {
                 let mut statement = connection.prepare(
                     "SELECT p.id, p.name, p.default_effect, p.preferred_model_id, p.version, \
                             (SELECT COUNT(*) FROM user_profile_assignments a WHERE a.profile_id = p.id), \
-                            (SELECT COUNT(*) FROM profile_model_rules r WHERE r.profile_id = p.id) \
+                            (SELECT COUNT(*) FROM profile_model_rules r WHERE r.profile_id = p.id), \
+                            COALESCE(p.id = (SELECT default_member_profile_id FROM policy_state WHERE singleton = 1), 0) \
                      FROM policy_profiles p ORDER BY p.name COLLATE NOCASE, p.id LIMIT 200",
                 )?;
                 statement
@@ -236,6 +246,7 @@ impl ModelPolicyService {
                             version: row.get(4)?,
                             assigned_users: row.get(5)?,
                             model_rules: row.get(6)?,
+                            is_default_member_profile: row.get(7)?,
                         })
                     })?
                     .collect()
@@ -265,6 +276,91 @@ impl ModelPolicyService {
             })
             .await
             .map_err(ModelPolicyError::Database)
+    }
+
+    pub async fn default_member_profile(&self) -> Result<Option<String>, ModelPolicyError> {
+        self.database
+            .call(|connection| {
+                connection.query_row(
+                    "SELECT default_member_profile_id FROM policy_state WHERE singleton = 1",
+                    [],
+                    |row| row.get(0),
+                )
+            })
+            .await
+            .map_err(ModelPolicyError::Database)
+    }
+
+    pub async fn set_default_member_profile(
+        &self,
+        profile_id: Option<&str>,
+        actor_id: &str,
+    ) -> Result<bool, ModelPolicyError> {
+        let profile_id = profile_id
+            .map(|id| {
+                let id = id.trim();
+                if id.is_empty() || id.len() > 64 {
+                    Err(ModelPolicyError::InvalidPolicyInput)
+                } else {
+                    Ok(id.to_owned())
+                }
+            })
+            .transpose()?;
+        let actor_id = actor_id.to_owned();
+        let mutation_fence = self.mutation_fence.clone();
+        self.database
+            .with_transaction(move |connection| {
+                validate_mutation_actor(connection, &actor_id, mutation_fence.as_ref())?;
+                if let Some(profile_id) = profile_id.as_deref() {
+                    let exists = connection.query_row(
+                        "SELECT EXISTS(SELECT 1 FROM policy_profiles WHERE id = ?1)",
+                        [profile_id],
+                        |row| row.get::<_, bool>(0),
+                    )?;
+                    if !exists {
+                        return Err(tokio_rusqlite::rusqlite::Error::QueryReturnedNoRows);
+                    }
+                }
+                let current: Option<String> = connection.query_row(
+                    "SELECT default_member_profile_id FROM policy_state WHERE singleton = 1",
+                    [],
+                    |row| row.get(0),
+                )?;
+                if current == profile_id {
+                    return Ok(false);
+                }
+                connection.execute(
+                    "UPDATE policy_state SET default_member_profile_id = ?1 WHERE singleton = 1",
+                    [profile_id.as_deref()],
+                )?;
+                connection.execute(
+                    "INSERT INTO user_admin_audit(actor_id, action, target_kind, target_id) \
+                     VALUES (?1, ?2, ?3, ?4)",
+                    (
+                        &actor_id,
+                        if profile_id.is_some() {
+                            "set_default_member_profile"
+                        } else {
+                            "clear_default_member_profile"
+                        },
+                        if profile_id.is_some() { "profile" } else { "instance" },
+                        profile_id.as_deref().unwrap_or("singleton"),
+                    ),
+                )?;
+                Ok(true)
+            })
+            .await
+            .map_err(|error| {
+                if matches!(
+                    &error,
+                    crate::db::DatabaseError::Transaction { source }
+                        if matches!(source.as_ref(), tokio_rusqlite::rusqlite::Error::QueryReturnedNoRows)
+                ) {
+                    ModelPolicyError::DefaultProfileNotFound
+                } else {
+                    ModelPolicyError::Database(error)
+                }
+            })
     }
 
     pub async fn remove_profile_rule(
@@ -362,7 +458,12 @@ impl ModelPolicyService {
                     [&id],
                     |row| row.get(0),
                 )?;
-                if assigned {
+                let is_default: bool = connection.query_row(
+                    "SELECT EXISTS(SELECT 1 FROM policy_state WHERE singleton = 1 AND default_member_profile_id = ?1)",
+                    [&id],
+                    |row| row.get(0),
+                )?;
+                if assigned || is_default {
                     return Ok(false);
                 }
                 let changed = connection.execute(

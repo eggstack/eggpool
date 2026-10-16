@@ -67,5 +67,5 @@ def test_q009_fake_candidate_failure_is_reported_without_workload(
     assert main(["--binary", str(candidate), "--output", str(output)]) == 1
     report = json.loads(output.read_text(encoding="utf-8"))
     assert report["status"] == "fail"
-    assert "candidate exited" in report["reason"]
+    assert report["reason"] == "synthetic managed administrator token was unavailable"
     assert MAX_SAMPLES > 0

@@ -240,14 +240,33 @@ pub struct Delivery {
 pub async fn build_integration_context(
     config_path: &Path,
 ) -> Result<IntegrationContext, IntegrationError> {
-    build_context(config_path, true, true).await
+    build_integration_context_with_credential(config_path, None).await
+}
+
+/// Build a client context using an explicit personal credential when supplied.
+pub async fn build_integration_context_with_credential(
+    config_path: &Path,
+    credential: Option<&str>,
+) -> Result<IntegrationContext, IntegrationError> {
+    build_context(config_path, true, true, credential).await
 }
 
 /// Build only the endpoint/key context used by Claude Code.  Its frozen
 /// command contract does not inspect catalog state or alter transcoder config.
 pub fn build_endpoint_context(config_path: &Path) -> Result<IntegrationContext, IntegrationError> {
+    build_endpoint_context_with_credential(config_path, None)
+}
+
+/// Endpoint-only context with an explicit personal credential.
+pub fn build_endpoint_context_with_credential(
+    config_path: &Path,
+    credential: Option<&str>,
+) -> Result<IntegrationContext, IntegrationError> {
     let config = Config::from_toml(config_path)?;
-    let (api_key, config_mutated) = config_mutation::resolve_server_key(config_path)?;
+    let (api_key, config_mutated) = match credential {
+        Some(value) if !value.trim().is_empty() => (value.to_owned(), false),
+        _ => config_mutation::resolve_server_key(config_path)?,
+    };
     let port = config.server.port;
     let host = detect_lan_ip();
     Ok(IntegrationContext {
@@ -268,9 +287,13 @@ async fn build_context(
     config_path: &Path,
     load_catalog: bool,
     enable_transcoder: bool,
+    credential: Option<&str>,
 ) -> Result<IntegrationContext, IntegrationError> {
     let config = Config::from_toml(config_path)?;
-    let (api_key, config_mutated) = config_mutation::resolve_server_key(config_path)?;
+    let (api_key, config_mutated) = match credential {
+        Some(value) if !value.trim().is_empty() => (value.to_owned(), false),
+        _ => config_mutation::resolve_server_key(config_path)?,
+    };
     let port = config.server.port;
     let host = detect_lan_ip();
     let mut models = if load_catalog {
@@ -464,12 +487,10 @@ async fn build_remote_context_from_config(
     let base_url = resolve_advertised_base_url(config, base_url_override)?;
     let base_url_root = base_url.strip_suffix("/v1").unwrap_or(&base_url).to_owned();
     let auth_env = REMOTE_AUTH_ENV.to_owned();
-    let auth_configured = config.resolved_server_api_key().is_some();
-    if !auth_configured {
-        return Err(IntegrationError::ProfileUnavailable {
-            detail: "server API key is not configured; run `eggpool newkey` or set [server].api_key before sharing a remote profile".to_owned(),
-        });
-    }
+    // Remote profiles contain only an environment-variable reference. They
+    // remain useful in managed mode without a shared server key; the receiving
+    // operator supplies the member's personal token separately.
+    let auth_configured = true;
     let mut models = if read_catalog {
         match load_remote_catalog_models(config).await {
             Ok(models) => models,
@@ -754,7 +775,7 @@ pub fn render_remote_human(
                 );
                 lines.push(commands);
                 lines.push(String::new());
-                lines.push("Each desktop still needs its own authorized EggPool key".to_owned());
+                lines.push("Each desktop still needs its user's personal EggPool token".to_owned());
                 lines.push(
                     "in the environment that launches the client (EGGPOOL_API_KEY).".to_owned(),
                 );
@@ -906,7 +927,7 @@ pub async fn deliver(
         Some(snippet.to_owned())
     } else {
         messages.push(
-            "Secret not printed to stdout. Use --print-secret to include it, or use `eggpool getkey` to retrieve it."
+            "Secret not printed to stdout. Use --print-secret on a secure console, or issue a personal token with `eggpool users token USER --show-secret`."
                 .to_owned(),
         );
         None
@@ -943,7 +964,7 @@ pub fn paste_hint(target: Target) -> Option<&'static str> {
         Target::Goose => Some("Export these variables before running Goose."),
         Target::Openhands => Some("Pass these environment variables to the OpenHands runtime."),
         Target::Codex => Some(
-            "Set EGGPOOL_API_KEY in the environment used to launch Codex; retrieve the current key with `eggpool getkey`.",
+            "Set EGGPOOL_API_KEY to the user's personal token in the environment used to launch Codex.",
         ),
         _ => None,
     }
@@ -1621,7 +1642,7 @@ pub fn codex_lifecycle(
                     .push("Codex config and catalog already current.".to_owned());
             }
             report.messages.push(
-                "Set EGGPOOL_API_KEY in the environment used to launch Codex; retrieve the current key with `eggpool getkey`.".to_owned(),
+                "Set EGGPOOL_API_KEY to the user's personal token in the environment used to launch Codex.".to_owned(),
             );
             Ok(report)
         }
@@ -3324,12 +3345,12 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn remote_context_is_read_only_and_never_creates_keys() {
+    async fn remote_context_is_read_only_for_keyless_managed_config() {
         let directory = tempfile::tempdir().expect("tempdir");
         let config_path = directory.path().join("config.toml");
         let db_path = directory.path().join("usage.sqlite3");
-        // No [server].api_key and no env: read-only export must fail rather
-        // than manufacturing a key file mutation.
+        // No [server].api_key and no env: managed export remains useful and
+        // must not manufacture a shared key file mutation.
         std::fs::write(
             &config_path,
             format!(
@@ -3340,7 +3361,7 @@ mod tests {
         .expect("config");
         let before = std::fs::read_to_string(&config_path).expect("before");
         let result = build_remote_context(&config_path, None).await;
-        assert!(result.is_err());
+        assert!(result.is_ok());
         let after = std::fs::read_to_string(&config_path).expect("after");
         assert_eq!(before, after);
         assert!(!after.contains("api_key"));

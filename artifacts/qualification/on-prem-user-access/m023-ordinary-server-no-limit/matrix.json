@@ -1,0 +1,174 @@
+{
+  "schema_version": "on-prem-ordinary-server-matrix.v1",
+  "plan": "on-prem-concurrency-performance M002",
+  "status": "complete",
+  "preflight_io": {
+    "root_device_read_bytes": 759900020736,
+    "root_device_write_bytes": 1359179977728,
+    "io_pressure": {
+      "some": {
+        "avg10": 4.26,
+        "avg60": 5.28,
+        "avg300": 3.43
+      },
+      "full": {
+        "avg10": 4.25,
+        "avg60": 5.24,
+        "avg300": 3.39
+      }
+    }
+  },
+  "stop_reason": null,
+  "candidate": {
+    "sha256": "d7bec9bf508e9b9ccfd1c9ac53ae25b1ef37a5af266f2d4b0cf048c2816f7b73",
+    "repository_commit_sha": "f08a760e2cd995ac9b3416b571d092e3315b6524",
+    "build_profile": "release",
+    "build_mode": "locked release candidate"
+  },
+  "qualification_tooling_commit_sha": "83c0779ae4776a6b9d4d82571c7255bcb71246d6",
+  "target": {
+    "target_class": "ordinary-server",
+    "architecture": "x86_64",
+    "kernel": "6.8.0-147-generic",
+    "os": "Ubuntu 24.04.5 LTS",
+    "os_version_id": "24.04",
+    "cpu_model": "Intel(R) Core(TM) i9-9900K CPU @ 3.60GHz",
+    "logical_cpu_count": 16,
+    "ram_bytes": 16622407680,
+    "system_vendor": "Gigabyte Technology Co., Ltd.",
+    "product_name": "Z390 AORUS MASTER",
+    "board_name": "Z390 AORUS MASTER-CF",
+    "root_filesystem": "ext4",
+    "root_storage_medium_class": "non-rotational",
+    "root_storage_device_class": "nvme",
+    "root_storage_device_model": "Samsung SSD 980 1TB",
+    "root_mount_options": "rw,relatime,stripe=32",
+    "virtualization_type": "none",
+    "container_type": "none",
+    "attestation": "Linux host metadata from procfs, sysfs, DMI and systemd-detect-virt"
+  },
+  "workload": {
+    "fresh_root_per_run": true,
+    "named_principal_counts": [
+      1,
+      5,
+      10,
+      25,
+      49
+    ],
+    "principal_separation_condition": "concurrency=1",
+    "concurrent_request_counts": [
+      1,
+      2,
+      4,
+      8,
+      16
+    ],
+    "concurrency_separation_condition": "principals=5",
+    "requests_per_condition": 1000,
+    "repetitions_per_condition": 3,
+    "sequential_wire_samples_per_surface": 30,
+    "provider_latency_profile": "mixed-0-10-50ms",
+    "budget_mode": "user-global hard request limits",
+    "surfaces": [
+      "native Responses finite",
+      "native Responses streaming",
+      "translated Responses-to-Messages streaming"
+    ]
+  },
+  "gates": {
+    "all_requests_complete": true,
+    "zero_http_failures": true,
+    "zero_pending_requests_after_stabilization": true,
+    "zero_active_reservations_after_stabilization": true,
+    "p99_minimum_completed_observations": 1000,
+    "three_repetitions_required": true,
+    "maximum_initial_io_pressure_full_avg10_percent": 25.0,
+    "no_capacity_sla_claim": true
+  },
+  "conditions": [
+    {
+      "principals": 1,
+      "concurrency": 1,
+      "run_artifacts": [
+        "u1-c1-run-1.json",
+        "u1-c1-run-2.json",
+        "u1-c1-run-3.json"
+      ]
+    },
+    {
+      "principals": 5,
+      "concurrency": 1,
+      "run_artifacts": [
+        "u5-c1-run-1.json",
+        "u5-c1-run-2.json",
+        "u5-c1-run-3.json"
+      ]
+    },
+    {
+      "principals": 5,
+      "concurrency": 2,
+      "run_artifacts": [
+        "u5-c2-run-1.json",
+        "u5-c2-run-2.json",
+        "u5-c2-run-3.json"
+      ]
+    },
+    {
+      "principals": 5,
+      "concurrency": 4,
+      "run_artifacts": [
+        "u5-c4-run-1.json",
+        "u5-c4-run-2.json",
+        "u5-c4-run-3.json"
+      ]
+    },
+    {
+      "principals": 5,
+      "concurrency": 8,
+      "run_artifacts": [
+        "u5-c8-run-1.json",
+        "u5-c8-run-2.json",
+        "u5-c8-run-3.json"
+      ]
+    },
+    {
+      "principals": 5,
+      "concurrency": 16,
+      "run_artifacts": [
+        "u5-c16-run-1.json",
+        "u5-c16-run-2.json",
+        "u5-c16-run-3.json"
+      ]
+    },
+    {
+      "principals": 10,
+      "concurrency": 1,
+      "run_artifacts": [
+        "u10-c1-run-1.json",
+        "u10-c1-run-2.json",
+        "u10-c1-run-3.json"
+      ]
+    },
+    {
+      "principals": 25,
+      "concurrency": 1,
+      "run_artifacts": [
+        "u25-c1-run-1.json",
+        "u25-c1-run-2.json",
+        "u25-c1-run-3.json"
+      ]
+    },
+    {
+      "principals": 49,
+      "concurrency": 1,
+      "run_artifacts": [
+        "u49-c1-run-1.json",
+        "u49-c1-run-2.json",
+        "u49-c1-run-3.json"
+      ]
+    }
+  ],
+  "artifacts_directory": "m023-ordinary-server-no-limit",
+  "lifecycle_artifact": "lifecycle.json"
+}

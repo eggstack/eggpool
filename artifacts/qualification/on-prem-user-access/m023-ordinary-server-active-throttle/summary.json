@@ -1,0 +1,86 @@
+{
+  "schema_version": "m023-active-throttle.v1",
+  "candidate_sha256": "d7bec9bf508e9b9ccfd1c9ac53ae25b1ef37a5af266f2d4b0cf048c2816f7b73",
+  "candidate_source_commit": "f08a760e2cd995ac9b3416b571d092e3315b6524",
+  "measurement_tooling_commit": "83c0779ae4776a6b9d4d82571c7255bcb71246d6",
+  "target": {
+    "target_class": "ordinary-server",
+    "architecture": "x86_64",
+    "os": "Ubuntu 24.04.5 LTS",
+    "kernel": "6.8.0-147-generic",
+    "cpu_model": "Intel(R) Core(TM) i9-9900K CPU @ 3.60GHz",
+    "logical_cpu_count": 16,
+    "ram_bytes": 16622407680,
+    "root_filesystem": "ext4",
+    "root_storage_device_model": "Samsung SSD 980 1TB",
+    "virtualization_type": "none"
+  },
+  "policy": {
+    "requests_per_minute_per_principal": 1,
+    "principals": 5,
+    "client_concurrency": 16,
+    "requests_per_run": 1000
+  },
+  "repetitions": 3,
+  "all_runs_passed": true,
+  "median": {
+    "admitted": 5,
+    "rate_limited": 995,
+    "requests_per_second": 1091.728,
+    "p50_ms": 13,
+    "p95_ms": 29,
+    "p99_ms": 113
+  },
+  "runs": [
+    {
+      "artifact": "run-1.json",
+      "status": "pass",
+      "preflight_full_io_psi_avg10": 12.77,
+      "http_status_counts": {
+        "200": 5,
+        "429": 995
+      },
+      "admitted": 5,
+      "rate_limited": 995,
+      "requests_per_second": 1023.643,
+      "p50_ms": 13,
+      "p95_ms": 30,
+      "p99_ms": 113,
+      "maximum_ms": 132
+    },
+    {
+      "artifact": "run-2.json",
+      "status": "pass",
+      "preflight_full_io_psi_avg10": 3.18,
+      "http_status_counts": {
+        "200": 5,
+        "429": 995
+      },
+      "admitted": 5,
+      "rate_limited": 995,
+      "requests_per_second": 1204.462,
+      "p50_ms": 4,
+      "p95_ms": 9,
+      "p99_ms": 553,
+      "maximum_ms": 565
+    },
+    {
+      "artifact": "run-3.json",
+      "status": "pass",
+      "preflight_full_io_psi_avg10": 0.28,
+      "http_status_counts": {
+        "200": 5,
+        "429": 995
+      },
+      "admitted": 5,
+      "rate_limited": 995,
+      "requests_per_second": 1091.728,
+      "p50_ms": 13,
+      "p95_ms": 29,
+      "p99_ms": 39,
+      "maximum_ms": 55
+    }
+  ],
+  "blocked_preflight_attempt": "run-3-blocked-attempt.json",
+  "interpretation": "Loopback synthetic-provider measurement; exactly the initial token per principal was admitted, all remaining requests returned the distinct short_window_rate_limited 429. Not a capacity SLA."
+}

@@ -196,6 +196,10 @@ pub(super) async fn integration_profile(
 }
 
 pub(super) async fn runtime_status(State(state): State<AppState>) -> Response {
+    json_response(StatusCode::OK, runtime_status_value(&state).await)
+}
+
+pub(super) async fn runtime_status_value(state: &AppState) -> Value {
     let diagnostics = state
         .process
         .as_ref()
@@ -304,11 +308,11 @@ pub(super) async fn runtime_status(State(state): State<AppState>) -> Response {
         {
             object.insert("database_qualification".to_owned(), value);
         }
-        json_response(StatusCode::OK, body)
+        body
     }
     #[cfg(not(feature = "qualification-db-diagnostics"))]
     {
-        json_response(StatusCode::OK, body)
+        body
     }
 }
 
@@ -471,7 +475,7 @@ pub(super) async fn status_api(State(state): State<AppState>) -> Response {
     }
 }
 
-async fn build_status_snapshot(state: &AppState) -> status_service::ProxyStatusSnapshot {
+pub(super) async fn build_status_snapshot(state: &AppState) -> status_service::ProxyStatusSnapshot {
     use std::collections::{BTreeMap, BTreeSet};
     use std::time::{SystemTime, UNIX_EPOCH};
 

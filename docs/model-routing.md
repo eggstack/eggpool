@@ -144,6 +144,12 @@ exact provider-qualified IDs in `model/provider` form. Instance-wide hard
 denials always win, then per-user overrides, profile rules, and the profile
 default. Restricted profiles default-deny models without an explicit allow;
 an administrator without an assigned profile retains unrestricted access.
+An administrator may select one instance-local default member profile. CLI and
+dashboard member creation apply it transactionally only when no profile was
+selected explicitly. It affects future members only; clearing it leaves future
+unassigned members deny-by-default, and existing assignments do not change.
+Administrators can explicitly create a member without a profile. There is no
+default budget template: per-user and instance budget rules remain separate.
 
 For a virtual alias, EggPool checks the alias, selector model, and resolved
 concrete route against the same snapshot. A selector, repair result, sticky

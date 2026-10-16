@@ -534,6 +534,18 @@ const DYNAMIC_RULES: &[(&str, ReloadDisposition)] = &[
 // Rust table.
 const FIELD_DISPOSITIONS: &[(&str, ReloadDisposition)] = &[
     ("accounts", ReloadDisposition::Live),
+    (
+        "admission_fairness.global_requests_per_minute",
+        ReloadDisposition::Live,
+    ),
+    (
+        "admission_fairness.max_tracked_principals",
+        ReloadDisposition::Live,
+    ),
+    (
+        "admission_fairness.requests_per_minute_per_principal",
+        ReloadDisposition::Live,
+    ),
     ("backup.directory", ReloadDisposition::RestartRequired),
     ("backup.enabled", ReloadDisposition::Live),
     ("backup.include_env", ReloadDisposition::RestartRequired),

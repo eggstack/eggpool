@@ -8,8 +8,6 @@ use std::{
 
 use serde_json::{Value, json};
 use tokio::{
-    io::{AsyncReadExt, AsyncWriteExt},
-    net::TcpStream,
     process::Command as TokioCommand,
     time::{Instant, sleep, timeout},
 };
@@ -40,8 +38,6 @@ const EXIT_CONTROL_UNAVAILABLE: u8 = 3;
 const EXIT_RELOAD_BUSY: u8 = 4;
 const EXIT_PREPARATION_FAILED: u8 = 5;
 const EXIT_DIGEST_MISMATCH: u8 = 6;
-const MAX_STATUS_BODY_BYTES: usize = 1_048_576;
-const STATUS_TIMEOUT: Duration = Duration::from_secs(5);
 
 /// Initialize process-local diagnostics and dispatch the operational CLI.
 pub async fn run(cli: Cli) -> Result<(), BootstrapError> {
@@ -71,7 +67,7 @@ pub async fn run(cli: Cli) -> Result<(), BootstrapError> {
         Some(Command::Connect(args)) => connect(&config_path, args).await?,
         Some(Command::Logout { target }) => logout(&config_path, target.as_deref()).await?,
         Some(Command::Edit) => edit(&config_path)?,
-        Some(Command::Getkey) => getkey(&config_path)?,
+        Some(Command::Getkey) => getkey(&config_path).await?,
         Some(Command::Newkey(args)) => {
             newkey(&config_path, args.show_old, args.show_secrets).await?
         }
@@ -685,21 +681,15 @@ async fn open_operational_database(
 
 async fn users(path: &Path, command: crate::cli::UsersCommand) -> Result<(), BootstrapError> {
     let config = config::Config::from_toml(path)?;
-    if matches!(&command, crate::cli::UsersCommand::EnableManaged)
-        && (config.resolved_server_api_key().is_some() || config.dashboard.public)
-    {
-        return Err(command_error(
-            EXIT_VALIDATION,
-            "retire server.api_key/api_key_env and set dashboard.public = false before enabling managed access",
-        ));
-    }
     let database = open_operational_database(&config, false).await?;
     match command {
-        crate::cli::UsersCommand::EnableManaged => {
-            crate::identity::enable_managed(&database)
+        crate::cli::UsersCommand::EnableManaged(args) => {
+            let actor = policy_actor_id(&database, &args.actor).await?;
+            crate::identity::enable_managed(&database, &actor)
                 .await
                 .map_err(|error| command_error(EXIT_VALIDATION, error.to_string()))?;
             println!("Managed browser and personal-token access is enabled.");
+            warn_managed_config_hygiene(&config);
         }
         crate::cli::UsersCommand::List => {
             let users = crate::identity::list_users(&database)
@@ -717,7 +707,7 @@ async fn users(path: &Path, command: crate::cli::UsersCommand) -> Result<(), Boo
             }
         }
         crate::cli::UsersCommand::Bootstrap(args) => {
-            let password = read_user_password(args.password_stdin, true)?;
+            let password = read_user_password(args.password_stdin, true, "Administrator password")?;
             let (user, credential) =
                 crate::identity::bootstrap_admin(&database, &args.username, &password)
                     .await
@@ -725,8 +715,79 @@ async fn users(path: &Path, command: crate::cli::UsersCommand) -> Result<(), Boo
             println!("Administrator {} created.", user.username);
             print_one_time_secret(&credential.token, args.show_secret);
         }
+        crate::cli::UsersCommand::Add(args) => {
+            let actor = policy_actor_id(&database, &args.actor).await?;
+            let password =
+                read_user_password(args.password_stdin, false, "Temporary member password")?;
+            let user = if args.no_profile {
+                crate::identity::create_member_without_profile(
+                    &database,
+                    &actor,
+                    &args.username,
+                    &password,
+                )
+                .await
+            } else {
+                crate::identity::create_member_with_profile(
+                    &database,
+                    &actor,
+                    &args.username,
+                    &password,
+                    args.profile_id.as_deref(),
+                )
+                .await
+            }
+            .map_err(|error| command_error(EXIT_VALIDATION, error.to_string()))?;
+            println!(
+                "Member {} created; the user must change the temporary password at first login.",
+                user.username
+            );
+            println!(
+                "Issue a personal inference token with `eggpool users token {}`.",
+                user.username
+            );
+            warn_managed_config_hygiene(&config);
+        }
+        crate::cli::UsersCommand::Disable(args) => {
+            let actor = policy_actor_id(&database, &args.actor).await?;
+            let user = crate::identity::get_user_by_name(&database, &args.username)
+                .await
+                .map_err(|error| command_error(EXIT_VALIDATION, error.to_string()))?
+                .ok_or_else(|| command_error(EXIT_VALIDATION, "user was not found"))?;
+            crate::identity::set_user_enabled(&database, &actor, &user.id, false)
+                .await
+                .map_err(|error| command_error(EXIT_VALIDATION, error.to_string()))?;
+            println!(
+                "User {} disabled; browser sessions and personal tokens were revoked.",
+                user.username
+            );
+        }
+        crate::cli::UsersCommand::Enable(args) => {
+            let actor = policy_actor_id(&database, &args.actor).await?;
+            let user = crate::identity::get_user_by_name(&database, &args.username)
+                .await
+                .map_err(|error| command_error(EXIT_VALIDATION, error.to_string()))?
+                .ok_or_else(|| command_error(EXIT_VALIDATION, "user was not found"))?;
+            crate::identity::set_user_enabled(&database, &actor, &user.id, true)
+                .await
+                .map_err(|error| command_error(EXIT_VALIDATION, error.to_string()))?;
+            println!(
+                "User {} enabled. Previously revoked credentials stay revoked; issue a new token with `eggpool users token {}`.",
+                user.username, user.username
+            );
+        }
+        crate::cli::UsersCommand::Show(args) => {
+            let user = crate::identity::get_user_by_name(&database, &args.username)
+                .await
+                .map_err(|error| command_error(EXIT_VALIDATION, error.to_string()))?
+                .ok_or_else(|| command_error(EXIT_VALIDATION, "user was not found"))?;
+            println!("username: {}", user.username);
+            println!("role: {}", user.role);
+            println!("state: {}", user.state);
+            println!("must_change_password: {}", user.must_change_password);
+        }
         crate::cli::UsersCommand::ResetPassword(args) => {
-            let password = read_user_password(args.password_stdin, true)?;
+            let password = read_user_password(args.password_stdin, true, "Administrator password")?;
             crate::identity::reset_password(&database, &args.username, &password)
                 .await
                 .map_err(|error| command_error(EXIT_VALIDATION, error.to_string()))?;
@@ -790,6 +851,67 @@ async fn users(path: &Path, command: crate::cli::UsersCommand) -> Result<(), Boo
                         .await
                         .map_err(|error| command_error(EXIT_VALIDATION, error.to_string()))?;
                     println!("Preferred model updated for {}.", args.profile_id);
+                }
+            }
+        }
+        crate::cli::UsersCommand::Defaults(command) => {
+            use crate::cli::UsersDefaultsCommand as Defaults;
+            let service = crate::model_policy::ModelPolicyService::new(database.clone());
+            match command {
+                Defaults::Show => {
+                    let default_id = service
+                        .default_member_profile()
+                        .await
+                        .map_err(|error| command_error(EXIT_VALIDATION, error.to_string()))?;
+                    if let Some(default_id) = default_id {
+                        let profiles = service
+                            .list_profiles()
+                            .await
+                            .map_err(|error| command_error(EXIT_VALIDATION, error.to_string()))?;
+                        if let Some(profile) =
+                            profiles.iter().find(|profile| profile.id == default_id)
+                        {
+                            println!("default_member_profile: {} ({})", profile.id, profile.name);
+                            println!("new members only: true");
+                            println!("existing assignments changed: false");
+                        } else {
+                            return Err(command_error(
+                                EXIT_VALIDATION,
+                                "default member profile is missing",
+                            ));
+                        }
+                    } else {
+                        println!("default_member_profile: none");
+                        println!(
+                            "new members remain deny-by-default unless a profile is selected explicitly."
+                        );
+                    }
+                    println!(
+                        "default budget template: none; user and instance budget rules are unchanged."
+                    );
+                }
+                Defaults::Set(args) => {
+                    let actor = policy_actor_id(&database, &args.actor).await?;
+                    service
+                        .set_default_member_profile(Some(&args.profile_id), &actor)
+                        .await
+                        .map_err(|error| command_error(EXIT_VALIDATION, error.to_string()))?;
+                    println!(
+                        "Default member profile set to {}; it applies to new members only.",
+                        args.profile_id
+                    );
+                    println!("Existing assignments and all budget rules are unchanged.");
+                }
+                Defaults::Clear(args) => {
+                    let actor = policy_actor_id(&database, &args.actor).await?;
+                    service
+                        .set_default_member_profile(None, &actor)
+                        .await
+                        .map_err(|error| command_error(EXIT_VALIDATION, error.to_string()))?;
+                    println!(
+                        "Default member profile cleared; future members without an explicit profile remain deny-by-default."
+                    );
+                    println!("Existing assignments and all budget rules are unchanged.");
                 }
             }
         }
@@ -943,7 +1065,11 @@ async fn policy_actor_id(
         .ok_or_else(|| command_error(EXIT_VALIDATION, "active administrator was not found"))
 }
 
-fn read_user_password(from_stdin: bool, confirm: bool) -> Result<String, BootstrapError> {
+fn read_user_password(
+    from_stdin: bool,
+    confirm: bool,
+    prompt: &str,
+) -> Result<String, BootstrapError> {
     let password = if from_stdin {
         let mut value = String::new();
         io::stdin()
@@ -959,10 +1085,11 @@ fn read_user_password(from_stdin: bool, confirm: bool) -> Result<String, Bootstr
                 "password input requires a TTY or --password-stdin",
             ));
         }
-        let first = rpassword::prompt_password("Administrator password: ")
+        let first = rpassword::prompt_password(format!("{prompt}: "))
             .map_err(|error| command_error(EXIT_VALIDATION, error.to_string()))?;
         if confirm {
-            let second = rpassword::prompt_password("Confirm password: ")
+            let confirm_prompt = format!("Confirm {}: ", prompt.to_lowercase());
+            let second = rpassword::prompt_password(confirm_prompt)
                 .map_err(|error| command_error(EXIT_VALIDATION, error.to_string()))?;
             if first != second {
                 return Err(command_error(EXIT_VALIDATION, "passwords do not match"));
@@ -971,6 +1098,14 @@ fn read_user_password(from_stdin: bool, confirm: bool) -> Result<String, Bootstr
         first
     };
     Ok(password)
+}
+
+fn warn_managed_config_hygiene(config: &config::Config) {
+    if config.resolved_server_api_key().is_some() || config.dashboard.public {
+        eprintln!(
+            "Managed access is active and the legacy shared key is rejected. For configuration hygiene, remove server.api_key/api_key_env and set dashboard.public = false."
+        );
+    }
 }
 
 fn print_one_time_secret(secret: &str, explicitly_allowed: bool) {
@@ -1785,13 +1920,18 @@ async fn configsetup(
         ),
     };
 
+    let personal_credential = integration_personal_credential(&pre_mutation_config).await?;
+
     let mut context = if target == Target::ClaudeCode {
-        integrations::build_endpoint_context(path)
+        integrations::build_endpoint_context_with_credential(path, personal_credential.as_deref())
             .map_err(|error| command_error(EXIT_VALIDATION, error.to_string()))?
     } else {
-        integrations::build_integration_context(path)
-            .await
-            .map_err(|error| command_error(EXIT_VALIDATION, error.to_string()))?
+        integrations::build_integration_context_with_credential(
+            path,
+            personal_credential.as_deref(),
+        )
+        .await
+        .map_err(|error| command_error(EXIT_VALIDATION, error.to_string()))?
     };
     if context.config_mutated {
         eprintln!("Generated new server API key.");
@@ -1832,7 +1972,7 @@ async fn configsetup(
             .any(|message| message == "Copied config to clipboard.");
         if !copied {
             eprintln!(
-                "Could not copy to clipboard. Use `eggpool getkey` and pass --api-key to the Claude Code CLI."
+                "Could not copy to clipboard. Issue a personal token with `eggpool users token USER --show-secret` and pass it to the Claude Code CLI on a secure terminal."
             );
         }
         for message in delivery.messages {
@@ -1882,6 +2022,65 @@ async fn configsetup(
         }
     }
     Ok(())
+}
+
+/// Managed installs require an active personal token for local client setup.
+/// Before identity bootstrap, preserve the legacy shared-key setup contract.
+async fn integration_personal_credential(
+    config: &config::Config,
+) -> Result<Option<String>, BootstrapError> {
+    let database_path = config::Config::runtime_path(&config.database.path);
+    if !database_path.is_file() {
+        return Ok(None);
+    }
+    let database = open_operational_database(config, true).await?;
+    let state = crate::identity::access_state(&database)
+        .await
+        .map_err(|error| command_error(EXIT_VALIDATION, error.to_string()));
+    let close_result = database.close().await;
+    let state = state?;
+    close_result.map_err(|error| command_error(EXIT_VALIDATION, error.to_string()))?;
+    if !matches!(state.as_str(), "admin_initialized" | "managed") {
+        return Ok(None);
+    }
+    let token = env::var("EGGPOOL_API_KEY")
+        .ok()
+        .filter(|value| !value.trim().is_empty());
+    let Some(token) = token else {
+        return Err(command_error(
+            EXIT_VALIDATION,
+            "managed client setup requires the member's personal token in EGGPOOL_API_KEY; do not use eggpool getkey or the retired shared server key",
+        ));
+    };
+    let database = open_operational_database(config, true).await?;
+    let valid = crate::identity::verify_api_token(&database, &token)
+        .await
+        .map_err(|error| command_error(EXIT_VALIDATION, error.to_string()));
+    let close_result = database.close().await;
+    let valid = valid?;
+    close_result.map_err(|error| command_error(EXIT_VALIDATION, error.to_string()))?;
+    if !valid {
+        return Err(command_error(
+            EXIT_VALIDATION,
+            "EGGPOOL_API_KEY is not an active personal credential for this installation",
+        ));
+    }
+    Ok(Some(token))
+}
+
+async fn identity_is_initialized(config: &config::Config) -> Result<bool, BootstrapError> {
+    let database_path = config::Config::runtime_path(&config.database.path);
+    if !database_path.is_file() {
+        return Ok(false);
+    }
+    let database = open_operational_database(config, true).await?;
+    let state = crate::identity::access_state(&database)
+        .await
+        .map_err(|error| command_error(EXIT_VALIDATION, error.to_string()));
+    let close_result = database.close().await;
+    let state = state?;
+    close_result.map_err(|error| command_error(EXIT_VALIDATION, error.to_string()))?;
+    Ok(matches!(state.as_str(), "admin_initialized" | "managed"))
 }
 
 async fn run_managed_configsetup(
@@ -2288,7 +2487,14 @@ fn which(name: &str) -> Option<PathBuf> {
         .find(|candidate| candidate.is_file())
 }
 
-fn getkey(path: &Path) -> Result<(), BootstrapError> {
+async fn getkey(path: &Path) -> Result<(), BootstrapError> {
+    let config = config::Config::from_toml(path)?;
+    if identity_is_initialized(&config).await? {
+        return Err(command_error(
+            EXIT_VALIDATION,
+            "the shared server key is retired after administrator initialization; issue a personal credential with `eggpool users token USER`",
+        ));
+    }
     let key = config_mutation::read_server_key(path)
         .map_err(|error| mutation_error(error, EXIT_VALIDATION))?;
     let Some(key) = key else {
@@ -2305,6 +2511,13 @@ fn getkey(path: &Path) -> Result<(), BootstrapError> {
 }
 
 async fn newkey(path: &Path, show_old: bool, show_secrets: bool) -> Result<(), BootstrapError> {
+    let config = config::Config::from_toml(path)?;
+    if identity_is_initialized(&config).await? {
+        return Err(command_error(
+            EXIT_VALIDATION,
+            "the shared server key is retired after administrator initialization; use `eggpool users token USER` for managed access",
+        ));
+    }
     let old = config_mutation::read_server_key(path)
         .map_err(|error| mutation_error(error, EXIT_VALIDATION))?;
     let key =
@@ -2403,22 +2616,10 @@ async fn onboard(path: &Path, args: crate::cli::OnboardArgs) -> Result<(), Boots
             .map_err(|error| mutation_error(error, EXIT_VALIDATION))?;
         println!("  Created configuration at {}", path.display());
     }
-    if config_mutation::read_server_key(path)
-        .map_err(|error| mutation_error(error, EXIT_VALIDATION))?
-        .is_none()
-    {
-        let key = config_mutation::generate_key()
-            .map_err(|error| mutation_error(error, EXIT_VALIDATION))?;
-        if config_mutation::write_server_key(path, &key)
-            .map_err(|error| mutation_error(error, EXIT_VALIDATION))?
-        {
-            println!("  Generated server API key");
-        }
-    }
     let preflight_config = config::Config::from_toml(path).map_err(BootstrapError::from)?;
     let preflight_database_path = config::Config::runtime_path(&preflight_config.database.path);
-    let bootstrap_admin = if !preflight_database_path.exists() {
-        true
+    let (bootstrap_admin, identity_initialized) = if !preflight_database_path.exists() {
+        (true, false)
     } else {
         let database = open_operational_database(&preflight_config, true).await?;
         let access_state = crate::identity::access_state(&database)
@@ -2431,11 +2632,31 @@ async fn onboard(path: &Path, args: crate::cli::OnboardArgs) -> Result<(), Boots
             .close()
             .await
             .map_err(|error| command_error(EXIT_VALIDATION, error.to_string()))?;
-        access_state == "fresh_uninitialized" && users.is_empty()
+        (
+            access_state == "fresh_uninitialized" && users.is_empty(),
+            matches!(access_state.as_str(), "admin_initialized" | "managed"),
+        )
     };
+    if should_generate_legacy_server_key(identity_initialized)
+        && config_mutation::read_server_key(path)
+            .map_err(|error| mutation_error(error, EXIT_VALIDATION))?
+            .is_none()
+    {
+        let key = config_mutation::generate_key()
+            .map_err(|error| mutation_error(error, EXIT_VALIDATION))?;
+        if config_mutation::write_server_key(path, &key)
+            .map_err(|error| mutation_error(error, EXIT_VALIDATION))?
+        {
+            println!("  Generated server API key");
+        }
+    }
     let admin_password = if bootstrap_admin {
         println!("Create the local administrator for this new installation.");
-        Some(read_user_password(args.password_stdin, true)?)
+        Some(read_user_password(
+            args.password_stdin,
+            true,
+            "Administrator password",
+        )?)
     } else {
         None
     };
@@ -2509,6 +2730,10 @@ async fn onboard(path: &Path, args: crate::cli::OnboardArgs) -> Result<(), Boots
         },
     )
     .await
+}
+
+fn should_generate_legacy_server_key(identity_initialized: bool) -> bool {
+    !identity_initialized
 }
 
 async fn serve(path: &Path, args: &ServeArgs) -> Result<(), BootstrapError> {
@@ -3142,77 +3367,50 @@ async fn runtime_status(path: &Path, json_output: bool) -> Result<(), BootstrapE
 }
 
 async fn fetch_runtime_status(config: &config::Config) -> Result<Value, String> {
-    fetch_local_json(config, "/api/stats/runtime", "runtime-status").await
+    let _ = config;
+    fetch_local_control_status(true).await
 }
 
 async fn fetch_status_snapshot(config: &config::Config) -> Result<Value, String> {
-    fetch_local_json(config, "/api/status", "status").await
+    let _ = config;
+    fetch_local_control_status(false).await
 }
 
-/// Bounded authenticated local-control fetch shared by operational status
-/// commands. No outbound provider requests; one TCP connection, one bounded
-/// body, strict JSON parsing.
-async fn fetch_local_json(
-    config: &config::Config,
-    path: &str,
-    label: &str,
-) -> Result<Value, String> {
-    let host = match config.server.host.as_str() {
-        "0.0.0.0" => "127.0.0.1",
-        "::" => "::1",
-        value => value,
-    };
-    let mut stream = timeout(
-        STATUS_TIMEOUT,
-        TcpStream::connect((host, config.server.port)),
-    )
-    .await
-    .map_err(|error| format!("{label} connection timed out: {error}"))?
-    .map_err(|error| format!("{label} server is not running: {error}"))?;
-    let mut request = format!("GET {path} HTTP/1.1\r\nHost: localhost\r\nConnection: close\r\n");
-    if let Some(key) = config.resolved_server_api_key() {
-        request.push_str(&format!("Authorization: Bearer {key}\r\n"));
-    }
-    request.push_str("\r\n");
-    timeout(STATUS_TIMEOUT, stream.write_all(request.as_bytes()))
+async fn fetch_local_control_status(runtime: bool) -> Result<Value, String> {
+    let paths = RuntimePaths::resolve();
+    let response = crate::operations::control::ControlClient::new(&paths.control_socket)
+        .read_status(runtime)
         .await
-        .map_err(|error| format!("{label} request timed out: {error}"))?
-        .map_err(|error| format!("{label} request failed: {error}"))?;
-    let mut bytes = Vec::with_capacity(4096);
-    let mut chunk = [0_u8; 8192];
-    loop {
-        let count = timeout(STATUS_TIMEOUT, stream.read(&mut chunk))
-            .await
-            .map_err(|error| format!("{label} response timed out: {error}"))?
-            .map_err(|error| format!("{label} response failed: {error}"))?;
-        if count == 0 {
-            break;
-        }
-        if bytes.len().saturating_add(count) > MAX_STATUS_BODY_BYTES {
-            return Err(format!("{label} response body is too large"));
-        }
-        bytes.extend_from_slice(&chunk[..count]);
+        .map_err(|error| match error {
+            crate::operations::control::ControlClientError::Connection(
+                std::io::ErrorKind::PermissionDenied,
+            ) => "local operator does not own the control socket".to_owned(),
+            crate::operations::control::ControlClientError::Connection(_) => {
+                match process::read_pid(&paths.pid_file).ok().flatten() {
+                    Some(pid) if !process::process_exists(pid) => {
+                        format!("control socket is absent and the PID file is stale (PID {pid})")
+                    }
+                    Some(_) => "daemon process exists but its control socket is unavailable".into(),
+                    None => "daemon control socket is absent; the server is not running".into(),
+                }
+            }
+            crate::operations::control::ControlClientError::Timeout => {
+                "local control socket timed out".to_owned()
+            }
+            crate::operations::control::ControlClientError::Protocol(_) => {
+                "local control response was malformed or oversized".to_owned()
+            }
+            other => other.to_string(),
+        })?;
+    if !response.ok {
+        return Err(format!(
+            "local status readback failed: {}",
+            response.message
+        ));
     }
-    let Some(header_end) = bytes.windows(4).position(|window| window == b"\r\n\r\n") else {
-        return Err(format!("{label} response was malformed"));
-    };
-    let headers = &bytes[..header_end];
-    let status = headers
-        .split(|byte| *byte == b'\n')
-        .next()
-        .and_then(|line| line.split(|byte| *byte == b' ').nth(1))
-        .and_then(|value| std::str::from_utf8(value).ok())
-        .and_then(|value| value.trim().parse::<u16>().ok())
-        .ok_or_else(|| format!("{label} response status was malformed"))?;
-    if status != 200 {
-        return Err(match status {
-            401 | 403 => format!("{label} authentication failed (HTTP {status})"),
-            404 => format!("{label} endpoint is unavailable"),
-            _ => format!("{label} server returned HTTP {status}"),
-        });
-    }
-    serde_json::from_slice(&bytes[header_end + 4..])
-        .map_err(|error| format!("{label} response body was malformed JSON: {error}"))
+    response
+        .payload
+        .ok_or_else(|| "local status response did not include a payload".to_owned())
 }
 
 async fn status(path: &Path, json_output: bool) -> Result<(), BootstrapError> {
@@ -3266,6 +3464,9 @@ fn is_auth_or_malformed_status_error(detail: &str) -> bool {
     detail.contains("authentication failed")
         || detail.contains("malformed")
         || detail.contains("too large")
+        || detail.contains("invalid control response")
+        || detail.contains("control response was malformed")
+        || detail.contains("does not own the control socket")
 }
 
 fn sanitize_status_value(value: &Value) -> Value {
@@ -3663,7 +3864,7 @@ fn format_bytes(value: Option<&Value>) -> String {
 
 #[cfg(test)]
 mod tests {
-    use super::{EXIT_VALIDATION, mutation_error};
+    use super::{EXIT_VALIDATION, mutation_error, should_generate_legacy_server_key};
     use crate::operations::config_mutation::MutationError;
 
     #[test]
@@ -3678,5 +3879,11 @@ mod tests {
     fn ordinary_mutation_errors_keep_caller_exit_code() {
         let error = mutation_error(MutationError::Invalid("bad value".into()), EXIT_VALIDATION);
         assert_eq!(error.exit_code(), EXIT_VALIDATION);
+    }
+
+    #[test]
+    fn onboarding_does_not_create_a_legacy_key_after_admin_initialization() {
+        assert!(should_generate_legacy_server_key(false));
+        assert!(!should_generate_legacy_server_key(true));
     }
 }

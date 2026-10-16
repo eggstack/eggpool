@@ -5,10 +5,10 @@ use std::{fs, os::unix::fs::PermissionsExt, path::PathBuf};
 use eggpool::operations::integrations::{
     IntegrationContext, IntegrationModel, LifecycleAction, LifecycleOptions, ModelLimits,
     SnippetOptions, Target, aggregate_projections, apply_overrides, build_codex_catalog_json,
-    build_integration_context, build_remote_context, codex_lifecycle, deliver, opencode_lifecycle,
-    parse_remote_target, paste_hint, project_context_models, project_model,
-    remote_connection_token, render_remote_json, render_target, resolve_advertised_base_url,
-    resolve_model, validate_codex_catalog_json,
+    build_integration_context, build_integration_context_with_credential, build_remote_context,
+    codex_lifecycle, deliver, opencode_lifecycle, parse_remote_target, paste_hint,
+    project_context_models, project_model, remote_connection_token, render_remote_json,
+    render_target, resolve_advertised_base_url, resolve_model, validate_codex_catalog_json,
 };
 use serde_json::{Map, Value, json};
 use tempfile::tempdir;
@@ -196,7 +196,7 @@ async fn default_delivery_hides_secrets_and_explicit_print_reveals_them() {
     );
     assert!(
         codex.messages.iter().any(
-            |message| message.contains("EGGPOOL_API_KEY") && message.contains("eggpool getkey")
+            |message| message.contains("EGGPOOL_API_KEY") && message.contains("personal token")
         )
     );
 
@@ -265,6 +265,31 @@ async fn context_uses_static_models_and_owns_transcoder_mutation() {
     let config = fs::read_to_string(&config_path).expect("updated config");
     assert!(config.contains("api_key = \""));
     assert!(config.contains("[transcoder]\nenabled = true"));
+}
+
+#[tokio::test]
+async fn explicit_personal_credential_does_not_resurrect_shared_server_key() {
+    let directory = tempdir().expect("temporary directory");
+    let config_path = directory.path().join("managed.toml");
+    fs::write(
+        &config_path,
+        format!(
+            "[server]\nhost = \"0.0.0.0\"\nport = 11300\n\n[database]\npath = \"{}\"\n",
+            directory.path().join("missing.sqlite3").display()
+        ),
+    )
+    .expect("keyless config");
+
+    let context = build_integration_context_with_credential(
+        &config_path,
+        Some("epk1_0123456789abcdef_personal-secret"),
+    )
+    .await
+    .expect("personal credential context");
+    assert_eq!(context.api_key, "epk1_0123456789abcdef_personal-secret");
+    assert!(!context.config_mutated);
+    let after = fs::read_to_string(&config_path).expect("config remains readable");
+    assert!(!after.contains("api_key ="));
 }
 
 #[test]
@@ -614,6 +639,29 @@ async fn configremote_is_read_only_deterministic_and_secret_free() {
     let after = fs::read_to_string(&config_path).expect("after");
     assert_eq!(before, after);
     assert!(!db_path.exists());
+
+    // A managed server has no shared key. The read-only remote profile is
+    // still exportable because its credential is supplied by the member.
+    let keyless_path = directory.path().join("managed-keyless.toml");
+    fs::write(
+        &keyless_path,
+        format!(
+            "[server]\nhost = \"0.0.0.0\"\nport = 11300\n\n[database]\npath = \"{}\"\n\n[integrations]\nadvertise_base_url = \"https://pool.example.internal/v1\"\n",
+            directory.path().join("managed.sqlite3").display()
+        ),
+    )
+    .expect("keyless managed config");
+    let managed_remote = build_remote_context(&keyless_path, None)
+        .await
+        .expect("keyless remote context");
+    assert!(managed_remote.auth_configured);
+    assert!(
+        remote_connection_token(
+            &managed_remote,
+            parse_remote_target("codex").expect("target")
+        )
+        .is_ok()
+    );
 
     // Loopback-only without advertisement fails closed.
     let loopback_path = directory.path().join("loopback.toml");

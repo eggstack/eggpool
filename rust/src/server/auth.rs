@@ -27,8 +27,33 @@ pub(super) struct PasswordChangeForm {
     csrf: String,
 }
 
-pub(super) async fn login_page() -> Html<String> {
-    Html(login_html(None))
+pub(super) async fn login_page(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    peer: Option<Extension<eggserve_server::interop::ConnectionInfoExt>>,
+) -> Response {
+    let connection = peer.as_ref().map(|extension| &extension.0.0);
+    let (status, html) = login_page_for_transport(connection, &headers, &state.server);
+    (status, Html(html)).into_response()
+}
+
+fn login_page_for_transport(
+    connection: Option<&eggserve_primitives::connection_info::ConnectionInfo>,
+    headers: &HeaderMap,
+    server: &ServerState,
+) -> (StatusCode, String) {
+    if web_auth_transport_allowed(connection, headers, server) {
+        (StatusCode::OK, login_html(None))
+    } else {
+        (
+            StatusCode::FORBIDDEN,
+            unsafe_login_transport_html().to_owned(),
+        )
+    }
+}
+
+fn unsafe_login_transport_html() -> &'static str {
+    "<!doctype html><html><head><meta charset=\"utf-8\"><title>Secure sign-in required</title></head><body><main><h1>Secure sign-in required</h1><p>This connection is not local and is not protected by a trusted HTTPS proxy. EggPool did not request a username or password.</p><p>For a solo headless device, use an SSH port forward such as <code>ssh -L 11300:127.0.0.1:11300 operator@device</code> and open <code>http://127.0.0.1:11300/login</code>.</p><p>For a team server, use an operator-managed HTTPS reverse proxy or VPN.</p></main></body></html>"
 }
 
 pub(super) async fn login_submit(
@@ -423,6 +448,94 @@ fn unavailable() -> Response {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn test_server() -> ServerState {
+        ServerState {
+            api_key: None,
+            dashboard_enabled: true,
+            dashboard_public: false,
+            dashboard_theme: "default".to_owned(),
+            dashboard_refresh_interval_s: 60,
+            configured_server_threads: 1,
+            database_path: ":memory:".to_owned(),
+            trusted_proxy_ips: vec!["192.0.2.10".to_owned()],
+            allow_insecure_web_auth: false,
+            started_at: Instant::now(),
+        }
+    }
+
+    #[test]
+    fn login_get_never_solicits_credentials_on_untrusted_remote_http() {
+        let server = test_server();
+        let connection = eggserve_primitives::connection_info::ConnectionInfo::new(
+            None,
+            Some("198.51.100.20:443".parse().expect("peer address")),
+            eggserve_primitives::connection_info::Scheme::Http,
+            None,
+        );
+        let mut headers = HeaderMap::new();
+        headers.insert(header::HOST, HeaderValue::from_static("trusted.example"));
+        headers.insert("x-forwarded-proto", HeaderValue::from_static("https"));
+        let (status, html) = login_page_for_transport(Some(&connection), &headers, &server);
+        assert_eq!(status, StatusCode::FORBIDDEN);
+        assert!(!html.contains("type=\"password\""));
+        assert!(!html.contains("name=\"username\""));
+        assert!(html.contains("ssh -L 11300:127.0.0.1:11300"));
+    }
+
+    #[test]
+    fn login_get_fails_closed_for_missing_peer_and_ambiguous_proxy_scheme() {
+        let server = test_server();
+        let (status, html) = login_page_for_transport(None, &HeaderMap::new(), &server);
+        assert_eq!(status, StatusCode::FORBIDDEN);
+        assert!(!html.contains("type=\"password\""));
+
+        let proxy = eggserve_primitives::connection_info::ConnectionInfo::new(
+            None,
+            Some("192.0.2.10:443".parse().expect("proxy peer")),
+            eggserve_primitives::connection_info::Scheme::Http,
+            None,
+        );
+        let mut headers = HeaderMap::new();
+        headers.append("x-forwarded-proto", HeaderValue::from_static("https"));
+        headers.append("x-forwarded-proto", HeaderValue::from_static("https"));
+        let (status, html) = login_page_for_transport(Some(&proxy), &headers, &server);
+        assert_eq!(status, StatusCode::FORBIDDEN);
+        assert!(!html.contains("type=\"password\""));
+
+        headers.clear();
+        headers.insert(
+            "x-forwarded-proto",
+            HeaderValue::from_bytes(b"https\xff").expect("opaque header value"),
+        );
+        let (status, html) = login_page_for_transport(Some(&proxy), &headers, &server);
+        assert_eq!(status, StatusCode::FORBIDDEN);
+        assert!(!html.contains("type=\"password\""));
+    }
+
+    #[test]
+    fn login_get_shows_credentials_only_on_loopback_or_trusted_https_proxy() {
+        let server = test_server();
+        let make_connection = |peer: &str| {
+            eggserve_primitives::connection_info::ConnectionInfo::new(
+                None,
+                Some(peer.parse().expect("peer address")),
+                eggserve_primitives::connection_info::Scheme::Http,
+                None,
+            )
+        };
+        let loopback = make_connection("127.0.0.1:3000");
+        let (status, html) = login_page_for_transport(Some(&loopback), &HeaderMap::new(), &server);
+        assert_eq!(status, StatusCode::OK);
+        assert!(html.contains("type=\"password\""));
+
+        let proxy = make_connection("192.0.2.10:443");
+        let mut headers = HeaderMap::new();
+        headers.insert("x-forwarded-proto", HeaderValue::from_static("https"));
+        let (status, html) = login_page_for_transport(Some(&proxy), &headers, &server);
+        assert_eq!(status, StatusCode::OK);
+        assert!(html.contains("type=\"password\""));
+    }
 
     #[test]
     fn same_origin_requires_matching_authority_and_scheme() {

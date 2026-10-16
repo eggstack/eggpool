@@ -68,7 +68,7 @@
     {"path": "uninstall", "owner": "O009", "options": ["--yes", "--keep-data", "--keep-config", "--keep-path", "--deploy-artifacts"]},
     {"path": "update", "owner": "O008", "options": ["--check", "--from-source"]},
     {"path": "users", "owner": "O004", "options": []},
-    {"path": "users enable-managed", "owner": "M002", "options": []},
+    {"path": "users enable-managed", "owner": "M002", "options": ["--actor"]},
     {"path": "users bootstrap", "owner": "O004", "options": ["--password-stdin", "--show-secret"]},
     {"path": "users list", "owner": "O004", "options": []},
     {"path": "users reset-password", "owner": "O004", "options": ["--password-stdin", "--show-secret"]},

@@ -56,18 +56,29 @@ authentication behavior until an operator explicitly initializes local user
 access.
 
 Manage local identities from the machine that owns the data directory with
-`eggpool users list`, `eggpool users token USER`, `eggpool users revoke USER`,
-and `eggpool users reset-password USER`. Personal tokens are for inference,
+`eggpool users add USER --password-stdin`, `eggpool users show USER`,
+`eggpool users disable USER`, `eggpool users enable USER`,
+`eggpool users token USER`, `eggpool users revoke USER`, and
+`eggpool users reset-password USER`. Member passwords are read from a hidden TTY prompt or stdin; passwords
+are never accepted in argv. Add `--profile-id PROFILE` to assign the initial
+model policy in the same transaction. `eggpool users defaults show|set PROFILE|clear`
+manages the instance default used only when future members are created without
+an explicit profile; `users add USER --no-profile` explicitly keeps a new
+member unassigned. Existing assignments are never changed by setting or
+clearing the default. No budget template is copied: user and instance budget
+rules remain independently configured. Personal tokens are for inference,
 model discovery, and the integration profile; they do not authorize dashboard
 or admin pages. The configured server API key remains a legacy shared
-inference credential during the staged migration. Do not share it with new
-users; issue an individual token instead.
+inference credential only while the database is `legacy_unmigrated`. Do not
+share it with new users; issue an individual token instead.
 
 With `[dashboard].enabled = true`, an administrator can manage users, profiles,
 budgets, tokens, and audit history in the embedded dashboard. New members
 receive a temporary password and must change it at first login. Members can
 manage their personal tokens and view only their own usage and accessible
-models. A browser-issued token is shown once in a no-store response; set it as
+models. The users page can use the instance default, select a specific profile,
+or explicitly leave a member without a profile. A browser-issued token is shown
+once in a no-store response; set it as
 `EGGPOOL_API_KEY` in the environment that launches the desktop client.
 Remote browser login must use the operator's TLS proxy and trusted-proxy setup
 below: LAN reachability alone does not encrypt passwords or cookies.
@@ -323,6 +334,13 @@ use `eggpool restart` for those. A mixed live + restart-required
 change is rejected entirely (exit code `2`); no partial application.
 The CLI is fail-closed and never implicitly restarts the service.
 
+The optional `[admission_fairness]` short-window rates and principal-state
+bound are live-reloadable. They take effect for requests using the newly
+published generation; in-memory buckets are shared across generations and
+clamped to the active policy. Restart clears the ephemeral limiter state.
+See [model limits](model-limits.md#short-window-admission-fairness) for the
+rate bounds and client response contract.
+
 Sticky model-router affinity remains process-local across these live swaps only
 when the router's semantic fingerprint is unchanged. Policy edits naturally
 make prior decisions unreachable; no persisted cache state or restart step is
@@ -436,12 +454,17 @@ After the first local administrator is created, the shared key is no longer
 accepted; personal tokens authenticate agent surfaces, while dashboard and
 admin routes require a browser session regardless of `dashboard.public`.
 
-For managed operation, remove `[server].api_key` and unset its configured
-environment variable, then set `dashboard.public = false` and run
-`eggpool users enable-managed`. That command refuses the transition while the
-shared key or public-dashboard setting remains. Non-loopback listeners may
-then run without a shared server key because protected routes require a
-personal token or browser session.
+The first successful `eggpool users add USER` moves an initialized instance
+from `admin_initialized` to `managed` atomically with member creation, profile
+assignment, and audit. `eggpool users enable-managed` records that transition
+explicitly and requires an active local administrator. Both paths apply the
+same database transition rules. After identity initialization, EggPool
+rejects the configured legacy shared key and ignores `dashboard.public` for
+privileged routes. Remove `[server].api_key`/`api_key_env` and set
+`dashboard.public = false` as configuration hygiene; stale values do not
+restore legacy access or block the identity cutover. Non-loopback listeners
+can run without a shared key because protected routes require a personal token
+or browser session.
 
 Browser password login is allowed over loopback HTTP. For remote browser use,
 terminate TLS at an operator-managed proxy and add the proxy's literal peer IP
@@ -453,6 +476,13 @@ chained values use the proxy peer as the throttle identity. The proxy must prese
 Host header and the firewall must prevent direct access around the proxy. The
 optional `[security].allow_insecure_web_auth = true` switch is for isolated
 development only and emits a startup warning.
+
+The `GET /login` handler applies the same transport decision before rendering
+the form. Remote direct HTTP receives a static help page with no username or
+password controls and performs no database access. Solo headless operators can
+forward the browser locally with `ssh -L 11300:127.0.0.1:11300 operator@host`
+and open `http://127.0.0.1:11300/login`; remote teams should use the trusted
+HTTPS proxy path above.
 
 Optional background features that remain explicit: set `[backup].enabled = true`
 for in-process archives or `[update_checker].enabled = true` for the periodic
@@ -468,6 +498,49 @@ host process/socket counts. Compare at least three runs. Treat these as
 descriptive observations rather than universal RSS or latency gates, and keep
 EggPool-local `local_pre_upstream`/`dispatch_overhead` separate from upstream
 connect, header, TTFT, and total response latency.
+
+### Ordinary-server team sizing evidence
+
+The M002 synthetic reference was measured on one ordinary Linux host with
+durable SSD/NVMe storage, WAL/NORMAL, and one database worker. It records CPU,
+RAM, filesystem, device class/model, virtualization/container status, process
+RSS, request throughput and percentiles, I/O pressure, and durable reservation
+settlement. Named account rows (1/5/10/25/49) are measured separately from
+simultaneous inference requests (1/2/4/8/16); neither count is a service
+guarantee. The synthetic upstream cycles a fixed 0/10/50 ms service-time
+distribution to show how provider latency affects observed response time.
+
+On the measured Intel i9-9900K host (16 logical CPUs, 15.5 GiB RAM, Samsung
+980 NVMe), the median of three 1,000-request runs ranged from 36 to 43
+requests/s at concurrency 1, about 194 requests/s at concurrency 4, and
+335–341 requests/s at concurrency 8–16. At concurrency 16, median p95/p99
+were 88/106 ms; maximum observed latency across the three runs was 1.119 s.
+Peak process RSS across cells was 25–46 MiB. These values describe this
+loopback synthetic workload; upstream latency, request shape, system load,
+provider limits, and team policy change the result. No universal throughput,
+concurrency, or latency SLA follows from one host and synthetic workload.
+
+The driver writes the manifest, raw runs, and generated summary under
+`artifacts/qualification/on-prem-concurrency-performance/ordinary-server/`.
+Use the result only for relative sizing; qualify the actual provider mix,
+model payloads, login rate, and policy/budget profile before deployment. The
+Pi microSD envelope remains a separate solo-device reference in
+[`raspberry-pi.md`](raspberry-pi.md). See the
+[M002 closure record](../plans/closure/on-prem-concurrency-performance/002-status.md)
+for its evidence, scope and interpretation limits.
+
+To repeat the frozen corpus from a release binary, run
+`uv run python scripts/qualification_ordinary_server.py --binary <release-binary>`.
+The driver writes its manifest before collection, creates a fresh qualification
+root for each run, requires three repetitions per condition, validates p99
+sample counts and settlement, derives `summary.json` from the raw Q008
+reports, and runs deterministic Q009 provider-fault, hard-budget, user-disable,
+and abrupt-restart phases against the same binary. The summary requires the
+matching `lifecycle.json` artifact. It refuses non-Linux hosts and
+non-durable or rotational qualification storage, and stops before load when
+initial full I/O pressure exceeds 25% over
+the 10-second window. Qualification does not send requests to a real provider
+or charge a provider account.
 
 ### Lean (default)
 
@@ -769,7 +842,8 @@ eggpool runtime-status                 # detailed process/runtime diagnostics
 eggpool runtime-status --json          # machine-readable JSON
 ```
 
-`eggpool status` calls the authenticated local `/api/status` endpoint and
+`eggpool status` reads the sanitized snapshot over the same-user private local
+control socket and
 prints a compact operator summary: one header line for proxy health, exactly
 one row per configured provider (`ready`/`degraded`/`unavailable`/`disabled`/`unknown`
 with a bounded reason code), and one runtime footer line. It aggregates
@@ -782,9 +856,17 @@ as `unknown`/`disabled` from static config. `eggpool status --json` prints the
 typed server snapshot (deterministic provider ordering, numeric durations in
 named units, no credentials or raw upstream error text).
 
-`eggpool runtime-status` calls the local `/api/stats/runtime` endpoint and
+`eggpool runtime-status` reads the detailed projection over that local control
+socket and
 prints a one-page overview of the running process. It is intended for operators debugging
 systemd, cron, or daemon deployments.
+
+The control runtime directory is private and its Unix socket is mode `0600`.
+This grants readback only to the operating-system account that owns the daemon
+and socket; it does not change HTTP authorization. `/api/status` and
+`/api/stats/runtime` remain browser-session protected after identity bootstrap,
+and personal API tokens cannot access them. Missing or stale sockets are
+reported as unavailable; malformed or oversized responses fail closed.
 
 When the server is not running the command exits non-zero with a clear
 message.  It does not start the server.

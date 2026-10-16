@@ -39,8 +39,8 @@ Command list verified against `eggpool help` (0.8.2).
 
 | Command | Description |
 |---------|-------------|
-| `eggpool status` | Concise proxy/provider health summary (one row per provider; `--json` for structured output) |
-| `eggpool runtime-status` | Detailed process/runtime diagnostics (`--json` for the full snapshot) |
+| `eggpool status` | Concise proxy/provider health summary from the private local control socket (one row per provider; `--json` for structured output) |
+| `eggpool runtime-status` | Detailed local operator diagnostics from the private control socket (`--json` for the full snapshot) |
 | `eggpool stats transcoding` | Show protocol transcoding statistics |
 | `eggpool stats repair-costs` | Dry-run/apply repair for suspicious historical request costs |
 | `eggpool stats recompute-costs` | Recompute `cost_microdollars` on historical requests |
@@ -55,11 +55,18 @@ Command list verified against `eggpool help` (0.8.2).
 | `eggpool getkey` | Print the server API key |
 | `eggpool newkey` | Generate and write a new server API key (`--show-old`, `--show-secrets`) |
 | `eggpool users bootstrap` | Create the initial local administrator (`--password-stdin` for unattended input) |
+| `eggpool users add USER` | Create a member with a TTY-hidden or `--password-stdin` temporary password; optional `--profile-id PROFILE` or `--no-profile`; otherwise uses the configured new-member default; `--actor ADMIN` records the active administrator |
+| `eggpool users defaults show` | Show the default member profile and budget-template behavior |
+| `eggpool users defaults set PROFILE` | Select the profile for future members created without an explicit profile |
+| `eggpool users defaults clear` | Remove the default; future unassigned members remain deny-by-default |
+| `eggpool users show USER` | Show one user's role, state and forced-password-change status without secrets |
 | `eggpool users list` | List local usernames, role and status |
+| `eggpool users disable USER` | Disable a user and revoke their sessions and personal tokens |
+| `eggpool users enable USER` | Reactivate a user; previously revoked tokens remain revoked |
 | `eggpool users token USER` | Issue a personal inference/discovery token (`--label` optional; `--show-secret` allows non-TTY output) |
 | `eggpool users revoke USER` | Revoke all personal API tokens for a user |
 | `eggpool users reset-password USER` | Reset a local password and revoke that user's API tokens and browser sessions (`--password-stdin` supported) |
-| `eggpool users enable-managed` | Retire the legacy key path after clearing `[server].api_key`/`api_key_env` and setting `dashboard.public = false` |
+| `eggpool users enable-managed` | Explicitly record managed access (`--actor ADMIN`, default `admin`); works even when retired legacy settings remain |
 | `eggpool users policy create ID NAME allow\|deny` | Create an exact-rule model profile |
 | `eggpool users policy rule PROFILE MODEL allow\|deny` | Add or replace one exact model or `model/provider` rule |
 | `eggpool users policy assign USER PROFILE` | Assign a profile to a local user |
@@ -76,6 +83,16 @@ admin dashboard. They write SQLite policy state directly; model IDs are exact
 and wildcards are rejected. `--actor ADMIN` records the active administrator
 responsible for each change. Restricted profiles should use `deny` as their
 default and add explicit allowed models.
+
+Local member lifecycle commands run from the machine that owns the EggPool
+data directory. The first successful `users add` moves
+`admin_initialized` to `managed` in the same SQLite transaction as the user,
+optional or default initial profile, and audit records. A failed profile assignment does
+not leave a user or change the access state. The default applies to future
+members only; setting or clearing it never reassigns existing users. There is
+no default budget template. Disabling revokes active sessions
+and personal tokens; re-enabling does not restore those tokens, so issue a new
+one with `users token USER`. The last active administrator cannot be disabled.
 
 Budget commands are local operator controls. At least one positive limit is
 required; each rule is keyed by user, optional exact model, and UTC calendar

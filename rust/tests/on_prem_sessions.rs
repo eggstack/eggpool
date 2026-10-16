@@ -98,7 +98,9 @@ async fn password_reset_revokes_browser_sessions() {
 async fn revoked_admin_session_cannot_commit_privileged_identity_or_budget_writes() {
     let (_directory, database) = database().await;
     let (admin_id, _) = create_admin(&database).await;
-    identity::enable_managed(&database).await.unwrap();
+    identity::enable_managed(&database, &admin_id)
+        .await
+        .unwrap();
     let issued = web_session::issue(&database, &admin_id).await.unwrap();
     let principal = web_session::authenticate(&database, &issued.session_token)
         .await
@@ -357,8 +359,8 @@ fn cookie(response: &str, name: &str) -> String {
 #[tokio::test]
 async fn managed_browser_login_account_csrf_and_logout_work_over_loopback() {
     let (_directory, database) = database().await;
-    let (_user_id, agent_token) = create_admin(&database).await;
-    identity::enable_managed(&database).await.unwrap();
+    let (user_id, agent_token) = create_admin(&database).await;
+    identity::enable_managed(&database, &user_id).await.unwrap();
 
     let process = ProcessRuntime::new(database.clone()).expect("process runtime");
     let mut config = Config::default();
@@ -508,8 +510,8 @@ async fn managed_browser_login_account_csrf_and_logout_work_over_loopback() {
 #[tokio::test]
 async fn trusted_reverse_proxy_can_complete_secure_browser_login() {
     let (_directory, database) = database().await;
-    let (_user_id, _) = create_admin(&database).await;
-    identity::enable_managed(&database).await.unwrap();
+    let (user_id, _) = create_admin(&database).await;
+    identity::enable_managed(&database, &user_id).await.unwrap();
 
     let process = ProcessRuntime::new(database.clone()).expect("process runtime");
     let mut config = Config::default();
@@ -555,7 +557,9 @@ async fn trusted_reverse_proxy_can_complete_secure_browser_login() {
 async fn browser_sessions_can_read_scoped_user_budget_api() {
     let (_directory, database) = database().await;
     let (admin_id, _) = create_admin(&database).await;
-    identity::enable_managed(&database).await.unwrap();
+    identity::enable_managed(&database, &admin_id)
+        .await
+        .unwrap();
     identity::reset_password(&database, "admin", "M015 budget api admin password")
         .await
         .unwrap();
@@ -724,8 +728,10 @@ async fn browser_sessions_can_read_scoped_user_budget_api() {
 #[tokio::test]
 async fn token_guess_throttle_runs_before_access_state_and_database_lookup() {
     let (_directory, database) = database().await;
-    let (_admin_id, _) = create_admin(&database).await;
-    identity::enable_managed(&database).await.unwrap();
+    let (admin_id, _) = create_admin(&database).await;
+    identity::enable_managed(&database, &admin_id)
+        .await
+        .unwrap();
 
     let process = ProcessRuntime::new(database.clone()).expect("process runtime");
     let mut config = Config::default();
@@ -757,6 +763,13 @@ async fn token_guess_throttle_runs_before_access_state_and_database_lookup() {
         database.stats().calls,
         before_missing,
         "missing credentials are rejected before the access-state read when the shared key is configured"
+    );
+    let stale_shared_key = http_request(address, &format!(
+        "GET /v1/models HTTP/1.1\r\nHost: {address}\r\nAuthorization: Bearer legacy-shared-key-for-test-only\r\nConnection: close\r\n\r\n"
+    )).await;
+    assert!(
+        stale_shared_key.starts_with("HTTP/1.1 401"),
+        "{stale_shared_key}"
     );
 
     for index in 0..30_u64 {

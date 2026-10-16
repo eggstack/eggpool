@@ -331,6 +331,34 @@ pub async fn list_users(database: &Database) -> Result<Vec<UserSummary>, Identit
         .map_err(IdentityError::Database)
 }
 
+pub async fn get_user_by_name(
+    database: &Database,
+    username: &str,
+) -> Result<Option<UserSummary>, IdentityError> {
+    let username = username.to_owned();
+    database
+        .call(move |connection| {
+            connection
+                .query_row(
+                    "SELECT id, username, role, state, must_change_password FROM users \
+                     WHERE normalized_username = ?1",
+                    [username.to_ascii_lowercase()],
+                    |row| {
+                        Ok(UserSummary {
+                            id: row.get(0)?,
+                            username: row.get(1)?,
+                            role: row.get(2)?,
+                            state: row.get(3)?,
+                            must_change_password: row.get::<_, i64>(4)? != 0,
+                        })
+                    },
+                )
+                .optional()
+        })
+        .await
+        .map_err(IdentityError::Database)
+}
+
 /// Create a member with a one-time temporary password. The forced password
 /// change, managed-mode transition, and administrator audit row commit with
 /// the new user.
@@ -340,7 +368,53 @@ pub async fn create_member(
     username: &str,
     temporary_password: &str,
 ) -> Result<UserSummary, IdentityError> {
-    create_member_with_fence(database, actor_id, username, temporary_password, None, None).await
+    create_member_with_fence(
+        database,
+        actor_id,
+        username,
+        temporary_password,
+        None,
+        None,
+        true,
+    )
+    .await
+}
+
+pub async fn create_member_with_profile(
+    database: &Database,
+    actor_id: &str,
+    username: &str,
+    temporary_password: &str,
+    profile_id: Option<&str>,
+) -> Result<UserSummary, IdentityError> {
+    create_member_with_fence(
+        database,
+        actor_id,
+        username,
+        temporary_password,
+        None,
+        profile_id,
+        true,
+    )
+    .await
+}
+
+pub async fn create_member_without_profile(
+    database: &Database,
+    actor_id: &str,
+    username: &str,
+    temporary_password: &str,
+) -> Result<UserSummary, IdentityError> {
+    create_member_with_fence(
+        database,
+        actor_id,
+        username,
+        temporary_password,
+        None,
+        None,
+        false,
+    )
+    .await
 }
 
 pub async fn create_member_from_browser(
@@ -356,6 +430,25 @@ pub async fn create_member_from_browser(
         temporary_password,
         Some(crate::web_session::SessionFence::from_principal(principal)),
         None,
+        true,
+    )
+    .await
+}
+
+pub async fn create_member_without_profile_from_browser(
+    database: &Database,
+    principal: &crate::web_session::Principal,
+    username: &str,
+    temporary_password: &str,
+) -> Result<UserSummary, IdentityError> {
+    create_member_with_fence(
+        database,
+        &principal.user_id,
+        username,
+        temporary_password,
+        Some(crate::web_session::SessionFence::from_principal(principal)),
+        None,
+        false,
     )
     .await
 }
@@ -374,6 +467,7 @@ pub async fn create_member_with_profile_from_browser(
         temporary_password,
         Some(crate::web_session::SessionFence::from_principal(principal)),
         Some(profile_id),
+        true,
     )
     .await
 }
@@ -385,6 +479,7 @@ async fn create_member_with_fence(
     temporary_password: &str,
     session_fence: Option<crate::web_session::SessionFence>,
     profile_id: Option<&str>,
+    use_default_profile: bool,
 ) -> Result<UserSummary, IdentityError> {
     let username = validate_username(username)?;
     let password_hash = hash_password(temporary_password).await?;
@@ -415,22 +510,39 @@ async fn create_member_with_fence(
             if taken {
                 return Ok(AdminMutation::Conflict);
             }
+            let transition = transition_to_managed(connection)?;
+            if transition == ManagedTransition::Invalid {
+                return Ok(AdminMutation::InvalidTransition);
+            }
+            if transition == ManagedTransition::Changed {
+                connection.execute(
+                    "INSERT INTO user_admin_audit(actor_id, action, target_kind, target_id) \
+                     VALUES (?1, 'enable_managed', 'instance', 'singleton')",
+                    [&actor_id],
+                )?;
+            }
+            let selected_profile_id = if profile_id.is_some() {
+                profile_id.clone()
+            } else if use_default_profile {
+                connection.query_row(
+                    "SELECT default_member_profile_id FROM policy_state WHERE singleton = 1",
+                    [],
+                    |row| row.get::<_, Option<String>>(0),
+                )?
+            } else {
+                None
+            };
             connection.execute(
                 "INSERT INTO users(id, username, normalized_username, role, password_hash, must_change_password) \
                  VALUES (?1, ?2, ?3, 'member', ?4, 1)",
                 (&id, &username, &normalized, &password_hash),
             )?;
             connection.execute(
-                "UPDATE user_access_state SET state = 'managed', updated_at = CURRENT_TIMESTAMP \
-                 WHERE singleton = 1 AND state IN ('admin_initialized', 'managed')",
-                [],
-            )?;
-            connection.execute(
                 "INSERT INTO user_admin_audit(actor_id, action, target_kind, target_id) \
                  VALUES (?1, 'create_user', 'user', ?2)",
                 (&actor_id, &id),
             )?;
-            if let Some(profile_id) = profile_id.as_ref() {
+            if let Some(profile_id) = selected_profile_id.as_ref() {
                 connection.execute(
                     "INSERT INTO user_profile_assignments(user_id, profile_id, assigned_by) \
                      VALUES (?1, ?2, ?3)",
@@ -455,6 +567,7 @@ async fn create_member_with_fence(
         AdminMutation::User(user) => Ok(user),
         AdminMutation::Forbidden => Err(IdentityError::AdministratorRequired),
         AdminMutation::Conflict => Err(IdentityError::UsernameConflict),
+        AdminMutation::InvalidTransition => Err(IdentityError::InvalidAccessTransition),
         _ => Err(IdentityError::UserNotFound),
     }
 }
@@ -763,6 +876,38 @@ enum AdminMutation {
     LastAdmin,
     Missing,
     Conflict,
+    InvalidTransition,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum ManagedTransition {
+    Changed,
+    AlreadyManaged,
+    Invalid,
+}
+
+fn transition_to_managed(
+    connection: &tokio_rusqlite::rusqlite::Connection,
+) -> Result<ManagedTransition, tokio_rusqlite::rusqlite::Error> {
+    let changed = connection.execute(
+        "UPDATE user_access_state SET state = 'managed', updated_at = CURRENT_TIMESTAMP \
+         WHERE singleton = 1 AND state = 'admin_initialized' \
+         AND EXISTS (SELECT 1 FROM users WHERE role = 'admin' AND state = 'active')",
+        [],
+    )?;
+    if changed == 1 {
+        return Ok(ManagedTransition::Changed);
+    }
+    let state: String = connection.query_row(
+        "SELECT state FROM user_access_state WHERE singleton = 1",
+        [],
+        |row| row.get(0),
+    )?;
+    Ok(if state == "managed" {
+        ManagedTransition::AlreadyManaged
+    } else {
+        ManagedTransition::Invalid
+    })
 }
 
 pub async fn admin_audit(
@@ -970,22 +1115,38 @@ pub async fn access_state(database: &Database) -> Result<String, IdentityError> 
         .map_err(IdentityError::Database)
 }
 
-pub async fn enable_managed(database: &Database) -> Result<(), IdentityError> {
-    let changed = database
-        .with_transaction(|connection| {
-            connection.execute(
-                "UPDATE user_access_state SET state = 'managed', updated_at = CURRENT_TIMESTAMP \
-                 WHERE singleton = 1 AND state = 'admin_initialized' \
-                 AND EXISTS (SELECT 1 FROM users WHERE role = 'admin' AND state = 'active')",
-                [],
+pub async fn enable_managed(database: &Database, actor_id: &str) -> Result<(), IdentityError> {
+    let actor_id = actor_id.to_owned();
+    let outcome = database
+        .with_transaction(move |connection| {
+            let actor_is_admin: bool = connection.query_row(
+                "SELECT EXISTS(SELECT 1 FROM users WHERE id = ?1 AND role = 'admin' AND state = 'active')",
+                [&actor_id],
+                |row| row.get(0),
             )?;
-            Ok(connection.changes())
+            if !actor_is_admin {
+                return Ok(AdminMutation::Forbidden);
+            }
+            let transition = transition_to_managed(connection)?;
+            match transition {
+                ManagedTransition::Changed => {
+                    connection.execute(
+                        "INSERT INTO user_admin_audit(actor_id, action, target_kind, target_id) \
+                         VALUES (?1, 'enable_managed', 'instance', 'singleton')",
+                        [&actor_id],
+                    )?;
+                    Ok(AdminMutation::Done)
+                }
+                ManagedTransition::AlreadyManaged => Ok(AdminMutation::Done),
+                ManagedTransition::Invalid => Ok(AdminMutation::InvalidTransition),
+            }
         })
         .await?;
-    if changed == 1 || access_state(database).await?.as_str() == "managed" {
-        Ok(())
-    } else {
-        Err(IdentityError::InvalidAccessTransition)
+    match outcome {
+        AdminMutation::Done => Ok(()),
+        AdminMutation::Forbidden => Err(IdentityError::AdministratorRequired),
+        AdminMutation::InvalidTransition => Err(IdentityError::InvalidAccessTransition),
+        _ => Err(IdentityError::InvalidAccessTransition),
     }
 }
 

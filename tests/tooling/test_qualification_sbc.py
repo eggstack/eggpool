@@ -14,6 +14,7 @@ import pytest
 from scripts.qualification_sbc import (
     BENCHMARK_FIXTURE,
     BENCHMARK_MAX_SAMPLES,
+    CONCURRENCY_WORKERS_MAX,
     DEFAULT_FIXTURE,
     DIAGNOSTIC_FIXTURE_PATH_SUFFIX,
     DIAGNOSTIC_MAX_SAMPLES,
@@ -43,6 +44,7 @@ from scripts.qualification_sbc import (
     _diagnose_sample_count,
     _diagnostic_phase_summary,
     _direct_provider_control,
+    _expected_short_window_throttle_counts,
     _m007_candidate_gates_pass,
     _ns_to_ms,
     _percentile,
@@ -69,9 +71,25 @@ from scripts.qualification_sbc import (
     benchmark_cadence_facts,
     bounded,
     main,
+    ordinary_server_metadata,
     resource_sample,
     run_qualification,
 )
+
+
+def test_m023_throttle_measurement_requires_expected_429_code_and_admission_count() -> (
+    None
+):
+    results = [
+        (200, b"{}", 3, None),
+        (200, b"{}", 4, None),
+        (429, b'{"code":"short_window_rate_limited"}', 1, None),
+        (429, b'{"code":"short_window_rate_limited"}', 1, None),
+    ]
+    assert _expected_short_window_throttle_counts(results, 2, 4)
+    assert not _expected_short_window_throttle_counts(results, 1, 4)
+    wrong_code = [*results[:-1], (429, b'{"code":"budget_exceeded"}', 1, None)]
+    assert not _expected_short_window_throttle_counts(wrong_code, 2, 4)
 
 
 def test_q008_refuses_non_linux_or_non_aarch64_without_claiming_pass() -> None:
@@ -124,6 +142,29 @@ def test_q008_storage_metadata_uses_root_device_without_identity() -> None:
     assert _root_block_device("/dev/nvme0n1p3") == "nvme0n1"
     assert _storage_device_class("mmcblk0") == "mmc"
     assert _storage_device_class("nvme0n1") == "nvme"
+
+
+def test_ordinary_server_profile_records_host_and_durable_storage_facts() -> None:
+    report, reason = ordinary_server_metadata()
+    if platform.system().lower() != "linux":
+        assert report is None
+        assert reason
+        return
+    assert reason is None
+    assert report is not None
+    assert report["target_class"] == "ordinary-server"
+    assert "virtualization_type" in report
+    assert "container_type" in report
+    assert "root_filesystem" in report
+    assert "root_storage_device_class" in report
+
+
+def test_ordinary_benchmark_supports_sixteen_clients_and_fixed_latency_profile() -> (
+    None
+):
+    assert CONCURRENCY_WORKERS_MAX == 16
+    provider = LoopbackProvider("mixed-0-10-50ms")
+    assert [provider.record("/responses") for _ in range(6)] == [0, 0, 0, 10, 10, 50]
 
 
 def test_q008_missing_candidate_is_blocked_before_mutation_on_linux_sbc(

@@ -1,0 +1,48 @@
+{
+  "commands": [],
+  "environment": {
+    "architecture": "x86_64",
+    "attestation": "Linux host metadata from procfs, sysfs, DMI and systemd-detect-virt",
+    "board_name": "Z390 AORUS MASTER-CF",
+    "container_type": "none",
+    "cpu_model": "Intel(R) Core(TM) i9-9900K CPU @ 3.60GHz",
+    "kernel": "6.8.0-147-generic",
+    "logical_cpu_count": 16,
+    "os": "Ubuntu 24.04.5 LTS",
+    "os_version_id": "24.04",
+    "preflight_io": {
+      "io_pressure": {
+        "full": {
+          "avg10": 28.33,
+          "avg300": 11.05,
+          "avg60": 21.38
+        },
+        "some": {
+          "avg10": 28.75,
+          "avg300": 11.18,
+          "avg60": 21.66
+        }
+      },
+      "root_device_read_bytes": 761853444096,
+      "root_device_write_bytes": 1362586076160
+    },
+    "product_name": "Z390 AORUS MASTER",
+    "ram_bytes": 16622407680,
+    "root_filesystem": "ext4",
+    "root_mount_options": "rw,relatime,stripe=32",
+    "root_storage_device_class": "nvme",
+    "root_storage_device_model": "Samsung SSD 980 1TB",
+    "root_storage_medium_class": "non-rotational",
+    "system_vendor": "Gigabyte Technology Co., Ltd.",
+    "target_class": "ordinary-server",
+    "virtualization_type": "none"
+  },
+  "findings": [],
+  "functional": [],
+  "manifest": "runtime-q001.v1",
+  "plan": "ordinary-server qualification",
+  "reason": "ordinary-server benchmark stopped before load because initial full I/O pressure is missing or at/above the 25% avg10 gate",
+  "resource_samples": [],
+  "schema_version": "runtime-q008.v2",
+  "status": "blocked"
+}

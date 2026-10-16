@@ -119,7 +119,9 @@ pub enum EndpointError {
     ModelForbidden,
     #[error("User budget limit reached")]
     BudgetExceeded,
-    #[error("User budget hard limit is not enforceable for this request")]
+    #[error(
+        "Hard budget cannot be enforced: include a positive output cap supported by this API, and configure an operator tariff when a hard USD limit applies"
+    )]
     BudgetNotEnforceable,
     #[error("Routing claim failed")]
     Claim,
@@ -216,6 +218,34 @@ pub fn endpoint_error_body(surface: ClientSurface, message: &str) -> Vec<u8> {
     let body = serde_json::to_vec(&value)
         .unwrap_or_else(|_| b"{\"error\":{\"type\":\"upstream_error\"}}".to_vec());
     body.into_iter().take(MAX_CLIENT_ERROR_BYTES).collect()
+}
+
+/// Render stable machine-readable codes for budget decisions while keeping
+/// the generic envelope used by other endpoint errors.
+pub fn endpoint_error_body_for(surface: ClientSurface, error: &EndpointError) -> Vec<u8> {
+    let budget_code = match error {
+        EndpointError::BudgetExceeded => Some(("budget_exceeded", "User budget limit reached")),
+        EndpointError::BudgetNotEnforceable => Some((
+            "hard_budget_not_enforceable",
+            "Hard budget cannot be enforced: include a positive output cap supported by this API, and configure an operator tariff when a hard USD limit applies",
+        )),
+        _ => None,
+    };
+    let Some((code, message)) = budget_code else {
+        return endpoint_error_body(surface, &error.to_string());
+    };
+    let value = if surface == ClientSurface::Messages {
+        json!({
+            "type": "error",
+            "error": {"type": "api_error", "message": message, "code": code}
+        })
+    } else {
+        json!({
+            "error": {"message": message, "type": "upstream_error", "code": code}
+        })
+    };
+    serde_json::to_vec(&value)
+        .unwrap_or_else(|_| b"{\"error\":{\"type\":\"upstream_error\"}}".to_vec())
 }
 
 /// Validate the stateless Responses contract (Python parity).
@@ -693,6 +723,7 @@ async fn resolve_concrete(
                     }
                     crate::model_policy::ModelPolicyError::InvalidPolicyInput
                     | crate::model_policy::ModelPolicyError::PreferredModelDenied
+                    | crate::model_policy::ModelPolicyError::DefaultProfileNotFound
                     | crate::model_policy::ModelPolicyError::Database(_) => EndpointError::Internal,
                 })?,
         ),
