@@ -16,12 +16,20 @@ import sys
 from pathlib import Path
 from typing import Any, cast
 
-from scripts.qualification_sbc import (
-    ORDINARY_SERVER_MAX_INITIAL_IO_PRESSURE_PERCENT,
-    host_io_full_avg10,
-    host_io_snapshot,
-    ordinary_server_metadata,
-)
+try:
+    from scripts.qualification_sbc import (
+        ORDINARY_SERVER_MAX_INITIAL_IO_PRESSURE_PERCENT,
+        host_io_full_avg10,
+        host_io_snapshot,
+        ordinary_server_metadata,
+    )
+except ModuleNotFoundError:  # Running this file directly from ``scripts/``.
+    from qualification_sbc import (  # type: ignore[no-redef]
+        ORDINARY_SERVER_MAX_INITIAL_IO_PRESSURE_PERCENT,
+        host_io_full_avg10,
+        host_io_snapshot,
+        ordinary_server_metadata,
+    )
 
 ROOT = Path(__file__).resolve().parents[1]
 DEFAULT_OUTPUT = (
