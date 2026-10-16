@@ -1,6 +1,6 @@
 # On-Prem User Access M023 — Short-window team fairness and admission controls
 
-Status: closing
+Status: implemented
 
 Repository baseline: `88f58bbf2e9095cf46437945edf83e580270bdb6` (`main`, post-PR #7).
 

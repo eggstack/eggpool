@@ -58,7 +58,7 @@ No new runtime, schema or performance claim lands with these plans.
 | Persistence | active | `plans/subsystems/persistence-roadmap.md` | M011 ready — post-M010 roadmap/documentation reconciliation | M009/M010 closures accepted. Documentation/tooling-only corrective; production remains WAL/NORMAL. No technical persistence successor is registered. |
 | Deployment and packaging | closed | `plans/subsystems/deployment-packaging-roadmap.md` | M005 closed — active PATH integration detection corrective | M001–M005 closed; no successor registered. |
 | Dashboard | closed | `plans/subsystems/dashboard-roadmap.md` | M012 closed — lifecycle closure and documentation polish | M001–M012 closed; no registered successor; future dashboard work requires a new bounded plan. |
-| On-prem user access | active | `plans/subsystems/on-prem-user-access-roadmap.md` | M023 closing — short-window fairness controls | M017–M022 closed; M002 ordinary-server gate satisfied. Production, test, and documentation work is committed; post-change Linux latency comparison remains an external condition. |
+| On-prem user access | active | `plans/subsystems/on-prem-user-access-roadmap.md` | M023 conditionally closed — short-window fairness controls | M017–M022 closed; M023 production and local evidence complete. Post-change ordinary-Linux latency comparison remains the named condition. No successor is registered. |
 | On-prem concurrency performance | active | `plans/subsystems/on-prem-concurrency-performance-roadmap.md` | M002 closed — ordinary-server synthetic baseline recorded | M001's Pi/microSD solo tail attribution stays conditionally closed; M002 authorizes no WAL/SQLite topology change. |
 
 ## Dependency-ready implementation plans
@@ -71,7 +71,6 @@ No new runtime, schema or performance claim lands with these plans.
 
 | Subsystem | Milestone | Status | Implementation plan | Handoff note |
 |---|---|---|---|---|
-| On-prem user access | M023 — short-window team fairness | closing | `plans/implementation/on-prem-user-access/023-short-window-fairness-controls.md` | Production implementation and local verification are complete; final closure records the unavailable post-change ordinary-Linux comparison. |
 
 
 ## Blocked work
@@ -109,6 +108,7 @@ Historical M007 blocker assessment at baseline `7e241ad` (`plans/closure/persist
 
 | Subsystem / plan | Disposition | Evidence |
 |---|---|---|
+| On-prem user access M023 — short-window team fairness | conditionally closed — opt-in per-principal/global token buckets, pre-body 429/Retry-After, bounded process-local state, default/no-default suites and tooling pass; post-change ordinary-Linux p50/p95/p99 comparison remains outstanding; no registered successor | `plans/closure/on-prem-user-access/023-status.md`, implementation `84482e9` |
 | On-prem concurrency performance M002 — ordinary-server team baseline | closed — 27 passing Q008 runs across nine cells; Q009 hard-budget, provider-fault, user-disable and restart evidence; bounded competing-I/O and SQLite gate diagnostics; measured host-specific sizing guidance; M023 promoted to ready | `plans/closure/on-prem-concurrency-performance/002-status.md`, artifacts under `artifacts/qualification/on-prem-concurrency-performance/ordinary-server/` |
 | On-prem user access M022 — hard-budget agent interoperability | closed — Codex CLI 0.162.1 omitted a Responses output cap; OpenCode 1.18.35 sent configured `max_output_tokens`; stable proof-failure and exhausted-budget codes added; default/no-default verification passes; M023 is now ready after M002 operational evidence | `plans/closure/on-prem-user-access/022-status.md`, implementation `dee65ae` |
 | On-prem user access M021 — default member policy and provisioning | closed — transactional future-only default profile selection, CLI/browser creation, explicit no-profile override, additive schema 63 migration, policy visibility and budget-separation behavior pass; M022 subsequently closed; M023 remains blocked on ordinary-server evidence | `plans/closure/on-prem-user-access/021-status.md`, implementation `b76d359`, CLI journey `ee563be`, race test `3f1ca54` |
@@ -561,3 +561,13 @@ evidence, so M023 moves `blocked` → `ready`. No other registered future plan
 declares M002 as a hard, interface, or soft dependency. M001 remains
 conditionally closed; no production storage optimization is authorized by
 this evidence.
+
+
+Unblock audit (on-prem user access M023 conditionally closed,
+`plans/closure/on-prem-user-access/023-status.md`): searched
+`plans/implementation/`, the on-prem user-access roadmap dependency graph,
+and the dependency-ready, active, and blocked registry tables. M023 has no
+registered successor or downstream plan, so no future work is newly
+unblocked and no status promotion is required. Its ordinary-Linux
+post-change performance comparison remains a closure condition, not a
+dependency for any registered plan. No capacity claim is introduced.
