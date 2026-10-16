@@ -235,6 +235,10 @@ def summarize(manifest_path: Path) -> dict[str, Any]:
             run_candidate = cast("dict[str, Any]", run_candidate)
             if run_candidate.get("sha256") != candidate.get("sha256"):
                 raise ValueError(f"candidate hash changed: {name}")
+            if run_candidate.get("repository_commit_sha") != candidate.get(
+                "repository_commit_sha"
+            ):
+                raise ValueError(f"candidate source commit changed: {name}")
             environment = document.get("environment", {})
             if environment.get("target_class") != "ordinary-server":
                 raise ValueError(f"ordinary-server attestation missing: {name}")
@@ -354,6 +358,30 @@ def run(binary: Path, output_dir: Path) -> int:
     for condition in manifest["conditions"]:
         for run_number, name in enumerate(condition["run_artifacts"], start=1):
             output = output_dir / name
+            if output.is_file():
+                try:
+                    prior = _load(output)
+                    prior_candidate = prior.get("candidate", {})
+                    prior_benchmark = prior.get("benchmark", {})
+                    prior_load = prior_benchmark.get("runs", {}).get(
+                        "concurrent_native_responses_finite", {}
+                    )
+                    reusable = (
+                        prior.get("status") == "pass"
+                        and prior.get("schema_version") == "runtime-q008.v2"
+                        and prior_candidate.get("sha256")
+                        == manifest["candidate"]["sha256"]
+                        and prior_candidate.get("repository_commit_sha")
+                        == manifest["candidate"]["repository_commit_sha"]
+                        and prior_benchmark.get("principal_count")
+                        == condition["principals"]
+                        and prior_load.get("client_concurrency")
+                        == condition["concurrency"]
+                    )
+                except (OSError, ValueError, AttributeError):
+                    reusable = False
+                if reusable:
+                    continue
             command = [
                 sys.executable,
                 str(ROOT / "scripts/qualification_sbc.py"),

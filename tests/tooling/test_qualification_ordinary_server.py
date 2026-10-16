@@ -26,7 +26,10 @@ def _run(principals: int, concurrency: int, p95: int) -> dict[str, Any]:
     return {
         "status": "pass",
         "schema_version": "runtime-q008.v2",
-        "candidate": {"sha256": "a" * 64},
+        "candidate": {
+            "sha256": "a" * 64,
+            "repository_commit_sha": "c" * 40,
+        },
         "environment": {
             "target_class": "ordinary-server",
             "qualification_database_storage": {
@@ -96,7 +99,10 @@ def test_m002_raw_to_summary_requires_three_durable_p99_runs(tmp_path: Path) -> 
         "schema_version": SCHEMA_VERSION,
         "status": "complete",
         "plan": "on-prem-concurrency-performance M002",
-        "candidate": {"sha256": "a" * 64},
+        "candidate": {
+            "sha256": "a" * 64,
+            "repository_commit_sha": "c" * 40,
+        },
         "lifecycle_artifact": "lifecycle.json",
         "target": {"architecture": "x86_64"},
         "workload": {"requests_per_condition": REQUESTS_PER_CELL},
