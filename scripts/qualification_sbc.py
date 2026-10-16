@@ -2877,10 +2877,11 @@ def _configure_benchmark_principals(
             ) from error
 
     if budget_mode in {"user", "user-global"}:
-        # Keep the hard ceiling above the measured workload and Q008's bounded
-        # post-batch restart/recovery checks so those checks do not invalidate
-        # an otherwise complete budget-mode run.
-        max_requests = str(request_count + 100)
+        # Q008 runs functional smoke, sequential surface samples, the concurrent
+        # batch, and post-recovery requests. Keep the hard ceiling above those
+        # bounded checks so a successful benchmark does not accidentally turn
+        # its settlement verification into a budget-denial test.
+        max_requests = str(request_count * 3 + 100)
         for username in ["sbc-admin"] + [
             f"sbc-member-{index:02d}" for index in range(1, principal_count)
         ]:
@@ -2929,7 +2930,7 @@ def _configure_benchmark_principals(
                     "--window",
                     "day",
                     "--max-requests",
-                    str(request_count + 100),
+                    str(request_count * 3 + 100),
                     "--enforcement",
                     "hard",
                     "--actor",
