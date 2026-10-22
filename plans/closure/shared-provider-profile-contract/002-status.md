@@ -69,7 +69,7 @@ demonstrated failing on an injected delta rather than only asserted to pass.
 | The refresh path is manual, atomic, prints its delta, and is not in CI | `scripts/refresh_opencode_go_catalog_snapshot.py`; `.github/workflows/ci.yml` unchanged | pass | Temp file + one rename; the CI job does not invoke it |
 | The crate's dependency list and sans-I/O property are unchanged | `rust/crates/eggpool-provider-profile/tests/boundary.rs` | pass | Still exactly `eggpool-wire`, `serde`, `thiserror`, `toml` |
 | No credential, prompt, raw body, or cache key in any artifact | the asset, the fixture, the snapshot, this record | pass | The snapshot carries model ids and a date only; the refresh reads the public catalog without a credential |
-| Focused and workspace qualification pass, `--no-default-features` parity preserved | §4 | pass | Local; CI is the same command set |
+| Focused and workspace qualification pass, `--no-default-features` parity preserved | §4 | pass | Local, and independently confirmed by hosted CI run `39794341650` (job `check`, conclusion `success`) against the merged `main` tip `22ddb0ae` |
 | Closure records an immutable downstream revision | this record's header | pass | `ffac612` |
 
 ## 3. Production implementation evidence
@@ -187,10 +187,20 @@ git diff --check
 
 ### Results
 
-All commands above are **local** runs on the review workstation. Hosted CI was
-not executed for this milestone; the CI job runs the same command set, so the
-local results are a faithful proxy for it and are labelled as local rather than
-as CI evidence.
+All commands above are **local** runs on the review workstation. The hosted CI
+job runs the same command set, so the local results are a faithful proxy for
+it, and they are labelled as local rather than as CI evidence.
+
+Hosted CI was subsequently executed against the merged `main` tip and passed.
+This is a factual correction added after the merge, not a rewrite of the
+record: run `39794341650` against `22ddb0ae`, job `check`, conclusion
+`success` — <https://github.com/eggstack/eggpool/actions/runs/39794341650>.
+All fourteen steps are green, including `cargo fmt --check`, both
+`cargo clippy -D warnings` feature graphs, `cargo check --no-default-features`,
+`cargo test --workspace --all-targets -- --test-threads=1`, `uv sync --frozen`,
+`ruff format --check`, `ruff check`, `pyright`, and
+`pytest tests/tooling/`. The local table below and the CI run are therefore
+independent executions of the same gates.
 
 | Command | Result |
 |---|---|
