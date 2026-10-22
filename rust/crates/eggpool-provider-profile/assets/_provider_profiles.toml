@@ -68,20 +68,32 @@ probe_protocol = "openai"
 require_models = true
 # The Go model catalog is public: `GET https://opencode.ai/zen/go/v1/models`
 # answered 200 with an ordinary OpenAI-shaped model list when read without any
-# credential (observed 2026-10-07). That proves model availability, never that
-# a Go credential is accepted, so this provider's credential stays unverified
-# until real inference demonstrates it.
+# credential (observed 2026-10-07, re-observed 2026-10-22). That proves model
+# availability, never that a Go credential is accepted, so this provider's
+# credential stays unverified until real inference demonstrates it.
 models_require_authentication = false
 
 # Exact model-to-wire hints from the first-party Go endpoint table
-# (https://opencode.ai/docs/go, reviewed 2026-10-07). Each entry names the
-# documented endpoint for that exact model id; there are no wildcard or
+# (https://opencode.ai/docs/go, re-reviewed 2026-10-22). Each entry names the
+# documented endpoint family for that exact model id; there are no wildcard or
 # model-family guesses, and an id absent from this table stays unresolved.
+#
+# The 2026-10-22 review covers the 29 rows the current table places. A row the
+# current table no longer places keeps the hint it was given on 2026-10-07: a
+# placement that is not restated is not a retraction, and a stale hint costs a
+# consumer nothing. The reviewed record, its per-row provenance, and the live
+# catalog snapshot it is checked against live with the crate's OpenCode Go
+# fixture.
 #
 # All hints are non-fixed on purpose: upstream may move a model between
 # endpoint families, and a runtime must keep its ability to learn or recover
 # from that. `fixed = true` requires first-party evidence *plus* a runtime
 # guarantee that no negotiation should be attempted.
+#
+# The endpoint named under each group is this profile's composed dispatch URL.
+# The first-party table publishes per-family endpoints under
+# `https://opencode.ai/inference/go/{openai,anthropic,google}/v1/...`; both
+# families are live, and the surface mapping below is what that table places.
 #
 # Responses: https://opencode.ai/zen/go/v1/responses
 [providers.opencode-go.model_wire."grok-4.7"]
@@ -185,7 +197,27 @@ fixed = false
 preferred_surface = "openai_chat_completions"
 fixed = false
 
+# Placed by the 2026-10-22 first-party table; absent from the 2026-10-07 review.
+[providers.opencode-go.model_wire."minimax-m3.1-flash-free"]
+preferred_surface = "openai_chat_completions"
+fixed = false
+
+# Placed by the 2026-10-22 first-party table; absent from the 2026-10-07 review.
+[providers.opencode-go.model_wire."step-5-preview"]
+preferred_surface = "openai_chat_completions"
+fixed = false
+
+# Placed by the 2026-10-22 first-party table; absent from the 2026-10-07 review.
+[providers.opencode-go.model_wire."beam-free"]
+preferred_surface = "openai_chat_completions"
+fixed = false
+
 # Anthropic Messages: https://opencode.ai/zen/go/v1/messages
+# Placed by the 2026-10-22 first-party table; absent from the 2026-10-07 review.
+[providers.opencode-go.model_wire."claude-haiku-5-5"]
+preferred_surface = "anthropic_messages"
+fixed = false
+
 [providers.opencode-go.model_wire."minimax-m3"]
 preferred_surface = "anthropic_messages"
 fixed = false

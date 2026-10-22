@@ -151,11 +151,19 @@ fn bundled_model_wire_hints_resolve_as_advisory_preferences() {
     // hints. They must rank first without pinning the runtime to a single
     // surface, so upstream changes remain recoverable.
     let hints = eggpool::provider_profile::bundled_model_wire_hints();
-    assert_eq!(hints.len(), 30, "every reviewed hint is published");
+    assert_eq!(hints.len(), 34, "every reviewed hint is published");
     for (id, surface) in [
         ("gpt-6-luna", WireSurface::OpenaiResponses),
         ("glm-5.3-flash", WireSurface::OpenaiChatCompletions),
         ("minimax-m3", WireSurface::AnthropicMessages),
+        // The placements the 2026-10-22 first-party table added.
+        ("beam-free", WireSurface::OpenaiChatCompletions),
+        (
+            "minimax-m3.1-flash-free",
+            WireSurface::OpenaiChatCompletions,
+        ),
+        ("step-5-preview", WireSurface::OpenaiChatCompletions),
+        ("claude-haiku-5-5", WireSurface::AnthropicMessages),
     ] {
         assert_eq!(
             hints

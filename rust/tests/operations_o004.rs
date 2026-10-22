@@ -730,7 +730,7 @@ mod shared_profile_parity {
             .expect("OpenCode Go is bundled");
         assert_eq!(
             provider.model_wire.len(),
-            30,
+            34,
             "every reviewed OpenCode Go model carries an exact hint"
         );
         for (model, preference) in &provider.model_wire {

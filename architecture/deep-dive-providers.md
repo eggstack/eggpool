@@ -51,7 +51,13 @@ shared-contract extraction re-reviewed the same data against the crate's
 strict parser and added exact OpenCode Go model-to-wire hints transcribed from
 the first-party Go endpoint table; `operations_o004` proves the extraction
 projects every bundled profile onto an identical runtime provider
-configuration.
+configuration. The 2026-10-22 review (M002) re-read that table, added the four
+placements it had gained, and left the endpoint URL metadata untouched: the
+table publishes per-family URLs under
+`https://opencode.ai/inference/go/{openai,anthropic,google}/v1/...` while the
+profile keeps `https://opencode.ai/zen/go/v1`, and both families answered
+live on that date. The model-to-surface-family mapping is the only thing that
+review changed.
 
 ### Model-to-wire hints
 
@@ -62,9 +68,39 @@ fallbacks; `fixed = true` would pin the surface and is reserved for
 first-party evidence plus a runtime guarantee that no negotiation should be
 attempted. Lookup is exact — no prefix or model-family guessing — so an id
 absent from the reviewed table stays unresolved instead of defaulting to Chat
-Completions. OpenCode Go's hints cover the 30 model ids in the first-party Go
-endpoint table (reviewed 2026-10-07); a sibling integration's product catalog is
-not evidence for a wire contract.
+Completions. OpenCode Go's hints cover the 28 model ids the first-party Go
+endpoint table places on a surface the contract models (reviewed 2026-10-22),
+plus 6 placements carried forward from the 2026-10-07 review; a sibling
+integration's product catalog is not evidence for a wire contract.
+
+Three rules keep the map honest as upstream moves:
+
+- **An unplaced catalog model is unresolved.** A catalog entry proves a model
+  exists; it does not say which endpoint family serves it. `glm-5.1`,
+  `minimax-m2.5`, `omen-alpha`, `qwen3.6-plus` and `qwen3.7-max` are in the
+  live catalog and in no first-party placement, so they carry no hint.
+  `minimax-m2.5` does not inherit `minimax-m3`'s family.
+- **A withdrawn model keeps its hint.** A missing hint and a stale hint are
+  not symmetric. A hint for a model the provider no longer serves documents
+  how to talk to a model that may return and costs a consumer nothing; a
+  missing hint for a model the provider does serve is what breaks a consumer.
+  `deepseek-v4-flash`, `deepseek-v4-flash-vision-exp`, `space-bunny` and
+  `longcat-2.5-preview-free` are absent from the live catalog, and their hints
+  stay.
+- **A surface the contract does not model stays unresolved.**
+  `gemini-4-argon-contributor` is placed by the current table on a Google
+  Generative AI endpoint. Answering it would mean adding a surface to
+  `eggpool-wire`'s vocabulary and a codec with it — a contract change, not a
+  metadata change — and mapping it onto an OpenAI-compatible surface would be
+  a wrong hint. It carries no hint until that decision is made.
+
+The reviewed record, its per-row provenance, and a dated snapshot of the live
+catalog live in the provider-profile crate's OpenCode Go fixture. A drift
+guard compares the wire map, that record, and the snapshot, and fails closed
+on an unexplained delta in either direction; a missing or malformed snapshot
+fails the guard rather than passing an empty set. The snapshot is rewritten by
+a manual step that prints the delta it would introduce before a human commits
+it. That refresh is never invoked by CI, and the crate stays sans-I/O.
 
 ### Discovery is not credential proof
 
@@ -75,7 +111,8 @@ A reachable catalog — public endpoint, bundled static list, or `/models`
 answering `200` to anyone — never verifies a credential. OpenCode Go's catalog
 is recorded as public (`models_require_authentication = false`, observed by
 reading `https://opencode.ai/zen/go/v1/models` without a credential on
-2026-10-07), so its credential stays `Unverified` until real inference
+2026-10-07 and re-observed on 2026-10-22), so its credential stays
+`Unverified` until real inference
 demonstrates acceptance. Credentialed profiles with no first-party evidence for
 an authenticated metadata endpoint stay `DeferredUntilInference`; no bundled
 profile guesses its way out of that state.

@@ -12,7 +12,7 @@
       "path": "providers/_templates.toml",
       "category": "provider-templates",
       "source": "rust/crates/eggpool-provider-profile/assets/_provider_profiles.toml",
-      "sha256": "09eb9e3bdd8a986975e84c7371a296ba3d4f2fe6f7f42f08d1c8e4a9efc6602c",
+      "sha256": "d23ce2fbaa42784edd5485488e816a20d09090efb109b2d7ea4238a5af002348",
       "identity": "exact"
     },
     {
