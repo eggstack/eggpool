@@ -1,8 +1,8 @@
 # Shared Provider Profile Contract Roadmap
 
-Status: closed
+Status: active
 
-Repository baseline reviewed: `b73eea6bc4ecdb6ce6b8974769b7821cf5e7e036`
+Repository baseline reviewed: `e48f021e` (M002 baseline; M001 baseline was `b73eea6bc4ecdb6ce6b8974769b7821cf5e7e036`)
 
 Long-term references:
 
@@ -68,6 +68,18 @@ At the baseline:
 - `eggpool-wire` intentionally excludes credentials, catalogs, provider clients, and routing.
 - CodeGG already pins `eggpool-wire` and `eggpool-model-routing`, but still maintains overlapping provider setup metadata locally.
 
+M002 opened this roadmap again. The M001 reviewed table is a hand-transcribed
+snapshot of a first-party page that changes, and by 2026-10-22 it had drifted:
+the current first-party endpoint table places four models the canonical wire
+map does not hint — `beam-free`, `minimax-m3.1-flash-free`, `step-5-preview`
+and `claude-haiku-5-5` — and the live catalog confirms the first two are
+served. A consumer that selects either free route therefore fails closed at
+`wire_unresolved`. The same review found one placed model
+(`gemini-4-argon-contributor`) on a Google Generative AI surface the contract
+does not model, and five catalog ids with no first-party placement at all.
+Nothing detected the drift automatically: the reviewed table and the wire map
+were checked against **each other**, not against the thing both transcribe.
+
 ## 6. Target architecture
 
 ```text
@@ -128,6 +140,34 @@ Exit conditions:
 - focused profile/config/wire-resolver tests plus default/no-default workspace qualification pass;
 - closure records an immutable downstream revision.
 
+### Milestone 002 — OpenCode Go wire hints for the current endpoint table
+
+Status: ready.
+
+Primary class: infrastructure.
+
+Implementation plan:
+
+- `plans/implementation/shared-provider-profile-contract/002-opencode-go-current-endpoint-wire-hints.md`
+
+Dependencies:
+
+- hard: M001 closed — satisfied;
+- interface: the `model_wire` table shape and the `eggpool-wire` surface vocabulary — stable and unchanged by this milestone;
+- operational: the first-party endpoint table and the public model catalog must be readable at implementation time; neither needs a credential.
+
+Objective: bring the shared OpenCode Go model-wire map back into agreement with the current first-party endpoint table so a consumer can resolve a model the provider actually serves — specifically `beam-free` and `minimax-m3.1-flash-free`, which are served and placed but unhinted — and make the drift between the reviewed table, the wire map and the live catalog visible and guarded instead of silently accumulating.
+
+Exit conditions:
+
+- the four placed-but-unhinted models resolve, each with a `fixed = false` hint on its reviewed surface;
+- a placed model whose surface family the contract cannot express (`gemini-4-argon-contributor`) and the catalog ids with no first-party placement stay **unresolved**, asserted as such;
+- every entry the current table no longer places has an explicit recorded disposition with a reason, and a stale hint is not deleted merely to make a set comparison tidy;
+- a drift guard compares the wire map, the reviewed record and a dated catalog snapshot, and fails on an unexplained delta in either direction — demonstrated failing on an injected delta;
+- the refresh path is manual, atomic and never wired into CI; the shared crate keeps its exact dependency list and sans-I/O property;
+- no credential, prompt, raw response body, or cache key enters any artifact;
+- focused and workspace qualification pass with `--no-default-features` parity preserved, and the closure records an immutable downstream revision.
+
 ## 8. Cross-cutting requirements
 
 Security: auth profiles describe header names/schemes only; no secret values or credential references. Debug/serialization fixtures must not make it possible to smuggle secrets into profile metadata.
@@ -142,10 +182,18 @@ Documentation: architecture/provider/catalog docs must identify the shared crate
 
 ## 9. Completion definition
 
-This roadmap closes when M001 has an accepted closure record, EggPool consumes the shared profile contract without a second live metadata copy, the OpenCode Go profile contains reviewed non-fixed model-wire hints, and an immutable revision is available to CodeGG.
+This roadmap closes when M001 and M002 have accepted closure records, EggPool consumes the shared profile contract without a second live metadata copy, the OpenCode Go profile contains reviewed non-fixed model-wire hints that agree with the current first-party endpoint table, the drift between that reviewed record, the wire map and the live catalog is **guarded** rather than silent, and an immutable revision is available to CodeGG.
+
+M002 re-opened a closed roadmap on evidence, not on preference. The contract
+itself did not change and does not need to; what changed is that the reviewed
+record had drifted away from the thing it transcribes, and a downstream
+consumer was failing closed on two routes the provider serves. A successor
+milestone under a terminal roadmap is the correct shape for that; reopening the
+roadmap's **invariants** would not have been.
 
 ## 10. Milestone status
 
 | Milestone | Status | Implementation plan | Closure record | Blockers |
 |---|---|---|---|---|
-| M001 neutral provider-profile contract and OpenCode Go surface hints | closed | `plans/implementation/shared-provider-profile-contract/001-neutral-provider-profile-contract-and-opencode-wire-hints.md` | `plans/closure/shared-provider-profile-contract/001-status.md` (implementation `9ac6a131`) | none — roadmap terminal; no successor registered |
+| M001 neutral provider-profile contract and OpenCode Go surface hints | closed | `plans/implementation/shared-provider-profile-contract/001-neutral-provider-profile-contract-and-opencode-wire-hints.md` | `plans/closure/shared-provider-profile-contract/001-status.md` (implementation `9ac6a131`) | none |
+| M002 OpenCode Go wire hints for the current endpoint table | ready | `plans/implementation/shared-provider-profile-contract/002-opencode-go-current-endpoint-wire-hints.md` | — | none. Needs a readable first-party endpoint table and the public catalog at implementation time; neither requires a credential. Downstream CodeGG consumption is pinned to the M002 closure revision |
