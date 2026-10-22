@@ -1,8 +1,10 @@
 # Shared Provider Profile Contract Roadmap
 
-Status: active
+Status: closed
 
 Repository baseline reviewed: `e48f021e` (M002 baseline; M001 baseline was `b73eea6bc4ecdb6ce6b8974769b7821cf5e7e036`)
+
+Closure: `plans/closure/shared-provider-profile-contract/001-status.md` (M001, implementation `9ac6a131`) and `plans/closure/shared-provider-profile-contract/002-status.md` (M002, implementation `ffac612`).
 
 Long-term references:
 
@@ -35,7 +37,12 @@ A CodeGG `/connect` and OpenCode Go review exposed two forms of drift that a sha
 - model discovery and credential verification were conflated even though an endpoint can be public or a local model list can be static;
 - OpenCode Go exposes OpenAI Chat Completions, OpenAI Responses, and Anthropic Messages under one provider, with surface-specific authentication, while CodeGG currently models the provider as one OpenAI-compatible Chat transport.
 
-Current first-party OpenCode Go documentation reviewed 2026-10-07 lists model-specific endpoint families and states that `/zen/go/v1/models` returns the available model list. A direct read of that endpoint returns ordinary OpenAI-style model rows without a wire-surface field, so model-to-wire hints cannot safely be inferred from that catalog alone.
+Current first-party OpenCode Go documentation lists model-specific endpoint
+families and states that the models endpoint returns the available model list.
+The 2026-10-07 review read that page's "Endpoints" section; the 2026-10-22
+review re-read it and found the table had moved. A direct read of the models
+endpoint returns ordinary OpenAI-style model rows without a wire-surface field,
+so model-to-wire hints cannot safely be inferred from that catalog alone.
 
 ## 3. Invariants
 
@@ -142,7 +149,7 @@ Exit conditions:
 
 ### Milestone 002 — OpenCode Go wire hints for the current endpoint table
 
-Status: ready.
+Status: implemented (closed).
 
 Primary class: infrastructure.
 
@@ -196,4 +203,4 @@ roadmap's **invariants** would not have been.
 | Milestone | Status | Implementation plan | Closure record | Blockers |
 |---|---|---|---|---|
 | M001 neutral provider-profile contract and OpenCode Go surface hints | closed | `plans/implementation/shared-provider-profile-contract/001-neutral-provider-profile-contract-and-opencode-wire-hints.md` | `plans/closure/shared-provider-profile-contract/001-status.md` (implementation `9ac6a131`) | none |
-| M002 OpenCode Go wire hints for the current endpoint table | ready | `plans/implementation/shared-provider-profile-contract/002-opencode-go-current-endpoint-wire-hints.md` | — | none. Needs a readable first-party endpoint table and the public catalog at implementation time; neither requires a credential. Downstream CodeGG consumption is pinned to the M002 closure revision |
+| M002 OpenCode Go wire hints for the current endpoint table | closed | `plans/implementation/shared-provider-profile-contract/002-opencode-go-current-endpoint-wire-hints.md` | `plans/closure/shared-provider-profile-contract/002-status.md` (implementation `ffac612`) | none. The four placed-but-unhinted models resolve on their reviewed surfaces; `gemini-4-argon-contributor` and the five unplaced catalog ids stay unresolved; the six entries the current table no longer places keep their hints with a recorded disposition; the drift guard passes on the committed artifacts and is demonstrated failing on an injected delta. Downstream CodeGG consumption is pinned to the M002 closure revision |

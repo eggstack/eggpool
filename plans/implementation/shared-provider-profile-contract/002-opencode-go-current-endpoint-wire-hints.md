@@ -1,7 +1,10 @@
 # Shared Provider Profile Contract Milestone 002 — OpenCode Go Wire Hints for the Current Endpoint Table
 
-Status: ready
+Status: implemented
+
 Repository baseline: `origin/main@e48f021e` (2026-10-22; inspect latest at handoff).
+
+Closure record: `plans/closure/shared-provider-profile-contract/002-status.md` (implementation `ffac612`)
 
 Source roadmap:
 
