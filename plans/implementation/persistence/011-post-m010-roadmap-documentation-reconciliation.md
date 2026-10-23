@@ -1,6 +1,6 @@
 # Persistence Milestone 011 — Post-M010 Roadmap and Documentation Reconciliation
 
-Status: ready
+Status: implemented
 
 Repository baseline: `9c1d86bc17a2a91b2ed8441bf23bd3e80b6603ed`
 

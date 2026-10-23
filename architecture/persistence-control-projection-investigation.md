@@ -2,7 +2,7 @@
 
 Status: investigation complete; split rejected for current history/availability contract
 
-This is a bounded architecture record, not a runtime design decision. Production remains the schema-54 monolithic SQLite database on the single `Database` connection/gate/worker with WAL/NORMAL. M007 and M008 physical qualification evidence remains in their immutable closure records. This investigation found a real potential reduction in foreground index fanout, but no bounded, lossless backlog and backup contract compatible with current request-history visibility and continued admission through arbitrarily long analytics outages. No split-storage ADR is proposed.
+This is a bounded architecture record, not a runtime design decision. Production remains the monolithic SQLite database on the single `Database` connection/gate/worker with WAL/NORMAL. M007 and M008 physical qualification evidence remains in their immutable closure records. This investigation found a real potential reduction in foreground index fanout, but no bounded, lossless backlog and backup contract compatible with current request-history visibility and continued admission through arbitrarily long analytics outages. No split-storage ADR is proposed.
 
 ## 1. Evidence and authority
 

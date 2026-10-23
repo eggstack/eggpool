@@ -2,7 +2,7 @@
 
 Back to [Architecture](README.md). See also [overview.md §9](overview.md), [Runtime](deep-dive-runtime.md), and [Background](deep-dive-background.md).
 
-The completed control/projection storage investigation, including the schema-54 ownership census and the test-only transaction-shape result, is recorded in [Persistence M010](persistence-control-projection-investigation.md). It rejects a production split under the current history and bounded-outage contract; WAL/NORMAL remains the production configuration.
+The completed control/projection storage investigation, including the schema-54 ownership census (the schema current when the investigation ran) and the test-only transaction-shape result, is recorded in [Persistence M010](persistence-control-projection-investigation.md). It rejects a production split under the current history and bounded-outage contract; WAL/NORMAL remains the production configuration.
 
 ## Ownership
 
