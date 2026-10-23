@@ -438,19 +438,23 @@ impl ServerRuntime {
         let (server_result, shutdown_deadline) = tokio::select! {
             result = completion.wait() => {
                 handle.request_shutdown(ShutdownReason::ServerCompleted);
-                let deadline = tokio::time::Instant::now() + self.shutdown_timeout;
+                let deadline = process::checked_deadline(self.shutdown_timeout);
                 let terminal = result.map_err(|error| ServerError::EggServe(Box::new(error)))
                     .and_then(|_| Err(ServerError::EggServe(Box::new(std::io::Error::other("HTTP runtime completed unexpectedly")))));
                 (terminal, deadline)
             }
             _ = handle.wait_for_quiesce() => {
-                let deadline = tokio::time::Instant::now() + self.shutdown_timeout;
+                let deadline = process::checked_deadline(self.shutdown_timeout);
                 control.shutdown();
                 (completion.wait().await.map_err(|error| ServerError::EggServe(Box::new(error))), deadline)
             }
         };
         signal_task.abort();
         let _ = signal_task.await;
+
+        // A shutdown deadline that is not representable fails closed through
+        // the existing process failure category instead of panicking.
+        let shutdown_deadline = shutdown_deadline?;
 
         if self.phase() == ShutdownPhase::Running {
             handle.request_shutdown(ShutdownReason::ServerCompleted);

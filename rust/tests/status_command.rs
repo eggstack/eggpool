@@ -811,3 +811,162 @@ async fn integration_profile_does_not_inherit_dashboard_public_exemption() {
     assert_eq!(unauthorized.status(), 401);
     database.close().await.expect("database closes");
 }
+
+/// The human-readable status wording is an operator-facing contract: the
+/// milestone that replaced the hand-written offline fallback must not have
+/// changed a single label the operator reads.
+#[tokio::test]
+async fn status_cli_human_output_labels_are_unchanged() {
+    let directory = tempdir().expect("temporary directory");
+    let runtime_dir = directory.path().join("runtime");
+    std::fs::create_dir(&runtime_dir).expect("runtime directory");
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        std::fs::set_permissions(&runtime_dir, std::fs::Permissions::from_mode(0o700))
+            .expect("private runtime directory");
+    }
+    let config_path = directory.path().join("config.toml");
+    std::fs::write(
+        &config_path,
+        "[server]\nhost = \"0.0.0.0\"\nport = 11300\n\n[database]\npath = \":memory:\"\n\n\
+[providers.alpha]\nid = \"alpha\"\nbase_url = \"https://alpha.example.invalid/v1\"\nprotocols = [\"openai\"]\n\n\
+[[providers.alpha.accounts]]\nname = \"alpha-a1\"\napi_key = \"human-output-secret-sentinel\"\n\n\
+[providers.beta]\nid = \"beta\"\nbase_url = \"https://beta.example.invalid/v1\"\nprotocols = [\"openai\"]\n\n\
+[[providers.beta.accounts]]\nname = \"beta-a1\"\napi_key = \"human-output-secret-sentinel\"\nenabled = false\n",
+    )
+    .expect("config writes");
+    let socket = runtime_dir.join("eggpool.sock");
+    let control = start(&socket, |request| async move {
+        let payload = serde_json::json!({
+            "schema_version": 1,
+            "observed_at": "2026-10-22T12:00:00Z",
+            "proxy": {
+                "status": "ready",
+                "ready": true,
+                "available": true,
+                "version": "0.8.2-test",
+                "base_url": "http://127.0.0.1:11300",
+                "uptime_seconds": 12.5,
+                "model_count": 2,
+                "routable_accounts": 1,
+                "enabled_accounts": 1,
+                "reason_code": null
+            },
+            "providers": [
+                {
+                    "provider_id": "minimax",
+                    "status": "ready",
+                    "enabled_accounts": 1,
+                    "total_accounts": 1,
+                    "routable_accounts": 1,
+                    "backoff_accounts": 0,
+                    "unavailable_accounts": 0,
+                    "model_count": 2,
+                    "last_probe_age_seconds": 12,
+                    "last_probe_latency_ms": 84,
+                    "last_probe_status_code": 200,
+                    "last_observation": "verified",
+                    "reason_code": null
+                }
+            ],
+            "runtime": {
+                "generation": 7,
+                "digest_prefix": "abc123",
+                "reload": "idle",
+                "tasks": "2/3",
+                "db": "ok",
+                "retiring": 0
+            }
+        });
+        ControlResponse::with_payload(request.request_id, payload)
+    })
+    .await
+    .expect("private control listener");
+
+    // Online rendering: the server projection reaches the operator unchanged.
+    let output = TokioCommand::new(env!("CARGO_BIN_EXE_eggpool"))
+        .args(["status"])
+        .env("EGGPOOL_CONFIG", &config_path)
+        .env("EGGPOOL_RUNTIME_DIR", &runtime_dir)
+        .output()
+        .await
+        .expect("status CLI executes");
+    assert!(
+        output.status.success(),
+        "{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    assert!(
+        stdout.contains(
+            "EggPool 0.8.2-test  ready  http://127.0.0.1:11300  uptime=12s  models=2  accounts=1/1"
+        ),
+        "{stdout}"
+    );
+    assert!(
+        stdout.contains("minimax  ready  accounts=1/1  models=2  probe=84ms  age=12s"),
+        "{stdout}"
+    );
+    assert!(
+        stdout.contains("Runtime: generation=7 reload=idle tasks=2/3 db=ok retiring=0"),
+        "{stdout}"
+    );
+
+    control.close().await.expect("control socket closes");
+
+    // Offline rendering: the unreachable-server fallback keeps its own labels.
+    let output = TokioCommand::new(env!("CARGO_BIN_EXE_eggpool"))
+        .args(["status"])
+        .env("EGGPOOL_CONFIG", &config_path)
+        .env("EGGPOOL_RUNTIME_DIR", &runtime_dir)
+        .output()
+        .await
+        .expect("status CLI executes");
+    assert_eq!(
+        output.status.code(),
+        Some(3),
+        "stderr: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    assert!(
+        stdout.contains(&format!(
+            "EggPool {}  unavailable  http://127.0.0.1:11300",
+            eggpool::version::PACKAGE_VERSION
+        )),
+        "{stdout}"
+    );
+    assert!(stdout.contains("alpha  unknown  accounts=?/1"), "{stdout}");
+    assert!(stdout.contains("beta  disabled  accounts=0/0"), "{stdout}");
+    assert!(!stdout.contains("human-output-secret-sentinel"), "{stdout}");
+}
+
+#[tokio::test]
+async fn a_non_finite_or_out_of_range_timeout_is_rejected_without_panicking() {
+    let directory = tempdir().expect("temporary directory");
+    let config_path = directory.path().join("config.toml");
+    std::fs::write(
+        &config_path,
+        "[server]\nhost = \"127.0.0.1\"\nport = 11300\n\n[database]\npath = \":memory:\"\n",
+    )
+    .expect("keyless config");
+
+    for timeout in ["NaN", "inf", "-inf", "1e300", "0", "-1"] {
+        let output = TokioCommand::new(env!("CARGO_BIN_EXE_eggpool"))
+            .args(["stop", &format!("--timeout={timeout}")])
+            .env("EGGPOOL_CONFIG", &config_path)
+            .env("EGGPOOL_RUNTIME_DIR", directory.path().join("runtime"))
+            .output()
+            .await
+            .expect("stop CLI executes");
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        assert_eq!(
+            output.status.code(),
+            Some(1),
+            "timeout {timeout} must be rejected through the validation path: {stderr}"
+        );
+        assert!(stderr.contains("timeout"), "{stderr}");
+        assert!(!stderr.contains("panicked"), "{stderr}");
+    }
+}

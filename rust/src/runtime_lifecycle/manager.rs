@@ -284,8 +284,11 @@ impl RuntimeManager {
             }
         }
 
-        let deadline = tokio::time::Instant::now() + timeout;
-        let mut forced = initially_forced;
+        // A shutdown deadline that is not representable fails closed into the
+        // forced path instead of panicking on the instant arithmetic.
+        let deadline_result = crate::operations::process::checked_deadline(timeout);
+        let mut forced = initially_forced || deadline_result.is_err();
+        let deadline = deadline_result.unwrap_or_else(|_| tokio::time::Instant::now());
         let mut active_leases_at_deadline: usize = 0;
         let mut terminal_references_at_deadline: usize = 0;
         for slot in &slots {

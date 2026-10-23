@@ -22,6 +22,16 @@ Back to [Architecture](README.md). See also [overview.md §§2,10](overview.md),
 
 Inference handlers (`rust/src/server/inference.rs:119-154`) make exactly one `coordinator::endpoints::execute_endpoint` call per request (`rust/src/coordinator/endpoints.rs:777`); `execute_finite` (`endpoints.rs:750`) and `execute_stream` (`endpoints.rs:929`) are thin wrappers over it, and `/v1/responses/compact` uses the finite-only `execute_compact_finite` (`endpoints.rs:865`).
 
+## Local process lifecycle safety
+
+`rust/src/operations/process.rs` owns the local process primitives, including the rules below. `rust/src/operations/lifecycle.rs` composes them into the start/stop/restart/watchdog workflows; `rust/src/runtime.rs` maps them onto CLI exit categories.
+
+**Lock ownership.** The watchdog start guard (`<state>/eggpool.ensure-running.lock`) is published with an exclusive create-new, so only one start enters the guarded section. The file may be removed only when it was read successfully and either names an owner that is confirmed absent or names no owner at all. An unreadable file and a file whose contents do not parse yield an *undeterminable* owner: they are reported as `ProcessError::LockHeld` and the file is left in place, never treated as stale. An **empty** file is a separate case: a publisher creates the file before it writes its owner into it, so an empty file names no owner and is a publication that never completed. An empty file is therefore reclaimable, and the reclaim is closed against both races — the reclaiming process re-reads the file after moving it aside and restores it if a publisher named an owner in the meantime, and the publishing process confirms that the path still names its own file after it writes and reports `ProcessError::LockHeld` rather than claiming ownership if it does not. The removal of a stale owner is closed against the time-of-check-to-time-of-use window the same way: the stale file is moved aside with an atomic rename, its file identity is re-verified against the identity observed at read time, and only that verified file is deleted. A lock published by another process after the ownership check is therefore moved back to its original name and the acquisition fails with a held lock. A lock that vanishes between the observation and the removal is free, not held. The genuine stale case still recovers, and the start path never blocks.
+
+**Checked deadlines.** `operations::process::checked_deadline(Duration) -> Result<Instant, ProcessError>` is the single deadline helper owned by the local process lifecycle. `Instant::now() + duration` panics when the result is not representable, so every local-lifecycle deadline is computed through the helper and each caller converts `ProcessError::Deadline` into its own existing failure category: `LifecycleError::Process` for the watchdog start confirmation, `ServerError::Process` for the server shutdown deadline, the forced flag for `RuntimeManager::close_for_shutdown`, and the timed-out flag for `RuntimeTaskSupervisor::shutdown_with_timeout`. `rust/src/server/mod.rs` and `rust/src/runtime_lifecycle/manager.rs` consume the helper as a stable contract; they do not own it.
+
+**Non-finite seconds.** The floating-point seconds conversions in `rust/src/runtime.rs` reject non-finite and out-of-range values instead of coercing them. `lifecycle_timeout` rejects a non-finite, non-positive, or out-of-range timeout through the existing validation exit path, and the status duration renderers reject a non-finite or out-of-range seconds value through the existing unknown-value rendering, so a `NaN` never reads as a zero delay and an infinite value never saturates to the `u64` maximum.
+
 ## Runtime generations
 
 `rust/src/runtime_lifecycle/` splits by ownership, re-exported from `mod.rs` so callers never depend on file layout:
@@ -56,11 +66,15 @@ Startup reconciliation is a one-shot bounded repair (`rust/src/runtime_lifecycle
 - At most 4 retiring generations; failed closes stay resident for diagnosis (process exit may force them).
 - Process-owned state is bounded, in memory, and secret-free (no credentials, prompts, raw bodies, cache keys).
 - All transitions fail closed; startup repair is the process-death safety net.
+- The watchdog start guard is removed only for an owner that was read, parsed, and confirmed absent; an undeterminable lock is held and left in place, and a lock published during the stale decision is never deleted.
+- Local lifecycle deadlines are computed through the checked-deadline helper; an unrepresentable interval fails closed through the caller's existing failure category and never panics.
 
 ## Verification
 
 ```bash
+cargo test --manifest-path rust/Cargo.toml --test process_lock_ownership -- --test-threads=1
 cargo test --manifest-path rust/Cargo.toml --test runtime_lifecycle_r002 -- --test-threads=1
+cargo test --manifest-path rust/Cargo.toml --test runtime_lifecycle_r009 -- --test-threads=1
 cargo test --manifest-path rust/Cargo.toml --test server_transport -- --test-threads=1
 cargo test --manifest-path rust/Cargo.toml --test coordinator_publication -- --test-threads=1
 ```

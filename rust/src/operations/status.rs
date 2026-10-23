@@ -10,6 +10,7 @@
 use std::collections::{BTreeMap, BTreeSet};
 
 use serde::{Deserialize, Serialize};
+use serde_json::{Map, Value};
 
 use crate::health::{AccountHealthSnapshot, BackoffReason};
 
@@ -162,6 +163,92 @@ pub struct ProxyStatusSnapshot {
     pub proxy: ProxyHealthSummary,
     pub providers: Vec<ProviderHealthSummary>,
     pub runtime: RuntimeHealthSummary,
+}
+
+/// Locally-known provider facts used to build the CLI's offline fallback.
+///
+/// The fallback never observes live health evidence: it only knows the
+/// configured account inventory. Every other provider fact stays explicitly
+/// unknown so the CLI cannot claim readiness it never observed.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct OfflineProviderFacts {
+    pub provider_id: String,
+    pub total_accounts: usize,
+    pub enabled_accounts: usize,
+}
+
+/// Build the CLI's offline status fallback from the published typed schema.
+///
+/// The fallback is the same `ProxyStatusSnapshot` the server publishes, so the
+/// two projections cannot drift: a field added to the typed schema reaches the
+/// CLI fallback through this constructor alone. Unavailable facts stay
+/// explicit — the proxy is `Unavailable`, provider health is unobserved, and
+/// runtime facts are unknown — and the provider collection keeps the server's
+/// deterministic ordering and cardinality bound.
+pub fn offline_snapshot(
+    providers: &[OfflineProviderFacts],
+    base_url: &str,
+    version: &str,
+) -> ProxyStatusSnapshot {
+    let mut rows: Vec<ProviderHealthSummary> = providers
+        .iter()
+        .map(|facts| {
+            let disabled = facts.enabled_accounts == 0;
+            ProviderHealthSummary {
+                provider_id: truncate_id(&facts.provider_id),
+                status: if disabled {
+                    ProviderStatus::Disabled
+                } else {
+                    ProviderStatus::Unknown
+                },
+                enabled_accounts: facts.enabled_accounts,
+                total_accounts: facts.total_accounts,
+                routable_accounts: 0,
+                backoff_accounts: 0,
+                unavailable_accounts: 0,
+                model_count: None,
+                last_probe_age_seconds: None,
+                last_probe_latency_ms: None,
+                last_probe_status_code: None,
+                last_observation: ProviderObservation::Never,
+                reason_code: Some(
+                    if disabled {
+                        "no_enabled_accounts"
+                    } else {
+                        "unobserved"
+                    }
+                    .to_owned(),
+                ),
+            }
+        })
+        .collect();
+    sort_providers(&mut rows);
+    let enabled_accounts = rows.iter().map(|row| row.enabled_accounts).sum();
+    ProxyStatusSnapshot {
+        schema_version: STATUS_SCHEMA_VERSION,
+        observed_at: observed_at_now(),
+        proxy: ProxyHealthSummary {
+            status: ProxyStatus::Unavailable,
+            ready: false,
+            available: false,
+            version: version.to_owned(),
+            base_url: base_url.to_owned(),
+            uptime_seconds: None,
+            model_count: 0,
+            routable_accounts: 0,
+            enabled_accounts,
+            reason_code: Some("server unreachable".to_owned()),
+        },
+        providers: rows,
+        runtime: RuntimeHealthSummary {
+            generation: None,
+            digest_prefix: String::new(),
+            reload: "unknown".to_owned(),
+            tasks: "unknown".to_owned(),
+            db: "unknown".to_owned(),
+            retiring: 0,
+        },
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -846,6 +933,292 @@ pub fn stale_after_secs(configured: u64) -> u64 {
     } else {
         configured
     }
+}
+
+/// Marker written in place of redacted secret-shaped material.
+pub const REDACTED_MARKER: &str = "[redacted]";
+
+/// Object member names whose values never belong in an operator projection.
+///
+/// The published status schema carries no such member. The list exists so an
+/// advisory field added by a later server generation cannot smuggle
+/// credentials, prompts, raw bodies, or cache keys into operator output.
+const SECRET_BEARING_KEYS: &[&str] = &[
+    "api_key",
+    "apikey",
+    "authorization",
+    "bearer",
+    "body",
+    "cache_key",
+    "client_key",
+    "client_secret",
+    "cookie",
+    "credential",
+    "credentials",
+    "id_token",
+    "passphrase",
+    "passwd",
+    "password",
+    "private_key",
+    "prompt",
+    "prompts",
+    "proxy_authorization",
+    "raw_body",
+    "refresh_token",
+    "request_body",
+    "response_body",
+    "secret",
+    "secret_key",
+    "session_id",
+    "set_cookie",
+    "token",
+    "x_api_key",
+];
+
+/// Member-name suffixes that mark a value as secret-bearing regardless of
+/// the prefix.
+const SECRET_BEARING_KEY_SUFFIXES: &[&str] = &[
+    "_api_key",
+    "_cache_key",
+    "_credential",
+    "_credentials",
+    "_passwd",
+    "_password",
+    "_private_key",
+    "_secret",
+    "_token",
+];
+
+/// Vendor-prefixed credential shapes with the minimum token length that has
+/// to follow the prefix.
+const SECRET_TOKEN_PREFIXES: &[(&str, usize)] = &[
+    ("sk-", 8),
+    ("sk_", 8),
+    ("ghp_", 16),
+    ("gho_", 16),
+    ("ghu_", 16),
+    ("ghs_", 16),
+    ("ghr_", 16),
+    ("github_pat_", 16),
+    ("xoxb-", 8),
+    ("xoxp-", 8),
+    ("xoxa-", 8),
+    ("xoxr-", 8),
+    ("xoxs-", 8),
+    ("AIza", 20),
+];
+
+/// Inline credential assignments such as `api_key=...` or `password: ...`.
+const SECRET_ASSIGNMENT_KEYS: &[&str] = &[
+    "api_key",
+    "api-key",
+    "apikey",
+    "access_token",
+    "authorization",
+    "client_secret",
+    "passwd",
+    "password",
+    "refresh_token",
+    "secret",
+    "token",
+];
+
+/// Report whether a projection member name is secret-bearing.
+///
+/// Published status fields are never secret-bearing, so the redaction
+/// projection can never blank a field the server publishes verbatim.
+pub fn is_secret_bearing_key(key: &str) -> bool {
+    let normalized = key.trim().to_ascii_lowercase().replace('-', "_");
+    if SECRET_BEARING_KEYS.contains(&normalized.as_str()) {
+        return true;
+    }
+    SECRET_BEARING_KEY_SUFFIXES
+        .iter()
+        .any(|suffix| normalized.ends_with(suffix))
+}
+
+/// Redact secret-shaped material from one operator status projection.
+///
+/// The server publishes a secret-free snapshot, so this projection is the
+/// CLI's second line of defense rather than the primary one: it removes
+/// secret-shaped material that a payload may still carry, and it never
+/// touches the published schema's own fields. Structure is preserved so the
+/// operator still sees the same projection shape, and the walk cannot panic
+/// on large or unusual values.
+pub fn redact_status_projection(value: &Value) -> Value {
+    match value {
+        Value::Object(members) => {
+            let mut redacted = Map::new();
+            for (key, member) in members {
+                if is_secret_bearing_key(key) {
+                    redacted.insert(key.clone(), Value::String(REDACTED_MARKER.to_owned()));
+                } else {
+                    redacted.insert(key.clone(), redact_status_projection(member));
+                }
+            }
+            Value::Object(redacted)
+        }
+        Value::Array(items) => Value::Array(
+            items
+                .iter()
+                .map(redact_status_projection)
+                .collect::<Vec<Value>>(),
+        ),
+        Value::String(text) => {
+            if contains_secret_material(text) {
+                Value::String(REDACTED_MARKER.to_owned())
+            } else {
+                value.clone()
+            }
+        }
+        other => other.clone(),
+    }
+}
+
+fn contains_secret_material(value: &str) -> bool {
+    if value.contains("-----BEGIN") && value.contains("PRIVATE KEY-----") {
+        return true;
+    }
+    if contains_credential_bearing_authority(value) {
+        return true;
+    }
+    if contains_json_web_token(value) || contains_aws_access_key_id(value) {
+        return true;
+    }
+    for (prefix, min_len) in SECRET_TOKEN_PREFIXES {
+        if has_token_run_after(value, prefix, *min_len) {
+            return true;
+        }
+    }
+    let lowered = value.to_ascii_lowercase();
+    contains_authorization_material(&lowered) || contains_credential_assignment(&lowered)
+}
+
+/// Detect a credential-shaped token that starts at a word boundary, so a
+/// benign word such as `task-manager` is never mistaken for a key.
+fn has_token_run_after(value: &str, prefix: &str, min_len: usize) -> bool {
+    let mut cursor = 0;
+    while let Some(offset) = value[cursor..].find(prefix) {
+        let index = cursor + offset;
+        let boundary = value[..index].chars().next_back();
+        let starts_word = boundary.is_some_and(|character| {
+            character.is_alphanumeric() || character == '_' || character == '-'
+        });
+        let start = index + prefix.len();
+        let tail = &value[start..];
+        if !starts_word
+            && tail.chars().take(min_len).count() == min_len
+            && tail.chars().take(min_len).all(is_token_character)
+        {
+            return true;
+        }
+        cursor = start;
+        if cursor >= value.len() {
+            break;
+        }
+    }
+    false
+}
+
+fn is_token_character(character: char) -> bool {
+    character.is_ascii_alphanumeric() || matches!(character, '-' | '_' | '.' | '+' | '/' | '=')
+}
+
+fn is_base64url_character(character: char) -> bool {
+    character.is_ascii_alphanumeric() || matches!(character, '-' | '_')
+}
+
+fn contains_json_web_token(value: &str) -> bool {
+    let Some(index) = value.find("eyJ") else {
+        return false;
+    };
+    let tail = &value[index + 3..];
+    let Some(first) = tail.find('.') else {
+        return false;
+    };
+    let header = &tail[..first];
+    if header.len() < 10 || !header.chars().all(is_base64url_character) {
+        return false;
+    }
+    let rest = &tail[first + 1..];
+    let Some(second) = rest.find('.') else {
+        return false;
+    };
+    let claims = &rest[..second];
+    claims.len() >= 10 && claims.chars().all(is_base64url_character)
+}
+
+fn contains_aws_access_key_id(value: &str) -> bool {
+    let mut cursor = 0;
+    while let Some(offset) = value[cursor..].find("AKIA") {
+        let start = cursor + offset + 4;
+        let run: String = value[start..].chars().take(16).collect();
+        if run.len() == 16
+            && run
+                .chars()
+                .all(|character| character.is_ascii_uppercase() || character.is_ascii_digit())
+        {
+            return true;
+        }
+        cursor = start;
+        if cursor >= value.len() {
+            break;
+        }
+    }
+    false
+}
+
+fn contains_authorization_material(lowered: &str) -> bool {
+    for scheme in ["bearer ", "basic "] {
+        let mut cursor = 0;
+        while let Some(offset) = lowered[cursor..].find(scheme) {
+            let start = cursor + offset + scheme.len();
+            let run = lowered[start..]
+                .split_whitespace()
+                .next()
+                .unwrap_or_default();
+            if run.len() >= 8 && run.chars().any(|character| !character.is_ascii_lowercase()) {
+                return true;
+            }
+            cursor = start;
+            if cursor >= lowered.len() {
+                break;
+            }
+        }
+    }
+    false
+}
+
+fn contains_credential_assignment(lowered: &str) -> bool {
+    for key in SECRET_ASSIGNMENT_KEYS {
+        let mut cursor = 0;
+        while let Some(offset) = lowered[cursor..].find(key) {
+            let start = cursor + offset + key.len();
+            let rest = &lowered[start..];
+            if let Some(separator) = rest.chars().next() {
+                let value = &rest[separator.len_utf8()..];
+                if (separator == '=' || separator == ':')
+                    && value.chars().any(|character| !character.is_whitespace())
+                {
+                    return true;
+                }
+            }
+            cursor = start;
+            if cursor >= lowered.len() {
+                break;
+            }
+        }
+    }
+    false
+}
+
+fn contains_credential_bearing_authority(value: &str) -> bool {
+    let Some(index) = value.find("://") else {
+        return false;
+    };
+    let rest = &value[index + 3..];
+    let authority = rest.split(['/', '?', '#']).next().unwrap_or_default();
+    authority.contains('@')
 }
 
 #[cfg(test)]

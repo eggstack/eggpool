@@ -5,14 +5,16 @@ use std::sync::Arc;
 use eggpool::{
     Config,
     db::{Database, DatabaseConfig, MigrationRunner},
+    operations::process::{ProcessError, checked_deadline},
     runtime_lifecycle::{ProcessRuntime, RuntimeGenerationFactory, RuntimeManager},
     server::{ServerError, ServerRuntime, ShutdownPhase, ShutdownReason},
+    task_supervisor::RuntimeTaskSupervisor,
 };
 use tempfile::TempDir;
 use tokio::{
     io::{AsyncReadExt, AsyncWriteExt},
     net::{TcpListener, TcpStream},
-    time::Duration,
+    time::{Duration, Instant},
 };
 
 async fn runtime_fixture(timeout: Duration) -> (TempDir, Database, ServerRuntime) {
@@ -253,4 +255,40 @@ async fn healthz_is_ok(port: u16) -> bool {
     }
     let text = String::from_utf8_lossy(&body);
     text.contains("200") && text.contains("\"status\":\"ok\"")
+}
+
+#[test]
+fn an_unrepresentable_interval_yields_a_typed_deadline_error() {
+    let error = checked_deadline(Duration::MAX).expect_err("unrepresentable interval");
+    assert!(matches!(error, ProcessError::Deadline));
+}
+
+#[test]
+fn a_representable_interval_keeps_the_previous_deadline() {
+    let before = Instant::now();
+    let deadline = checked_deadline(Duration::from_secs(5)).expect("representable interval");
+    let after = Instant::now();
+    assert!(deadline >= before + Duration::from_secs(5));
+    assert!(deadline <= after + Duration::from_secs(5));
+}
+
+#[tokio::test]
+async fn an_unrepresentable_runtime_shutdown_deadline_fails_closed() {
+    let (_directory, _database, runtime) = runtime_fixture(Duration::from_secs(1)).await;
+    let manager = runtime.manager().clone();
+    let report = manager.close_for_shutdown(Duration::MAX, false).await;
+    assert!(
+        report.forced,
+        "an unrepresentable shutdown deadline must fail closed into the forced path"
+    );
+}
+
+#[tokio::test]
+async fn an_unrepresentable_task_shutdown_deadline_fails_closed() {
+    let supervisor = RuntimeTaskSupervisor::new();
+    let report = supervisor.shutdown_with_timeout(Duration::MAX).await;
+    assert!(
+        report.timed_out,
+        "an unrepresentable task deadline must fail closed into the timed-out outcome"
+    );
 }

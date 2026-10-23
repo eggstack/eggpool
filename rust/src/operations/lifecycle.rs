@@ -235,7 +235,7 @@ pub async fn ensure_running(
         return Ok(EnsureRunningOutcome::AlreadyHealthy);
     }
     let child = spawn_detached(config_path, None, false)?;
-    let deadline = Instant::now() + WATCHDOG_START_TIMEOUT;
+    let deadline = process::checked_deadline(WATCHDOG_START_TIMEOUT)?;
     loop {
         if process::read_pid(&paths.pid_file)?.is_some_and(process::process_exists)
             || process::probe_health(&config.server.host, config.server.port).await

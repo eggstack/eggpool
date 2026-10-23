@@ -2867,7 +2867,24 @@ fn lifecycle_timeout(seconds: f64) -> Result<Duration, BootstrapError> {
             "timeout must be finite and greater than zero",
         ));
     }
-    Ok(Duration::from_secs_f64(seconds))
+    Duration::try_from_secs_f64(seconds).map_err(|_| {
+        command_error(
+            EXIT_VALIDATION,
+            "timeout is outside the representable duration range",
+        )
+    })
+}
+
+/// Convert a floating-point seconds value into whole seconds.
+///
+/// A non-finite value and a value outside the representable range are
+/// rejected instead of being coerced: a `NaN` must not read as a zero delay
+/// and an infinite value must not saturate to the `u64` maximum.
+fn whole_seconds(seconds: f64) -> Option<u64> {
+    if !seconds.is_finite() || seconds < 0.0 || seconds >= u64::MAX as f64 {
+        return None;
+    }
+    Some(seconds as u64)
 }
 
 async fn rehash(path: &Path, json_output: bool) -> Result<(), BootstrapError> {
@@ -3311,7 +3328,12 @@ async fn stop_systemd_service(state: SystemdServiceState) -> Result<(), Bootstra
     systemctl_action(state, "stop")
         .await
         .map_err(update_error)?;
-    let deadline = Instant::now() + Duration::from_secs(10);
+    let deadline = process::checked_deadline(Duration::from_secs(10)).map_err(|_| {
+        command_error(
+            EXIT_VALIDATION,
+            "systemd service stop deadline is not representable; package mutation was not attempted",
+        )
+    })?;
     while Instant::now() < deadline {
         if !systemd_service_state_for_scope(state.system_scope)
             .await
@@ -3330,7 +3352,8 @@ async fn stop_systemd_service(state: SystemdServiceState) -> Result<(), Bootstra
 async fn start_systemd_service(state: SystemdServiceState, path: &Path) -> Result<(), UpdateError> {
     systemctl_action(state, "start").await?;
     let config = config::Config::from_toml(path).map_err(|_| UpdateError::RestartFailed)?;
-    let deadline = Instant::now() + Duration::from_secs(15);
+    let deadline = process::checked_deadline(Duration::from_secs(15))
+        .map_err(|_| UpdateError::RestartFailed)?;
     while Instant::now() < deadline {
         let health = process::probe_health(&config.server.host, config.server.port).await;
         let ready = process::probe_readiness(&config.server.host, config.server.port).await;
@@ -3470,79 +3493,36 @@ fn is_auth_or_malformed_status_error(detail: &str) -> bool {
 }
 
 fn sanitize_status_value(value: &Value) -> Value {
-    // The server snapshot is already secret-free by construction; this keeps
-    // the CLI contract stable if the server ever adds advisory fields.
-    value.clone()
+    // The server snapshot is already secret-free by construction; this
+    // projection is the CLI's second line of defense. It removes
+    // secret-shaped material a payload may still carry without touching the
+    // published status fields.
+    crate::operations::status::redact_status_projection(value)
 }
 
 fn offline_status_snapshot(config: &config::Config) -> Value {
     use crate::operations::status as status_service;
-    let mut providers: Vec<Value> = config
+    let providers: Vec<status_service::OfflineProviderFacts> = config
         .providers
         .iter()
-        .map(|(provider_id, provider)| {
-            let total = provider.accounts.len();
-            let enabled = provider
-                .accounts
-                .iter()
-                .filter(|account| account.enabled)
-                .count();
-            let status = if enabled == 0 { "disabled" } else { "unknown" };
-            let reason = if enabled == 0 {
-                "no_enabled_accounts"
-            } else {
-                "unobserved"
-            };
-            json!({
-                "provider_id": provider_id,
-                "status": status,
-                "enabled_accounts": enabled,
-                "total_accounts": total,
-                "routable_accounts": 0,
-                "backoff_accounts": 0,
-                "unavailable_accounts": 0,
-                "model_count": Value::Null,
-                "last_probe_age_seconds": Value::Null,
-                "last_probe_latency_ms": Value::Null,
-                "last_probe_status_code": Value::Null,
-                "last_observation": "never",
-                "reason_code": reason,
-            })
-        })
+        .map(
+            |(provider_id, provider)| status_service::OfflineProviderFacts {
+                provider_id: provider_id.clone(),
+                total_accounts: provider.accounts.len(),
+                enabled_accounts: provider
+                    .accounts
+                    .iter()
+                    .filter(|account| account.enabled)
+                    .count(),
+            },
+        )
         .collect();
-    providers.sort_by(|left, right| {
-        left["provider_id"]
-            .as_str()
-            .unwrap_or_default()
-            .cmp(right["provider_id"].as_str().unwrap_or_default())
-    });
-    providers.truncate(status_service::MAX_STATUS_PROVIDERS);
-    let base_url = local_base_url(config);
-    json!({
-        "schema_version": status_service::STATUS_SCHEMA_VERSION,
-        "observed_at": status_service::observed_at_now(),
-        "proxy": {
-            "status": "unavailable",
-            "ready": false,
-            "available": false,
-            "version": PACKAGE_VERSION,
-            "base_url": base_url,
-            "uptime_seconds": Value::Null,
-            "model_count": 0,
-            "routable_accounts": 0,
-            "enabled_accounts": providers.iter().map(|row| row["enabled_accounts"].as_u64().unwrap_or(0)).sum::<u64>(),
-            "reason_code": "server unreachable",
-        },
-        "providers": providers,
-        "runtime": {
-            "generation": Value::Null,
-            "digest_prefix": "",
-            "reload": "unknown",
-            "tasks": "unknown",
-            "db": "unknown",
-            "retiring": 0,
-        },
-    })
+    // The fallback is the server's own typed projection, so the offline
+    // shape cannot drift from the published schema.
+    let snapshot =
+        status_service::offline_snapshot(&providers, &local_base_url(config), PACKAGE_VERSION);
+    let value = serde_json::to_value(&snapshot).unwrap_or(Value::Null);
+    sanitize_status_value(&value)
 }
 
 fn local_base_url(config: &config::Config) -> String {
@@ -3584,7 +3564,7 @@ fn print_status_human(snapshot: &Value, config: &config::Config) {
     let uptime = proxy
         .get("uptime_seconds")
         .and_then(serde_json::Value::as_f64)
-        .map(format_compact_duration)
+        .and_then(format_compact_duration)
         .unwrap_or_else(|| "-".to_owned());
     let models = proxy
         .get("model_count")
@@ -3702,14 +3682,14 @@ fn print_offline_status_human(snapshot: &Value, config: &config::Config) {
     }
 }
 
-fn format_compact_duration(seconds: f64) -> String {
-    let total = seconds.max(0.0) as u64;
+fn format_compact_duration(seconds: f64) -> Option<String> {
+    let total = whole_seconds(seconds)?;
     if total >= 3600 {
-        format!("{}h{}m", total / 3600, (total % 3600) / 60)
+        Some(format!("{}h{}m", total / 3600, (total % 3600) / 60))
     } else if total >= 60 {
-        format!("{}m{}s", total / 60, total % 60)
+        Some(format!("{}m{}s", total / 60, total % 60))
     } else {
-        format!("{total}s")
+        Some(format!("{total}s"))
     }
 }
 
@@ -3837,7 +3817,9 @@ fn format_duration(value: Option<&Value>) -> String {
     let Some(seconds) = value.and_then(Value::as_f64) else {
         return "N/A".to_owned();
     };
-    let total = seconds.max(0.0) as u64;
+    let Some(total) = whole_seconds(seconds) else {
+        return "N/A".to_owned();
+    };
     if total >= 3600 {
         format!("{}h {}m", total / 3600, (total % 3600) / 60)
     } else if total >= 60 {
@@ -3864,8 +3846,12 @@ fn format_bytes(value: Option<&Value>) -> String {
 
 #[cfg(test)]
 mod tests {
-    use super::{EXIT_VALIDATION, mutation_error, should_generate_legacy_server_key};
+    use super::{
+        EXIT_VALIDATION, format_compact_duration, format_duration, lifecycle_timeout,
+        mutation_error, should_generate_legacy_server_key, whole_seconds,
+    };
     use crate::operations::config_mutation::MutationError;
+    use serde_json::json;
 
     #[test]
     fn interruption_bypasses_validation_exit_code() {
@@ -3885,5 +3871,34 @@ mod tests {
     fn onboarding_does_not_create_a_legacy_key_after_admin_initialization() {
         assert!(should_generate_legacy_server_key(false));
         assert!(!should_generate_legacy_server_key(true));
+    }
+
+    #[test]
+    fn non_finite_seconds_are_rejected_instead_of_reading_as_a_delay() {
+        assert_eq!(whole_seconds(f64::NAN), None);
+        assert_eq!(whole_seconds(f64::INFINITY), None);
+        assert_eq!(whole_seconds(f64::NEG_INFINITY), None);
+        assert_eq!(whole_seconds(-1.0), None);
+        assert_eq!(whole_seconds(u64::MAX as f64), None);
+        assert_eq!(whole_seconds(0.0), Some(0));
+        assert_eq!(whole_seconds(12.9), Some(12));
+    }
+
+    #[test]
+    fn a_non_finite_duration_is_not_rendered_as_a_zero_delay() {
+        assert_eq!(format_compact_duration(f64::NAN), None);
+        assert_eq!(format_compact_duration(f64::INFINITY), None);
+        assert_eq!(format_compact_duration(12.5), Some("12s".to_owned()));
+        assert_eq!(format_duration(None), "N/A");
+        assert_eq!(format_duration(Some(&json!(12.5))), "12s");
+    }
+
+    #[test]
+    fn a_non_finite_or_out_of_range_timeout_is_rejected_through_the_validation_path() {
+        for seconds in [f64::NAN, f64::INFINITY, f64::NEG_INFINITY, 1e300, 0.0, -1.0] {
+            let error = lifecycle_timeout(seconds).expect_err("rejected timeout");
+            assert_eq!(error.exit_code(), EXIT_VALIDATION);
+        }
+        assert!(lifecycle_timeout(30.0).is_ok());
     }
 }
