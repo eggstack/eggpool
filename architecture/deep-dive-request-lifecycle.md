@@ -141,6 +141,24 @@ adapts the response, and converges durable state.
   terminal from retry-cleanup convergence. `CrashReconciler::reconcile_once`
   converges crash leftovers to interrupted/released without replay or
   double-charge.
+- A terminal detail is sanitized once, in `coordinator/finalization.rs`, before
+  it is bound into a durable statement: control characters other than newline
+  and tab are dropped, the value is capped at 512 characters, and
+  credential-shaped material is removed (see
+  [deep-dive-security.md](deep-dive-security.md) for the rule). The same
+  sanitized value is bound into the request-row update and the attempt-row
+  update, so the request row, the attempt row, and the streaming terminal path
+  that flows through the same finalizer all persist a redacted detail. The
+  column is diagnostic only: no status code, route, or response body shape
+  depends on it, and rows written before the rule existed are not
+  retroactively scrubbed.
+- An upstream `Retry-After` header is a hint, never an instruction. The
+  HTTP-date form is parsed with both clock bounds enforced
+  (`coordinator/failure.rs::parse_rfc1123`): an hour above 23, a minute above
+  59, a second above 60, or any negative field yields no hint at all. An
+  unusable value is not an error — the request stays retryable and the fixed
+  policy backoff stays in charge, so a malformed date can never shorten or
+  invert a cooldown.
 - For managed principals, publication checks aggregate and exact-model
   daily/monthly user budget rules and inserts the logical-request hold in that
   same SQLite transaction. The hold survives failed attempts and is extended
@@ -238,6 +256,8 @@ server/Axum
 cargo test --manifest-path rust/Cargo.toml --test coordinator_c008 -- --test-threads=1
 cargo test --manifest-path rust/Cargo.toml --test coordinator_boundaries -- --test-threads=1
 cargo test --manifest-path rust/Cargo.toml --test coordinator_publication -- --test-threads=1
+cargo test --manifest-path rust/Cargo.toml --test terminal_detail_redaction -- --test-threads=1
+cargo test --manifest-path rust/Cargo.toml --test coordinator_failure -- --test-threads=1
 cargo test --manifest-path rust/Cargo.toml --test wire_stream -- --test-threads=1
 cargo test --manifest-path rust/Cargo.toml --test codex_responses_compat -- --test-threads=1
 ```

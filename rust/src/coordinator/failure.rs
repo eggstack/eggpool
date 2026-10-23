@@ -812,7 +812,11 @@ fn parse_rfc1123(value: &str) -> Option<i64> {
     let hour = clock.next()?.parse::<i64>().ok()?;
     let minute = clock.next()?.parse::<i64>().ok()?;
     let second = clock.next()?.parse::<i64>().ok()?;
-    if hour > 23 || minute > 59 || second > 60 {
+    // Both bounds matter: an upper-bound-only check accepted a negative clock
+    // field, and the resulting negative offset was then used as a retry
+    // duration. An out-of-range field is not a usable hint, so it yields no
+    // hint at all and the fixed policy backoff stays in charge.
+    if !(0..=23).contains(&hour) || !(0..=59).contains(&minute) || !(0..=60).contains(&second) {
         return None;
     }
     let month_days = [31, 28, 31, 30, 31, 30, 31, 31, 30, 31, 30, 31];

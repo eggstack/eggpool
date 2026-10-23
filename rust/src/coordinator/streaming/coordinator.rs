@@ -687,7 +687,7 @@ impl StreamingCoordinator {
                                 );
                             let (effects, first) = self.decide(&observation)?;
                             if first {
-                                self.apply_effects(&published.claim, &effects);
+                                self.apply_effects(&published.claim, &effects).await;
                             }
                             if effects.wire_effect == "reject_candidate" {
                                 self.wire_resolver.reject(
@@ -789,7 +789,7 @@ impl StreamingCoordinator {
                             );
                             let (effects, first) = self.decide(&observation)?;
                             if first {
-                                self.apply_effects(&published.claim, &effects);
+                                self.apply_effects(&published.claim, &effects).await;
                             }
                             let headers = StreamClientHeaders {
                                 status: StatusCode::BAD_GATEWAY,
@@ -1100,7 +1100,7 @@ impl StreamingCoordinator {
         let (effects, first) = self.decide(&observation)?;
         *last_failure = Some((effects.clone(), None, identity.upstream_protocol.clone()));
         if first {
-            self.apply_effects(&published.claim, &effects);
+            self.apply_effects(&published.claim, &effects).await;
         }
         if self.should_retry(&effects) {
             self.cleanup_failed_attempt(
@@ -1193,7 +1193,7 @@ impl StreamingCoordinator {
         let (effects, first) = self.decide(&observation)?;
         *last_failure = Some((effects.clone(), None, identity.upstream_protocol.clone()));
         if first {
-            self.apply_effects(&published.claim, &effects);
+            self.apply_effects(&published.claim, &effects).await;
         }
         if self.should_retry(&effects) {
             self.cleanup_failed_attempt(
@@ -1324,16 +1324,18 @@ impl StreamingCoordinator {
             .map_err(|error| StreamingCoordinatorError::Effects(error.to_string()))
     }
 
-    fn apply_effects(&self, claim: &SelectionClaim, effects: &FailureEffects) {
-        self.router.apply_failure_effects(
-            claim,
-            effects.apply_account_penalty,
-            effects.quarantine_model,
-            &effects.model_effect,
-            effects.backoff_reason.as_deref(),
-            effects.backoff_until,
-            effects.circuit_penalty,
-        );
+    async fn apply_effects(&self, claim: &SelectionClaim, effects: &FailureEffects) {
+        self.router
+            .apply_failure_effects(
+                claim,
+                effects.apply_account_penalty,
+                effects.quarantine_model,
+                &effects.model_effect,
+                effects.backoff_reason.as_deref(),
+                effects.backoff_until,
+                effects.circuit_penalty,
+            )
+            .await;
     }
 
     fn should_retry(&self, effects: &FailureEffects) -> bool {

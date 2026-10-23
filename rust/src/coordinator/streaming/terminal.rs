@@ -139,7 +139,7 @@ use crate::coordinator::{
     FailureCategory, FailureDecisionEngine, FailureEffects, FailureObservation, FailureSource,
     FinalizationData, FinalizationOutcome, StreamingCoordinatorError, WireResolver,
 };
-use crate::routing::RoutingRouter;
+use crate::routing::{RoutingRouter, SelectionClaim};
 use crate::wire::ir::{CacheCounterStatus, CanonicalUsage, ProviderErrorEvidence};
 use crate::wire::{StreamForwardingMode, StreamTerminalOutcome, TerminalEvidence, WireSurface};
 
@@ -151,7 +151,7 @@ use super::{
     PendingStreamFinalizationParts, StreamChunkError, StreamPhase,
 };
 
-pub(crate) fn store_idle_timeout(
+pub(crate) async fn store_idle_timeout(
     parts: &mut PendingStreamFinalizationParts,
     facts: &AttemptStreamFacts,
     router: &RoutingRouter,
@@ -170,7 +170,7 @@ pub(crate) fn store_idle_timeout(
         }
     };
     if first {
-        apply_effects(router, parts, &effects);
+        apply_effects(router, parts.claim.clone(), &effects).await;
     }
     // One terminal event, one outcome counter: an idle timeout is not also an
     // upstream midstream transport error.
@@ -185,7 +185,7 @@ pub(crate) fn store_idle_timeout(
     store_terminal(parts, data, StreamChunkError::IdleTimeout)
 }
 
-pub(crate) fn store_midstream_transport(
+pub(crate) async fn store_midstream_transport(
     parts: &mut PendingStreamFinalizationParts,
     facts: &AttemptStreamFacts,
     router: &RoutingRouter,
@@ -205,7 +205,7 @@ pub(crate) fn store_midstream_transport(
         }
     };
     if first {
-        apply_effects(router, parts, &effects);
+        apply_effects(router, parts.claim.clone(), &effects).await;
     }
     parts.diagnostics_record(
         OUTCOME_UPSTREAM_MIDSTREAM_ERROR,
@@ -217,7 +217,7 @@ pub(crate) fn store_midstream_transport(
     store_terminal(parts, data, StreamChunkError::UpstreamTransport)
 }
 
-pub(crate) fn store_translation_error(
+pub(crate) async fn store_translation_error(
     parts: &mut PendingStreamFinalizationParts,
     facts: &AttemptStreamFacts,
     router: &RoutingRouter,
@@ -259,7 +259,7 @@ pub(crate) fn store_translation_error(
         }
     };
     if first {
-        apply_effects(router, parts, &effects);
+        apply_effects(router, parts.claim.clone(), &effects).await;
     }
     parts.diagnostics_record(
         OUTCOME_UPSTREAM_MIDSTREAM_ERROR,
@@ -617,22 +617,25 @@ fn decide(
         .map_err(|error| StreamingCoordinatorError::Effects(error.to_string()))
 }
 
-fn apply_effects(
+async fn apply_effects(
     router: &RoutingRouter,
-    parts: &PendingStreamFinalizationParts,
+    claim: Option<SelectionClaim>,
     effects: &FailureEffects,
 ) {
-    if let Some(claim) = parts.claim.as_ref() {
-        router.apply_failure_effects(
-            claim,
+    let Some(claim) = claim else {
+        return;
+    };
+    router
+        .apply_failure_effects(
+            &claim,
             effects.apply_account_penalty,
             effects.quarantine_model,
             &effects.model_effect,
             effects.backoff_reason.as_deref(),
             effects.backoff_until,
             effects.circuit_penalty,
-        );
-    }
+        )
+        .await;
 }
 
 fn effects_midstream_data(

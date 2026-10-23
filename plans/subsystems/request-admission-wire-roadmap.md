@@ -1,6 +1,6 @@
 # Request Admission and Wire Roadmap
 
-Status: closed
+Status: active
 
 Long-term references:
 
@@ -144,6 +144,12 @@ Milestone 001 is closed with its required implementation, real-socket, default,
 no-default, tooling, and hosted verification evidence recorded in the closure
 status file.
 
+M007 has no hard dependency; it is a local transport-robustness correction
+set and is now closed. M008 had a hard dependency on the acceptance of
+`plans/adrs/ADR-0003-remote-compaction-capability-contract.md`, because the
+milestone implements a public compatibility contract and the decision about
+what that contract is is the ADR. The ADR is accepted and M008 is now closed.
+
 ## 7. Milestones
 
 ### Milestone 001 — Inference body resource admission hardening
@@ -186,6 +192,150 @@ Deferred work:
 
 - configurable aggregate-memory budgets, adaptive budgets from machine RAM/cgroups, disk spooling, or streaming JSON parsing require separate capability/design work if real workloads justify them.
 - exact serde/allocator amplification accounting is not part of this milestone.
+
+### Milestone 007 — Terminal detail scrubbing and transport robustness corrections
+
+Class: invariant
+
+Objective:
+
+Make the persisted terminal error detail actually free of secret material,
+and close two transport-input parsing defects that accept malformed values as
+valid.
+
+Dependencies:
+
+- None. Each defect is local, deterministic, and needs no schema, dependency,
+  or physical target.
+
+Deliverable boundary:
+
+- The sanitizer applied before a terminal detail is persisted removes
+  credential-shaped material, on every write path, without changing the
+  client-visible error text.
+- The retry-after HTTP-date parser rejects out-of-range clock fields and
+  falls back rather than erroring.
+- The authorization scheme token is matched case-insensitively, with the
+  credential comparison and the loopback exemption unchanged.
+
+User or operator value:
+
+An upstream that echoes a credential does not cause that credential to be
+persisted, and a client that sends a correct credential with an unusual
+authorization scheme is not rejected.
+
+Exit conditions:
+
+- A credential-shaped value does not survive the persisted terminal detail.
+- An ordinary diagnostic detail survives redaction substantially intact.
+- A malformed retry-after date falls back instead of producing a negative
+  offset.
+- No public HTTP contract, admission rule, or config classification changes.
+- Default and no-default workspace qualification passes.
+
+Deferred work:
+
+- Scrubbing durable history written before this milestone, which is a
+  separate operator-facing decision.
+
+### Milestone 008 — Remote compaction capability contract
+
+Class: capability
+
+Objective:
+
+Give the public `POST /v1/responses/compact` endpoint a defined capability
+contract: an explicit, typed failure when no eligible provider surface
+advertises remote compaction, and operator-facing documentation that states
+the requirement plainly.
+
+Dependencies:
+
+- Hard: ADR-0003 accepted. The milestone implements a public compatibility
+  contract, and the decision about what that contract is is the ADR.
+- No other hard dependency. The endpoint, its admission path, its wire
+  capability surface, and its compatibility suite already exist.
+
+Deliverable boundary:
+
+- A compact request that finds no capable provider surface returns a
+  distinguishable outcome that creates no provider attempt, no quota
+  reservation, and no durable attribution row.
+- The outcome body carries no account-identifying, credential, or request
+  body material.
+- The API reference states the capability contract and names the
+  configuration keys an operator must set.
+- A guard keeps the bundled provider profile asset free of a remote
+  compaction capability claim.
+- The compact admission rules, the compact compatibility suite, and the
+  intentional finite-only asymmetry between the finite and streaming contexts
+  are unchanged.
+
+User or operator value:
+
+An operator who calls the compact endpoint learns that the installation has
+no remote compaction capability, instead of seeing a generic selection
+failure, and knows which configuration to set.
+
+Exit conditions:
+
+- The capability outcome is distinguishable from an ordinary selection
+  failure.
+- A configured capable surface still reaches the upstream.
+- The bundled provider profile asset advertises no remote compaction
+  capability.
+- The release documentation validation passes.
+- Default and no-default workspace qualification passes.
+
+Deferred work:
+
+- A bundled provider opt-in, which requires first-party evidence and its own
+  decision.
+- Remote compaction version 2, which stays unsupported.
+
+### Milestone 009 — Terminal detail redaction coverage correction
+
+Class: invariant
+
+Objective:
+
+Make the terminal-detail redaction projection's documented coverage match its
+actual behavior, and close the classes of credential-shaped material the
+projection did not cover.
+
+Dependencies:
+
+- None. This is a corrective pass over Milestone 007; the durable schema, the
+  wire contract, and the transport-robustness work are unchanged.
+
+Deliverable boundary:
+
+- A labeled credential is redacted in the JSON spelling as well as the
+  unquoted spelling.
+- A standalone credential scheme word — `bearer`, `basic`, `token`, `digest`
+  — is redacted.
+- A URL authority carrying userinfo credentials is redacted, consistently with
+  the repository's other redactor.
+- A vendor token prefix is matched case-insensitively.
+- The ordinary-diagnostic detail still survives substantially intact.
+
+User or operator value:
+
+The guard that keeps credentials out of the persisted terminal detail covers
+the spellings an upstream actually uses.
+
+Exit conditions:
+
+- A redaction test asserts the exact redacted output for each class and that
+  the removed secret is absent from the persisted row.
+- A redaction test asserts that ordinary URLs, a `mailto:` fragment, a bare
+  `word@word`, and compound identifiers survive byte-identically.
+- Default and no-default workspace suites pass.
+
+Deferred work:
+
+- Scrubbing durable history written before this milestone, which is a
+  separate operator-facing decision.
 
 ## 8. Cross-cutting requirements
 
@@ -236,6 +386,8 @@ Rust tests run serial with `--test-threads=1`. Full workspace and `--no-default-
 
 M001 is closed on its recorded body-admission evidence. M002–M005 are closed on the extraction, fidelity/provenance, and cleanup evidence recorded in their closure files. Explicit user direction reopened the roadmap for M006, the bounded external semantic-producer consumer contract. M006 now preserves EggPool behavior while exposing a source-neutral canonical origin, consumer-oriented encode/options seam, bounded completed-tool-call accumulation, source-isolated consumer evidence, and immutable downstream pin `f05b18b7358d9a4125d1e20c491151eec265e403`; the roadmap is closed again.
 
+The roadmap reopened again on repository evidence gathered at baseline `e6822d8f78`. The terminal detail sanitizer bounds length and character set but does not remove secret-shaped material before the value is persisted; the retry-after HTTP-date parser validates its clock fields with an upper bound only, so a negative value is accepted; and the authorization scheme token is matched case-sensitively. Separately, the public remote compaction endpoint is fully implemented, tested, and documented, but no provider surface advertises the capability, so a real request cannot reach a capable upstream and fails indistinguishably from an ordinary selection failure. M007 and M008 address these. M008 is now closed: ADR-0003 is accepted, and a compact request against an installation with no eligible provider surface returns a typed capability outcome that consumes no provider attempt, while the ordinary selection failure stays distinguishable. The historical M001–M006 records remain closed and immutable.
+
 ## 12. Milestone status
 
 | Milestone | Status | Implementation plan | Closure record | Blockers |
@@ -246,6 +398,9 @@ M001 is closed on its recorded body-admission evidence. M002–M005 are closed o
 | 004 — fidelity, provenance, and conformance hardening | closed | `plans/implementation/request-admission-wire/004-fidelity-provenance-and-conformance-hardening.md` | `plans/closure/request-admission-wire/004-status.md` | none |
 | 005 — planning reconciliation and minor wire cleanup | closed | `plans/implementation/request-admission-wire/005-planning-reconciliation-and-minor-wire-cleanup.md` | `plans/closure/request-admission-wire/005-status.md` | none |
 | 006 — external semantic-producer consumer contract | closed | `plans/implementation/request-admission-wire/006-codegg-external-wire-consumer-contract.md` | `plans/closure/request-admission-wire/006-status.md` | none |
+| 007 — terminal detail scrubbing and transport robustness corrections | closed | `plans/implementation/request-admission-wire/007-terminal-detail-scrubbing-and-transport-robustness.md` | `plans/closure/request-admission-wire/007-status.md` | none; closed through M009 |
+| 008 — remote compaction capability contract | closed | `plans/implementation/request-admission-wire/008-remote-compaction-capability-contract.md` | `plans/closure/request-admission-wire/008-status.md` | none; ADR-0003 accepted |
+| 009 — terminal detail redaction coverage correction | closed | `plans/implementation/request-admission-wire/009-terminal-detail-redaction-coverage-correction.md` | `plans/closure/request-admission-wire/009-status.md` | none |
 
 
 ## 13. Wire-kernel extraction extension

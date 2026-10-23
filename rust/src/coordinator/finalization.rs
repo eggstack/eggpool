@@ -23,6 +23,20 @@ use super::{
 const MAX_ERROR_DETAIL: usize = 512;
 const DEFAULT_SUPERVISOR_CAPACITY: usize = 256;
 
+/// Placeholder substituted for removed credential material.
+///
+/// The marker never contains any part of the value it replaces, so a
+/// redacted detail cannot leak a truncated prefix of the removed secret.
+const REDACTED: &str = "[redacted]";
+
+/// Shortest standalone credential that follows a scheme word such as
+/// `Bearer` and is treated as credential material. The bound keeps ordinary
+/// prose such as "bearer token missing" intact.
+const MIN_STANDALONE_CREDENTIAL_LENGTH: usize = 16;
+
+/// Shortest opaque run that is treated as a high-entropy credential.
+const MIN_OPAQUE_TOKEN_LENGTH: usize = 32;
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
 pub enum FinalizationOutcome {
     Completed,
@@ -766,12 +780,442 @@ fn is_terminal_status(status: &str) -> bool {
     )
 }
 
+/// Bound a terminal detail and remove credential-shaped material from it.
+///
+/// The persisted diagnostic column is operator-facing, so ordinary prose,
+/// URLs, and model identifiers must survive substantially intact. The rule is
+/// therefore conservative and deterministic:
+///
+/// - labeled credential fields (`authorization`, `x-api-key`, `api_key`,
+///   `password`, `token`, …) lose their value, in the plain, the quoted, and
+///   the JSON spelling of the field;
+/// - known vendor token prefixes (`sk-`, `ghp_`, `xoxb-`, `AKIA`, `AIza`, …)
+///   lose the whole token, whatever the case of the prefix;
+/// - a standalone `Bearer`/`Basic`/`Token`/`Digest` credential and a JSON web
+///   token lose the credential, not the scheme word;
+/// - a URL authority that carries userinfo credentials loses the userinfo and
+///   keeps the host;
+/// - a long (32+ character) opaque run that mixes letters and digits is
+///   treated as high-entropy credential material.
+///
+/// Everything else is copied verbatim. Removed material is replaced with
+/// [`REDACTED`], which contains no part of the removed value. Control
+/// characters other than newline and tab are dropped and the result is capped
+/// at [`MAX_ERROR_DETAIL`] characters, exactly as before redaction existed.
 fn sanitize_detail(value: &str) -> String {
-    value
-        .chars()
-        .filter(|character| !character.is_control() || matches!(character, '\n' | '\t'))
-        .take(MAX_ERROR_DETAIL)
-        .collect()
+    let bytes = value.as_bytes();
+    let mut output = String::new();
+    let mut emitted = 0usize;
+    let mut cursor = 0usize;
+    while cursor < bytes.len() {
+        if let Some((consumed, rendered)) = redact_at(value, bytes, cursor) {
+            let rendered_chars = rendered.chars().count();
+            if emitted + rendered_chars > MAX_ERROR_DETAIL {
+                break;
+            }
+            emitted += rendered_chars;
+            output.push_str(&rendered);
+            cursor += consumed;
+            continue;
+        }
+        let Some(character) = value.get(cursor..).and_then(|rest| rest.chars().next()) else {
+            break;
+        };
+        let width = character.len_utf8();
+        if character.is_control() && !matches!(character, '\n' | '\t') {
+            cursor += width;
+            continue;
+        }
+        if emitted + 1 > MAX_ERROR_DETAIL {
+            break;
+        }
+        emitted += 1;
+        output.push(character);
+        cursor += width;
+    }
+    output
+}
+
+/// Field labels whose value is credential material.
+///
+/// Matching is case-insensitive and only applies when the label is followed by
+/// a `:` or `=` separator, so usage counters such as `input_tokens` and
+/// ordinary prose are not touched. The JSON spelling of a field puts the
+/// closing quote of the key between the label and the separator, so that
+/// quote is skipped before the separator is required.
+const CREDENTIAL_LABELS: [&str; 34] = [
+    "access-token",
+    "access_token",
+    "anthropic-api-key",
+    "api-key",
+    "api-secret",
+    "api_key",
+    "api_secret",
+    "authorization",
+    "client-secret",
+    "client_secret",
+    "credential",
+    "credentials",
+    "id-token",
+    "id_token",
+    "openai-api-key",
+    "passwd",
+    "password",
+    "private-key",
+    "private_key",
+    "proxy-authorization",
+    "refresh-token",
+    "refresh_token",
+    "secret",
+    "secret-key",
+    "secret_key",
+    "session-token",
+    "session_token",
+    "token",
+    "x-access-token",
+    "x-api-key",
+    "x-api-token",
+    "x-auth-token",
+    "x-goog-api-key",
+    "x-secret-key",
+];
+
+/// Scheme words that name the credential which follows them.
+const CREDENTIAL_SCHEMES: [&str; 4] = ["bearer", "basic", "token", "digest"];
+
+/// Vendor token prefixes and the shortest total token length that is treated
+/// as credential material.
+const VENDOR_TOKEN_PREFIXES: [(&str, usize); 11] = [
+    ("sk-", 16),
+    ("sk_", 16),
+    ("ghp_", 24),
+    ("gho_", 24),
+    ("ghs_", 24),
+    ("ghu_", 24),
+    ("github_pat_", 30),
+    ("xoxb-", 16),
+    ("xoxp-", 16),
+    ("AKIA", 20),
+    ("AIza", 30),
+];
+
+/// Remove the first credential-shaped value at `cursor`, if any.
+///
+/// Returns the number of bytes consumed and the text to emit in their place.
+fn redact_at(value: &str, bytes: &[u8], cursor: usize) -> Option<(usize, String)> {
+    match_labeled_credential(value, bytes, cursor)
+        .or_else(|| match_url_userinfo(value, bytes, cursor))
+        .or_else(|| match_vendor_token(bytes, cursor))
+        .or_else(|| match_standalone_credential(value, bytes, cursor))
+        .or_else(|| match_json_web_token(bytes, cursor))
+        .or_else(|| match_long_opaque_token(bytes, cursor))
+}
+
+/// A labeled credential field, such as `Authorization: Bearer <token>` or
+/// `api_key=<value>`.
+fn match_labeled_credential(value: &str, bytes: &[u8], cursor: usize) -> Option<(usize, String)> {
+    if cursor > 0 && is_word_byte(bytes[cursor - 1]) {
+        return None;
+    }
+    for label in CREDENTIAL_LABELS {
+        let label_bytes = label.as_bytes();
+        let label_end = cursor + label_bytes.len();
+        if label_end > bytes.len() || !bytes[cursor..label_end].eq_ignore_ascii_case(label_bytes) {
+            continue;
+        }
+        let mut position = skip_whitespace(bytes, label_end);
+        // The JSON spelling of a field puts the closing quote of the key
+        // between the label and the separator (`"api_key":"…"`), so the quote
+        // is skipped before the separator is required. The opening quote of
+        // the key is the byte before the label, so the word-boundary guard
+        // above already admits that spelling.
+        if matches!(bytes.get(position), Some(&b'"') | Some(&b'\'')) {
+            position = skip_whitespace(bytes, position + 1);
+        }
+        let Some(separator) = bytes.get(position).copied() else {
+            continue;
+        };
+        if separator != b':' && separator != b'=' {
+            continue;
+        }
+        position += 1;
+        position = skip_whitespace(bytes, position);
+        if matches!(bytes.get(position), Some(&b'"') | Some(&b'\'')) {
+            position += 1;
+        }
+        let value_start = position;
+        let value_end = scan_credential_run(bytes, value_start);
+        if value_end == value_start {
+            continue;
+        }
+        let (secret_start, secret_end) = match scheme_credential(bytes, value_start, value_end) {
+            Some(credential) => credential,
+            None => (value_start, value_end),
+        };
+        return Some((
+            secret_end - cursor,
+            render_redaction(value, cursor, secret_start),
+        ));
+    }
+    None
+}
+
+/// A vendor-prefixed token, such as `sk-…` or an AWS access key id.
+///
+/// The prefix is matched case-insensitively, like the field label, so an
+/// upper-case spelling of a prefix is redacted as well. `AKIA` and `AIza` are
+/// exact-case in the real world, so the wider match only over-redacts.
+fn match_vendor_token(bytes: &[u8], cursor: usize) -> Option<(usize, String)> {
+    for (prefix, minimum_length) in VENDOR_TOKEN_PREFIXES {
+        let prefix_bytes = prefix.as_bytes();
+        let prefix_end = cursor + prefix_bytes.len();
+        if prefix_end > bytes.len() || !bytes[cursor..prefix_end].eq_ignore_ascii_case(prefix_bytes)
+        {
+            continue;
+        }
+        let token_end = scan_credential_run(bytes, prefix_end);
+        if token_end - cursor < minimum_length {
+            continue;
+        }
+        return Some((token_end - cursor, REDACTED.to_owned()));
+    }
+    None
+}
+
+/// A standalone credential scheme word (`Bearer`, `Basic`, `Token`, `Digest`)
+/// that carries no field label.
+///
+/// The scheme word and the whitespace that follows it stay visible; only the
+/// credential that follows is removed.
+fn match_standalone_credential(
+    value: &str,
+    bytes: &[u8],
+    cursor: usize,
+) -> Option<(usize, String)> {
+    if cursor > 0 && is_word_byte(bytes[cursor - 1]) {
+        return None;
+    }
+    for scheme in CREDENTIAL_SCHEMES {
+        let scheme_bytes = scheme.as_bytes();
+        let scheme_end = cursor + scheme_bytes.len();
+        if scheme_end > bytes.len() || !bytes[cursor..scheme_end].eq_ignore_ascii_case(scheme_bytes)
+        {
+            continue;
+        }
+        if !matches!(bytes.get(scheme_end), Some(&b' ') | Some(&b'\t')) {
+            continue;
+        }
+        let value_start = skip_whitespace(bytes, scheme_end);
+        let value_end = scan_credential_run(bytes, value_start);
+        if value_end - value_start < MIN_STANDALONE_CREDENTIAL_LENGTH {
+            continue;
+        }
+        return Some((
+            value_end - cursor,
+            render_redaction(value, cursor, value_start),
+        ));
+    }
+    None
+}
+
+/// A URL authority that carries userinfo credentials.
+///
+/// The userinfo section of the authority (`user:secret@host`) is credential
+/// material and is removed; the host is not, so the host survives and the
+/// diagnostic still shows which upstream was contacted. This matches the
+/// authority rule the status projection already applies. A URL without
+/// userinfo, and a `mailto:`-style or bare `word@word` fragment that is not
+/// an authority, is left untouched.
+fn match_url_userinfo(value: &str, bytes: &[u8], cursor: usize) -> Option<(usize, String)> {
+    if cursor > 0 && is_word_byte(bytes[cursor - 1]) {
+        return None;
+    }
+    let scheme_end = scan_url_scheme(bytes, cursor);
+    if scheme_end == cursor || scheme_end + 3 > bytes.len() {
+        return None;
+    }
+    if bytes[scheme_end..scheme_end + 3] != *b"://" {
+        return None;
+    }
+    let authority_start = scheme_end + 3;
+    let authority_end = scan_authority(bytes, authority_start);
+    let authority = &bytes[authority_start..authority_end];
+    // The userinfo section ends at the last `@` of the authority.
+    let userinfo_len = authority.iter().rposition(|byte| *byte == b'@')?;
+    if userinfo_len == 0 {
+        return None;
+    }
+    let host_start = authority_start + userinfo_len + 1;
+    let mut rendered = String::new();
+    rendered.push_str(&value[cursor..authority_start]);
+    rendered.push_str(REDACTED);
+    rendered.push('@');
+    rendered.push_str(&value[host_start..authority_end]);
+    Some((authority_end - cursor, rendered))
+}
+
+/// A JSON web token: three base64url segments separated by dots.
+fn match_json_web_token(bytes: &[u8], cursor: usize) -> Option<(usize, String)> {
+    const JWT_PREFIX: &[u8] = b"eyJ";
+    let prefix_end = cursor + JWT_PREFIX.len();
+    if prefix_end > bytes.len() || &bytes[cursor..prefix_end] != JWT_PREFIX {
+        return None;
+    }
+    let first_end = scan_jwt_segment(bytes, prefix_end);
+    if first_end == prefix_end || bytes.get(first_end) != Some(&b'.') {
+        return None;
+    }
+    let second_start = first_end + 1;
+    let second_end = scan_jwt_segment(bytes, second_start);
+    if second_end == second_start || bytes.get(second_end) != Some(&b'.') {
+        return None;
+    }
+    let third_start = second_end + 1;
+    let third_end = scan_jwt_segment(bytes, third_start);
+    if third_end == third_start {
+        return None;
+    }
+    Some((third_end - cursor, REDACTED.to_owned()))
+}
+
+/// A long opaque run that mixes letters and digits: the shape of a
+/// high-entropy credential that carries no recognizable label or prefix.
+fn match_long_opaque_token(bytes: &[u8], cursor: usize) -> Option<(usize, String)> {
+    if cursor > 0 && is_opaque_byte(bytes[cursor - 1]) {
+        return None;
+    }
+    let end = scan_opaque_run(bytes, cursor);
+    if end - cursor < MIN_OPAQUE_TOKEN_LENGTH {
+        return None;
+    }
+    let run = &bytes[cursor..end];
+    if !run.iter().any(|byte| byte.is_ascii_digit())
+        || !run.iter().any(|byte| byte.is_ascii_alphabetic())
+    {
+        return None;
+    }
+    Some((end - cursor, REDACTED.to_owned()))
+}
+
+/// The credential that follows a scheme word, when the scheme word names one.
+fn scheme_credential(bytes: &[u8], value_start: usize, value_end: usize) -> Option<(usize, usize)> {
+    let word = &bytes[value_start..value_end];
+    let names_credential = CREDENTIAL_SCHEMES
+        .iter()
+        .any(|scheme| word.eq_ignore_ascii_case(scheme.as_bytes()));
+    if !names_credential {
+        return None;
+    }
+    let credential_start = skip_whitespace(bytes, value_end);
+    let credential_end = scan_credential_run(bytes, credential_start);
+    (credential_end > credential_start).then_some((credential_start, credential_end))
+}
+
+/// Keep the label, separator, and scheme word so the diagnostic still shows
+/// which credential field was present, and mark the value as removed.
+fn render_redaction(value: &str, cursor: usize, secret_start: usize) -> String {
+    let mut rendered = String::new();
+    for character in value[cursor..secret_start].chars() {
+        if character.is_control() && !matches!(character, '\n' | '\t') {
+            continue;
+        }
+        rendered.push(character);
+    }
+    rendered.push_str(REDACTED);
+    rendered
+}
+
+fn is_word_byte(byte: u8) -> bool {
+    byte.is_ascii_alphanumeric() || byte == b'_'
+}
+
+/// Characters that can be part of a credential value.
+///
+/// Line breaks and tabs end a value because they end a header or a field;
+/// other control characters stay inside it so an embedded control byte cannot
+/// split a credential into a redactable prefix and a surviving suffix.
+fn is_credential_byte(byte: u8) -> bool {
+    byte.is_ascii_alphanumeric()
+        || matches!(
+            byte,
+            b'_' | b'-' | b'.' | b'~' | b'+' | b'/' | b'=' | b':' | b'%'
+        )
+        || (byte.is_ascii_control() && !matches!(byte, b'\n' | b'\r' | b'\t'))
+}
+
+/// Characters that can be part of an opaque high-entropy token.
+fn is_opaque_byte(byte: u8) -> bool {
+    byte.is_ascii_alphanumeric()
+        || matches!(byte, b'_' | b'-' | b'+' | b'/' | b'=')
+        || (byte.is_ascii_control() && !matches!(byte, b'\n' | b'\r' | b'\t'))
+}
+
+fn skip_whitespace(bytes: &[u8], mut index: usize) -> usize {
+    while index < bytes.len() && bytes[index].is_ascii_whitespace() {
+        index += 1;
+    }
+    index
+}
+
+fn scan_credential_run(bytes: &[u8], mut index: usize) -> usize {
+    while index < bytes.len() && is_credential_byte(bytes[index]) {
+        index += 1;
+    }
+    index
+}
+
+fn scan_opaque_run(bytes: &[u8], mut index: usize) -> usize {
+    while index < bytes.len() && is_opaque_byte(bytes[index]) {
+        index += 1;
+    }
+    index
+}
+
+/// Scan a URL scheme token that starts at `index`.
+///
+/// A scheme starts with an ASCII letter and continues with letters, digits,
+/// `+`, `-`, or `.`. The scan stops at the first byte that cannot continue a
+/// scheme, so the caller can require the `://` that follows it.
+fn scan_url_scheme(bytes: &[u8], index: usize) -> usize {
+    if index >= bytes.len() || !bytes[index].is_ascii_alphabetic() {
+        return index;
+    }
+    let mut cursor = index + 1;
+    while cursor < bytes.len()
+        && (bytes[cursor].is_ascii_alphanumeric() || matches!(bytes[cursor], b'+' | b'-' | b'.'))
+    {
+        cursor += 1;
+    }
+    cursor
+}
+
+/// Scan the authority of a URL that starts at `index`.
+///
+/// The authority ends at the first path, query, fragment, or whitespace byte,
+/// so a prose fragment that follows the URL is never swallowed.
+fn scan_authority(bytes: &[u8], mut index: usize) -> usize {
+    while index < bytes.len() && is_authority_byte(bytes[index]) {
+        index += 1;
+    }
+    index
+}
+
+/// Bytes that can appear in a URL authority.
+fn is_authority_byte(byte: u8) -> bool {
+    byte.is_ascii_alphanumeric()
+        || matches!(
+            byte,
+            b'-' | b'.' | b'_' | b'~' | b'%' | b'+' | b':' | b'@' | b'[' | b']'
+        )
+}
+
+fn scan_jwt_segment(bytes: &[u8], mut index: usize) -> usize {
+    while index < bytes.len()
+        && (bytes[index].is_ascii_alphanumeric() || bytes[index] == b'_' || bytes[index] == b'-')
+    {
+        index += 1;
+    }
+    index
 }
 
 #[derive(Debug, Clone)]

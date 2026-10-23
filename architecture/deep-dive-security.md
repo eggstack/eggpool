@@ -16,8 +16,9 @@ structured events.
 
 ## Authentication
 
-`verify_api_key()` accepts `Authorization: Bearer <key>` (either
-capitalization) or the `x-api-key` header, pads both sides to fixed
+`verify_api_key()` accepts `Authorization: Bearer <key>` (the scheme token is
+matched case-insensitively, so `bearer` and `BEARER` name the same scheme)
+or the `x-api-key` header, pads both sides to fixed
 512-byte buffers, and folds the full pads before combining with the shape
 bits — so shape validity never short-circuits the compare. Provided and
 expected values must both satisfy `valid_key_shape()`. A shared server key is
@@ -119,6 +120,67 @@ is validated `false`). Control sockets and state files use owner-only
 permissions (`0o700` runtime/config directories, `0o600` control socket and
 secret-bearing files) and fail closed when ownership is ambiguous.
 
+### Persisted terminal detail
+
+A terminal detail is a durable, operator-facing diagnostic column, never a
+client-facing field. Before it is bound into a durable statement it passes
+through one deterministic sanitizer in `rust/src/coordinator/finalization.rs`:
+credential-shaped material is removed first, then control characters other
+than newline and tab are dropped and the value is capped at 512 characters.
+Redaction runs before the cap, so a secret is never truncated into a partial
+credential.
+
+The redaction rule is conservative and deterministic. At every position the
+rules are tried in this order, and the first one that matches wins:
+
+1. A labeled credential field loses its value. The label list holds 34
+   spellings, including `authorization`, `proxy-authorization`, `x-api-key`,
+   `api_key`, `api-secret`, `password`, `passwd`, `secret`, `credential`,
+   `token`, `refresh_token`, `id_token`, and `private_key`. The label only
+   matches at a word boundary and only when a `:` or `=` separator follows it,
+   with an optional closing quote between the label and the separator. The
+   plain (`api_key: …`), the quoted (`api_key: "…"`), and the JSON
+   (`"api_key":"…"`) spellings are therefore all redacted, while compound
+   identifiers such as `input_tokens`, `token_count`, and `api_key_id` are
+   not. When the labeled value is itself a scheme word, the credential after
+   it is removed and the scheme word stays visible.
+2. A URL authority that carries userinfo credentials (`https://user:secret@host`)
+   loses the whole userinfo section and keeps the host, so the diagnostic still
+   shows which upstream was contacted. This is the same rule the status
+   projection applies in `rust/src/operations/status.rs`. The authority ends at
+   the first path, query, fragment, or whitespace byte, so a URL without
+   userinfo, a `mailto:` fragment, and a bare `word@word` fragment are
+   untouched.
+3. A known vendor token prefix loses the whole token when the token reaches
+   that prefix's minimum total length. The list holds 11 prefixes: `sk-`,
+   `sk_`, `ghp_`, `gho_`, `ghs_`, `ghu_`, `github_pat_`, `xoxb-`, `xoxp-`,
+   `AKIA`, and `AIza`. The prefix is matched case-insensitively, like the field
+   label, so an upper-case spelling of a prefix is redacted as well.
+4. A standalone credential scheme word (`Bearer`, `Basic`, `Token`, `Digest`)
+   loses the credential that follows it when that credential is at least 16
+   characters. The scheme word and the whitespace after it stay visible.
+5. A JSON web token — three base64url segments whose first segment starts with
+   `eyJ` — loses all three of its segments.
+6. A run of 32 or more characters that mixes letters and digits is treated as
+   high-entropy credential material and is removed.
+
+Removed material is replaced with `[redacted]`, which contains no part of the
+removed value, so neither the secret nor a truncated prefix of it can survive.
+The label, the separator, and the scheme word stay visible, so the diagnostic
+still shows which credential field was present.
+
+Over-redaction is the accepted failure direction: a long hyphenated word that
+merges into a vendor-prefix shape, a 32+ character opaque identifier, and a
+labeled field whose value is not really a credential are all redacted. Ordinary
+diagnostics — URLs without userinfo, model identifiers, prose, and usage
+counters such as `input_tokens` — survive intact, because a label only matches
+at a word boundary and only when a `:` or `=` separator follows it, and because
+the URL rule only fires on an authority that actually carries an `@`. The rule
+is applied on every path that persists a terminal detail, including the request
+row, the attempt row, and the streaming terminal path that flows through the
+same finalizer. Rows that were persisted before the rule existed are not
+retroactively scrubbed.
+
 ## Transport ceilings and filesystem
 
 The downstream EggServe HTTP/1 parser applies explicit header, target, and
@@ -146,5 +208,7 @@ metrics/status/diagnostics payloads.
 
 ```bash
 cargo test --manifest-path rust/Cargo.toml --test server_transport -- --test-threads=1
+cargo test --manifest-path rust/Cargo.toml --test server_auth -- --test-threads=1
+cargo test --manifest-path rust/Cargo.toml --test terminal_detail_redaction -- --test-threads=1
 cargo test --manifest-path rust/Cargo.toml --test cli_contract -- --test-threads=1
 ```

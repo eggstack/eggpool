@@ -303,10 +303,11 @@ impl StreamingExecution {
                     return None;
                 }
                 Pull::Idle => {
-                    return store_idle_timeout(parts, facts, router, failure_engine);
+                    return store_idle_timeout(parts, facts, router, failure_engine).await;
                 }
                 Pull::Transport(class) => {
-                    return store_midstream_transport(parts, facts, router, failure_engine, class);
+                    return store_midstream_transport(parts, facts, router, failure_engine, class)
+                        .await;
                 }
                 Pull::Eof => {
                     return store_eof(parts, facts, router, wire_resolver);
@@ -334,7 +335,8 @@ impl StreamingExecution {
                     match decoded {
                         Decoded::Skip => continue,
                         Decoded::TranslationError => {
-                            return store_translation_error(parts, facts, router, failure_engine);
+                            return store_translation_error(parts, facts, router, failure_engine)
+                                .await;
                         }
                         Decoded::Forward(bytes, saw_terminal) => {
                             let client_bytes = parts

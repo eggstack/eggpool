@@ -605,9 +605,7 @@ fn provided_api_key(headers: &HeaderMap) -> Option<&str> {
         .and_then(|value| value.to_str().ok())
         .unwrap_or("")
         .trim();
-    let provided = authorization
-        .strip_prefix("Bearer ")
-        .or_else(|| authorization.strip_prefix("bearer "))
+    let provided = strip_authorization_scheme(authorization)
         .map(str::trim)
         .filter(|value| !value.is_empty())
         .or_else(|| {
@@ -619,6 +617,17 @@ fn provided_api_key(headers: &HeaderMap) -> Option<&str> {
         })
         .unwrap_or("");
     (!provided.is_empty()).then_some(provided)
+}
+
+/// Strip the HTTP authentication scheme token from an `Authorization` value.
+///
+/// The scheme token is case-insensitive by specification, so `Bearer`,
+/// `bearer`, and `BEARER` all name the same scheme. Only the scheme token is
+/// matched this way: the credential itself is never inspected here, and it is
+/// still compared in constant time by [`verify_api_key`].
+fn strip_authorization_scheme(value: &str) -> Option<&str> {
+    let (scheme, credentials) = value.split_once(' ')?;
+    scheme.eq_ignore_ascii_case("bearer").then_some(credentials)
 }
 
 pub(super) fn fixed_key(value: &str) -> [u8; 512] {
@@ -637,8 +646,12 @@ pub(super) fn is_loopback_host(host: &str) -> bool {
 
 #[cfg(test)]
 mod tests {
-    use super::{legacy_server_key_allowed, personal_credential_allowed, requires_auth};
+    use super::{
+        fixed_key, legacy_server_key_allowed, personal_credential_allowed, provided_api_key,
+        requires_auth, verify_api_key,
+    };
     use crate::server::ServerState;
+    use axum::http::{HeaderMap, HeaderValue, header};
     use std::time::Instant;
 
     #[test]
@@ -717,5 +730,78 @@ mod tests {
             &http::Method::POST,
             &public
         ));
+    }
+
+    #[test]
+    fn authorization_scheme_token_is_case_insensitive() {
+        let expected = "test-key-transport";
+        for scheme in ["Bearer", "bearer", "BEARER", "BeArEr"] {
+            let mut headers = HeaderMap::new();
+            headers.insert(
+                header::AUTHORIZATION,
+                HeaderValue::from_str(&format!("{scheme} {expected}")).expect("header value"),
+            );
+            assert!(
+                verify_api_key(&headers, expected),
+                "{scheme} must be accepted"
+            );
+            assert_eq!(
+                provided_api_key(&headers),
+                Some(expected),
+                "{scheme} must yield the credential"
+            );
+        }
+    }
+
+    #[test]
+    fn a_wrong_credential_is_rejected_under_every_scheme_spelling() {
+        let expected = "test-key-transport";
+        for credential in [
+            "wrong-key-transport",
+            "test-key-transpor",
+            "test-key-transport-extra",
+        ] {
+            for scheme in ["Bearer", "BEARER"] {
+                let mut headers = HeaderMap::new();
+                headers.insert(
+                    header::AUTHORIZATION,
+                    HeaderValue::from_str(&format!("{scheme} {credential}")).expect("header value"),
+                );
+                assert!(
+                    !verify_api_key(&headers, expected),
+                    "{scheme} with {credential} must be rejected"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn the_credential_comparison_keeps_its_fixed_width_padding() {
+        // The constant-time comparison folds over a fixed 512-byte pad, so a
+        // wrong credential is rejected on the same path whether it is
+        // shorter, longer, or the same length as the expected key.
+        let padded = fixed_key("abc");
+        assert_eq!(&padded[..3], &b"abc"[..]);
+        assert!(padded[3..].iter().all(|byte| *byte == 0));
+        // An over-long value can never be truncated into a matching prefix.
+        let overflow = fixed_key(&"a".repeat(600));
+        assert!(overflow.iter().all(|byte| *byte == 0xff));
+    }
+
+    #[test]
+    fn the_accepted_credential_headers_are_unchanged() {
+        let expected = "test-key-transport";
+        let mut headers = HeaderMap::new();
+        headers.insert("x-api-key", HeaderValue::from_static("test-key-transport"));
+        assert_eq!(provided_api_key(&headers), Some(expected));
+        assert!(verify_api_key(&headers, expected));
+        // A scheme other than `bearer` is not a credential source.
+        let mut basic = HeaderMap::new();
+        basic.insert(
+            header::AUTHORIZATION,
+            HeaderValue::from_static("Basic test-key-transport"),
+        );
+        assert_eq!(provided_api_key(&basic), None);
+        assert!(!verify_api_key(&basic, expected));
     }
 }
