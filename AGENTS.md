@@ -24,14 +24,18 @@ providers/transport → `deep-dive-providers.md`; reload/restart →
 ## Layout
 
 - Runtime (authority): `rust/src/` — `main.rs`/`cli.rs`/`lib.rs` entry,
-  `runtime.rs` CLI adapter, `server/` thin HTTP adapters, `coordinator/` +
+  `runtime.rs` CLI adapter, `config.rs` + `config_reload_policy.rs` typed
+  config and reload classification, `error.rs` exit codes, `version.rs`
+  package version, `server/` thin HTTP adapters, `coordinator/` +
   `coordinator/streaming/` (`coordinator.rs`, `execution.rs`, `terminal.rs`,
   `timeout.rs`, `types.rs`, `diagnostics.rs` behind `mod.rs`) request lifecycle,
   `request/` admission, `wire/` protocol codecs, `routing/` + `accounts/` +
   `catalog/` + `quota/` + `health/` selection, `model_router.rs` affinity,
-  `providers/` transport, `runtime_lifecycle/` generations + `reload.rs` +
+  `identity.rs` + `web_session.rs` + `user_budget.rs` + `instance_budget.rs` +
+  `model_policy.rs` on-prem user access, `providers/` transport,
+  `runtime_lifecycle/` generations + `reload.rs` +
   `task_supervisor.rs`, `operations/` local lifecycle, `db/` +
-  `rust/assets/db/migrations/` v1–v54 immutable.
+  `rust/assets/db/migrations/` v1–v63 immutable.
 - Reusable policy crates: `rust/crates/eggpool-model-routing/` (neutral validation/compilation only; selector execution and affinity cache stay in `rust/src/`), `rust/crates/eggpool-client-config/` (portable Codex/OpenCode projection, profiles, `epc1` tokens, V1/V2 renderers, TOML/JSONC-preserving mutation; EggPool `Config`/catalog/DB/key/endpoint/CLI/file IO stays in `rust/src/operations/integrations.rs`), `rust/crates/eggpool-provider-profile/` (secret-free sans-I/O provider-profile contract plus the canonical bundled asset at `assets/_provider_profiles.toml`; `rust/src/provider_profile.rs` is the only EggPool reader), `rust/crates/eggpool-wire/` (neutral sans-I/O wire kernel; execution stays in `rust/src/`), `rust/crates/eggpool-connect/` (narrow `eggpool-connect` binary: plan/install/verify/backups/restore/remove with byte-exact backups, atomic writes, automatic rollback; no Axum/SQLite/Eggress, no proxy/agent/daemon).
 - Tooling only (never a runtime fallback): repo-root `pyproject.toml`, `scripts/`, `tests/tooling/`. `scripts/qualification_sbc.py` is the sole physical-SBC runner (loopback-only, aggregate-only, non-CI). Native tests live in `rust/tests/` (serial; there is no `coordinator_c012`; streaming files are `coordinator.rs`, `execution.rs`, `terminal.rs`, `timeout.rs`, `types.rs`, `diagnostics.rs`).
 - Config resolution: `--config` > `$EGGPOOL_CONFIG` > `~/.config/eggpool/config.toml` > `./config.toml`. Provider/upstream keys come from environment/`.env`, never committed; the server key lives under `[server]` (`api_key` via `eggpool newkey`, or `api_key_env`). Examples: `rust/config.example.toml`, `rust/config.sbc.example.toml`.

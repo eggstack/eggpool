@@ -75,9 +75,9 @@ fail closed on validation, commit, or ownership ambiguity.
 `AppError` to `ExitCode` (`Command` code, `Interrupted` → 130, else 1).
 `rust/src/lib.rs` declares the module tree (with `forbid(unsafe_code)`) and
 re-exports the CLI/config/error boundary. `rust/src/cli.rs` owns the Clap
-command tree (34 commands: `serve`, `connect`, `logout`, `check-config`, `edit`, `getkey`,
+command tree (35 commands: `serve`, `connect`, `logout`, `check-config`, `edit`, `getkey`,
 `newkey`, `configsetup`, `configremote`, `deploy`, `accounts`, `dashboard`, `db`, `models`,
-`modelinfo`, `stats`, `onboard`, `croncheck`, `ensure-running`, `migrate`,
+`modelinfo`, `stats`, `users`, `onboard`, `croncheck`, `ensure-running`, `migrate`,
 `stop`, `restart`, `init-config`, `help`, `recover`, `uninstall`, `update`,
 `install-provenance`, `set`, `rehash`, `runtime-status`, `status`, `backup`, `version`).
 `rust/src/runtime.rs` adapts each command to `operations/*`, `config`, and
@@ -144,16 +144,33 @@ per request (`execute_finite`/`execute_stream` are thin wrappers over it),
 compact via finite-only `execute_compact_finite`), `dashboard/`
 (thin route facade plus bounded read projections, static/theme delivery,
 shared formatting, and page-family renderers).
-Route topology: inference at `/v1/chat/completions`, `/v1/messages`,
+Route topology (every route registered by `rust/src/server/mod.rs`):
+inference at `/v1/chat/completions`, `/v1/messages`,
 `/v1/responses`, `/v1/responses/compact` (bounded distinct compaction
-operation, not a Responses alias); dashboard at `/`, `/accounts`, `/models`,
-`/models/{*model_id}`, `/latency`, `/events`, `/timeseries`, `/bandwidth`,
-`/pings`, `/reliability`, `/routing`, `/traces`, `/runtime`, `/cache`,
+operation, not a Responses alias); discovery and health at `/v1/models`,
+`/v1/healthz`, `/v1/readyz`; observability at `/api/status`,
+`/api/stats/runtime`, `/api/stats/update`, `/api/integrations/v1/profile`,
 `/api/stats/summary` plus the dashboard-gated compat/observability JSON
 (`/api/stats/transcoding`, `/api/stats/cache-observability`,
 `/api/stats/canonical-request-segmentation`, `/api/stats/cache-stability`,
 `/api/stats/request-shaping`, `/api/timeseries`, `/api/timeseries/grouped`);
-statics under `/static/`.
+managed-user at `/login`, `/logout`, `/account`, `/account/password`,
+`/my-account`, `/my-account/models`, `/account/tokens`,
+`/account/tokens/revoke`, `/usage`, `/api/user-budget`; dashboard pages at
+`/`, `/accounts`, `/models`, `/models/{*model_id}`, `/latency`, `/events`,
+`/timeseries`, `/bandwidth`, `/pings`, `/reliability`, `/routing`,
+`/traces`, `/runtime`, `/cache`, `/users`, `/profiles`, `/admin/audit`;
+admin actions at `/admin/users/create`, `/admin/users/state`,
+`/admin/users/password`, `/admin/users/token`, `/admin/users/revoke-tokens`,
+`/admin/users/profile`, `/admin/users/override`,
+`/admin/users/override/remove`, `/admin/users/budget`,
+`/admin/budget/instance`, `/admin/budget/instance/remove`,
+`/admin/profiles/create`, `/admin/profiles/default`,
+`/admin/profiles/update`, `/admin/profiles/delete`, `/admin/profiles/rule`,
+`/admin/profiles/rule/remove`, `/admin/profiles/prefer`; statics at
+`/static/dashboard.css`, `/static/dashboard.js`, `/static/chart.js`,
+`/static/favicon.svg`, `/static/theme.css`. The per-surface behavior of each
+family is owned by its deep dive, not by this index.
 
 Deep dives: [Request lifecycle](deep-dive-request-lifecycle.md),
 [Dashboard](deep-dive-dashboard.md), [Runtime](deep-dive-runtime.md).
@@ -216,22 +233,31 @@ into neutral kernel types — explicitly not kernel) and `wire::runtime.rs`
 is the EggPool-owned selection-time join (`WireRuntime`,
 `WireStream`, `PreparedRequest`, `FiniteResponse`). Guarded by
 `wire_extraction_contract` + `wire_kernel_boundary`.
-`ir.rs` captures canonical request/reasoning/usage/tool/response/stream-event
-semantics before adaptation. `codec.rs`/`codecs.rs`/`additional_codecs.rs`
-implement per-surface codecs (OpenAI Chat, Anthropic Messages, OpenAI
-Responses, Gemini variants); `registry.rs` (neutral `profile.rs`) accepts
-only compiled codec IDs;
-`runtime.rs`/`stream.rs` own `WireRuntime`/`WireStream`, `PreparedRequest`,
-`FiniteResponse`, the `WireStream` join over the kernel SSE decoder/encoder
-(`SseDecoder` framing, `StreamEventDecoder::observe_native_push`,
-stateful `ClientStreamEncoder`), and terminal summaries; `adaptation.rs`
-owns reasoning/tool/capability and loss policy; `decode.rs` owns the pure
-structural decoder with `DecodeLimits`, `fidelity.rs`/`provenance.rs`/
-`conformance.rs` own source-native residue and conformance facts,
-`tool_calls.rs` owns the neutral tool-call accumulator, and
-`adapters.rs` is the EggPool-owned extraction seam (maps catalog/request/
-routing/config facts into neutral kernel types — explicitly not kernel).
-The neutral kernel itself lives in `rust/crates/eggpool-wire/`. Two bounded Responses paths:
+The canonical semantics live in the neutral kernel crate, not in the root
+files: `eggpool_wire::ir` carries the canonical
+request/reasoning/usage/tool/response/stream-event model before adaptation,
+`eggpool_wire::codec` carries the closed codec contract, and
+`eggpool_wire::codecs` with `eggpool_wire::additional_codecs` carry the
+per-surface codecs (OpenAI Chat, Anthropic Messages, OpenAI Responses,
+Gemini variants), `eggpool_wire::profile` (the registry) admits only
+compiled codec IDs, `eggpool_wire::stream` carries the bounded SSE framing
+and the canonical stream join (`SseDecoder` framing,
+`StreamEventDecoder::observe_native_push`, stateful `ClientStreamEncoder`)
+and the terminal summaries, `eggpool_wire::adaptation` carries the
+reasoning/tool/capability and loss policy, `eggpool_wire::decode` carries
+the pure structural decoder with `DecodeLimits`, `eggpool_wire::fidelity`,
+`eggpool_wire::provenance`, and `eggpool_wire::conformance` carry the
+source-native residue and conformance facts, and `eggpool_wire::tool_calls`
+carries the neutral tool-call accumulator. The root files `ir.rs`,
+`codec.rs`, `codecs.rs`, `additional_codecs.rs`, `stream.rs`,
+`adaptation.rs`, `decode.rs`, `fidelity.rs`, `provenance.rs`,
+`conformance.rs`, `registry.rs`, and `tool_calls.rs` are compatibility
+facades that re-export exactly those kernel modules under the canonical
+`wire::` path; they carry no implementation of their own. EggPool's own wire
+code is `wire::runtime.rs` (the selection-time join: `WireRuntime`,
+`WireStream`, `PreparedRequest`, `FiniteResponse`) and `wire::adapters.rs`
+(the extraction seam, explicitly not kernel).
+Two bounded Responses paths:
 canonical semantic adaptation and source-native same-surface preservation
 (ordered items, encrypted reasoning, native tools preserved; alias targets
 rewrite only EggPool-owned `model`). `custom` tools map to
@@ -289,7 +315,13 @@ transactions over `AccountRegistry`, `ModelCatalogCache`, `QuotaEstimator`,
 fair-share scoring. `rust/src/health/` (`health_manager.rs`, `backoff.rs`,
 `circuit_breaker.rs`, `effects.rs`, `quarantine.rs`, `repository.rs`) applies
 the narrowest safe effect (pair quarantine vs. account breaker) and persists
-only restart-safety state. `rust/src/accounts/` (`registry.rs`) owns static
+only restart-safety state. The generation build path constructs the health
+repositories, hydrates the generation's health manager and quarantine from the
+persisted backoff and quarantine rows before publication, attaches the
+quarantine to the router so the eligibility gate is live, and mirrors the
+routing path's failure effects back into the same tables outside the selection
+lock; expired rows are retired on the bounded database maintenance schedule.
+`rust/src/accounts/` (`registry.rs`) owns static
 identity/credential boundaries. `rust/src/catalog/` (`cache.rs` in-memory read
 authority, `refresh.rs` fetch/normalize/persist) owns provider-scoped
 discovery, capability/pricing/limits/withdrawal, and bounded model-info
@@ -315,7 +347,7 @@ is the only persistence boundary. `db/` owns only the `backup_to` snapshot
 primitive; backup orchestration lives in `operations/backup.rs` and crash
 repair in `runtime_lifecycle/recovery.rs` plus coordinator reconciliation.
 Migrations (`rust/assets/db/migrations/`,
-currently v1–v54 with `checksums.json`) are embedded and immutable; commit or
+currently v1–v63 with `checksums.json`) are embedded and immutable; commit or
 ownership ambiguity fails closed; startup reconciliation repairs only covered
 states. Repositories accept no unbounded diagnostic content and never store
 credentials, prompts, raw bodies, or cache keys.
@@ -419,7 +451,39 @@ Deep dives: [Observability](deep-dive-observability.md),
 [Metrics](deep-dive-metrics.md), [Dashboard](deep-dive-dashboard.md),
 [Security](deep-dive-security.md).
 
-### 13. Capabilities at a glance
+### 13. On-prem user access
+
+`rust/src/identity.rs` owns local downstream identities: the `users`,
+`user_credentials`, and `user_access_state` records, Argon2id password
+verification (fixed parameters, bounded hashing concurrency before the SQLite
+gate), high-entropy `epk1_` personal credentials stored as digests only, the
+administrative audit trail, and the request-attribution types. The
+`legacy_unmigrated` → `admin_initialized` → `managed` access-state singleton
+is the explicit switch from the shared server key to managed access; a
+partial unique index keeps at most one active administrator.
+`rust/src/web_session.rs` owns opaque `eps1_` browser sessions (digest-only,
+7-day expiry, 12-hour idle window, asymmetric `HttpOnly` session/CSRF
+cookies) and the bounded local login throttling. `rust/src/server/auth.rs`
+owns the browser login surface, the same-origin/CSRF checks, and the
+forwarded-HTTPS validation that refuses a password prompt over an unsafe
+transport. `rust/src/model_policy.rs` owns versioned per-user model
+authorization: profile rules, exact per-user overrides, and instance denials
+resolved in that order over a role-safe default, with a revision-guarded
+bounded cache and an immutable snapshot per admitted request. `rust/src/user_budget.rs`
+and `rust/src/instance_budget.rs` own the per-user and instance-global budget
+scopes: daily and monthly rules with explicit `estimated`/`hard` enforcement,
+worst-case holds for `hard`, checks and holds in the same publication
+transaction as the request reservation, and settlement of one daily and one
+monthly bucket at terminalization. `rust/src/server/dashboard/admin.rs` owns
+the admin and member HTML surfaces as thin CSRF-validated adapters. The
+subsystem owns no router, no upstream dispatch, and no second database
+writer; `server/middleware.rs` keeps the route-role gate, `coordinator/`
+keeps publication and settlement, and `routing/`, `quota/`, and `health/`
+keep owning upstream accounts, provider quota, and provider health.
+
+Deep dive: [On-prem user access](deep-dive-on-prem-user-access.md).
+
+### 14. Capabilities at a glance
 
 - Inference surfaces: `POST /v1/chat/completions`, `POST /v1/messages`,
   `POST /v1/responses` (finite + SSE streaming; Responses stateless contract
@@ -435,6 +499,12 @@ observability JSON (`/api/stats/transcoding`, `/api/stats/cache-observability`,
 `/api/stats/canonical-request-segmentation`, `/api/stats/cache-stability`,
 `/api/stats/request-shaping`, `/api/timeseries`, `/api/timeseries/grouped`);
 observational only.
+- On-prem user access: local downstream identities with Argon2id passwords and
+revocable per-user agent tokens (`eggpool users …`), browser login behind a
+session/CSRF boundary, versioned per-user model policy, and per-user plus
+instance-global daily/monthly budgets; the admin and member surfaces are the
+`/admin/*`, `/users`, `/profiles`, `/account*`, `/my-account*`, and `/usage`
+routes; see [On-prem user access](deep-dive-on-prem-user-access.md).
 - CLI: full command tree in §1 (`status` is the concise provider health
   summary, `runtime-status` the detailed diagnostics; `configremote codex|opencode`
   is the read-only remote exporter); `runtime.rs` keeps
@@ -462,7 +532,7 @@ observational only.
   `env: ["EGGPOOL_API_KEY"]`, both with JSONC-preserving mutation;
   see [Integrations](deep-dive-integrations.md).
 
-### 14. Native dependencies and feature gates
+### 15. Native dependencies and feature gates
 
 `rust/Cargo.toml` authority: Tokio, Hyper/Hyper-util/Hyper-Rustls/Rustls,
 Eggfetch (`eggfetch-core` 0.2.2 `native-http1` + `tls-rustls`, provider
@@ -482,7 +552,7 @@ the private non-SSH test-root adapter; protocol fixture crates stay dev-only.
 
 Deep dives: [Providers](deep-dive-providers.md), [Core](deep-dive-core.md).
 
-### 15. Tooling and tests (not a runtime fallback)
+### 16. Tooling and tests (not a runtime fallback)
 
 Release/validation tooling only: `scripts/` validators/builders/qualifiers
 (`validate_release_docs.py`, `validate_runtime_package_boundary.py`,
@@ -509,8 +579,10 @@ Deep dives: [Core](deep-dive-core.md), [Deployment](deep-dive-deployment.md).
 | Module / concern | Authority paths | Deep dive |
 |---|---|---|
 | Entry, CLI, errors | `rust/src/main.rs`, `rust/src/lib.rs`, `rust/src/cli.rs`, `rust/src/runtime.rs`, `rust/src/error.rs`, `rust/src/version.rs` | [Core](deep-dive-core.md) |
+| Operations CLI surface | `rust/src/runtime.rs`, `rust/src/cli.rs`, `rust/src/operations/` (local operator commands; `runtime.rs` dispatches and renders, `operations/` owns the local services) | [Core](deep-dive-core.md), [Control](deep-dive-control.md), [Metrics](deep-dive-metrics.md) |
 | Config, reload policy, reload | `rust/src/config.rs`, `rust/src/config_reload_policy.rs`, `rust/src/reload.rs`, `rust/build.rs`, `rust/build_support.rs` | [Core](deep-dive-core.md), [Control](deep-dive-control.md), [Runtime](deep-dive-runtime.md) |
 | HTTP adapters | `rust/src/server/` | [Request lifecycle](deep-dive-request-lifecycle.md), [Dashboard](deep-dive-dashboard.md), [Runtime](deep-dive-runtime.md) |
+| On-prem user access | `rust/src/identity.rs`, `rust/src/web_session.rs`, `rust/src/model_policy.rs`, `rust/src/user_budget.rs`, `rust/src/instance_budget.rs`, `rust/src/server/auth.rs`, `rust/src/server/dashboard/admin.rs` | [On-prem user access](deep-dive-on-prem-user-access.md) |
 | Admission | `rust/src/request/` | [Request lifecycle](deep-dive-request-lifecycle.md), [Transcoder](deep-dive-transcoder.md) |
 | Coordinator finite/streaming | `rust/src/coordinator/`, `rust/src/coordinator/streaming/` | [Request lifecycle](deep-dive-request-lifecycle.md), [Retry](deep-dive-retry.md) |
 | Publication/finalization/failure | `rust/src/coordinator/publication.rs`, `rust/src/coordinator/finalization.rs`, `rust/src/coordinator/failure.rs`, `rust/src/coordinator/attempt.rs`, `rust/src/coordinator/wire_resolver.rs` | [Request lifecycle](deep-dive-request-lifecycle.md), [Retry](deep-dive-retry.md) |

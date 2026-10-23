@@ -14,10 +14,8 @@ Canonical direction:
 
 Legacy archive (pre-251, immutable, top level): `plans/001-*` through
 `plans/250-*` plus `python_hotpath_dispatch_compression_optimization.md`.
-Most recently closed: On-prem Concurrency Performance M001 (conditionally
-closed after three paired physical Pi 5/MMC and tmpfs runs; durable
-publication/SQLite/storage attribution; remaining controls in
-`plans/closure/on-prem-concurrency-performance/001-status.md`).
+Most recently closed: Planning Governance M002 (review index, ownership, and census reconciliation; the CLI, migration, route, and module censuses are corrected and guarded; `plans/closure/planning-governance/002-status.md`).
+Previously: On-prem Concurrency Performance M001 (conditionally closed after three paired physical Pi 5/MMC and tmpfs runs; durable publication/SQLite/storage attribution; remaining controls in `plans/closure/on-prem-concurrency-performance/001-status.md`).
 Legacy archive latest: Plan 250
 (EggServe 0.3.0 direct-Tower migration, `7879cbf9`). Plans 244–245, 215–220,
 241 remain historical per their own closure passes; the `146-*` duplicate
@@ -58,8 +56,32 @@ No new runtime, schema or performance claim lands with these plans.
 | Persistence | active | `plans/subsystems/persistence-roadmap.md` | M011 ready — post-M010 roadmap/documentation reconciliation | M009/M010 closures accepted. Documentation/tooling-only corrective; production remains WAL/NORMAL. No technical persistence successor is registered. |
 | Deployment and packaging | closed | `plans/subsystems/deployment-packaging-roadmap.md` | M005 closed — active PATH integration detection corrective | M001–M005 closed; no successor registered. |
 | Dashboard | closed | `plans/subsystems/dashboard-roadmap.md` | M012 closed — lifecycle closure and documentation polish | M001–M012 closed; no registered successor; future dashboard work requires a new bounded plan. |
-| On-prem user access | closed | `plans/subsystems/on-prem-user-access-roadmap.md` | M023 closed — short-window fairness controls | M017–M023 complete. Modified-binary ordinary-Linux/NVMe no-rule and active-throttle qualification is recorded; no successor is registered. |
+| On-prem user access | closed | `plans/subsystems/on-prem-user-access-roadmap.md` | M023 closed — short-window fairness controls | M017–M023 complete. Modified-binary ordinary-Linux/NVMe no-rule and active-throttle qualification is recorded; no successor is registered. The subsystem's documentation coverage gap is tracked by Planning Governance M002, not here. |
 | On-prem concurrency performance | active | `plans/subsystems/on-prem-concurrency-performance-roadmap.md` | M002 closed — ordinary-server synthetic baseline recorded | M001's Pi/microSD solo tail attribution stays conditionally closed; M002 authorizes no WAL/SQLite topology change. |
+| Planning governance | active | `plans/subsystems/planning-governance-roadmap.md` | M002 closed — review index, ownership, and census reconciliation | M001 closed; M002 closed with five census guards. The subsystem's ongoing obligation — that the review index and the agent workflow index stay aligned with the shipped runtime — is now enforced by guards rather than by review alone. No successor is registered. |
+
+Evidence-based reopening at baseline `e6822d8f78` (2026-10-22): a repository
+investigation found selection-path defects that decide the permissive outcome
+on unknown or malformed input, a durable health subsystem that is implemented,
+documented, and inert in production, a terminal detail sanitizer that bounds
+length without removing secret material, transport input parsing that accepts
+malformed values as valid, duplicated dashboard and CLI derivations that
+disagree, a release version pinned as a literal in two workflows, and an
+architecture review index that undercounts the CLI command tree and the
+migration chain and omits the managed-user subsystem entirely. The Routing
+Selection, Request Admission and Wire, Dashboard, Deployment and Packaging,
+and Planning Governance roadmaps are reopened on that evidence; their closed
+milestone records remain immutable. The Operations CLI roadmap is new, opened
+for `rust/src/operations/` and `rust/src/runtime.rs`, which no other roadmap
+claims as a primary owner. The canonical long-term documents are not touched.
+
+`plans/adrs/ADR-0003-remote-compaction-capability-contract.md` is proposed. It
+records the capability contract for the public `POST /v1/responses/compact`
+endpoint, which is fully implemented, tested, and documented while no provider
+surface advertises the capability, so a real request cannot reach a capable
+upstream. Request Admission and Wire M008 implements that decision and is
+blocked until the ADR is accepted. A bundled provider opt-in is explicitly not
+authorized by it.
 
 ## Dependency-ready implementation plans
 
@@ -77,7 +99,7 @@ No new runtime, schema or performance claim lands with these plans.
 
 | Subsystem | Milestone | Blocker |
 |---|---|---|
-
+| Request admission and wire | M008 — remote compaction capability contract | Hard: `plans/adrs/ADR-0003-remote-compaction-capability-contract.md` accepted. The milestone implements a public compatibility contract and the decision about what that contract is is the ADR. |
 
 Unblock audit (on-prem user access reopening after M012 closure, baseline
 `3c7def1e`): M001–M013 closure records remain immutable; no
@@ -110,6 +132,7 @@ Historical M007 blocker assessment at baseline `7e241ad` (`plans/closure/persist
 
 | Subsystem / plan | Disposition | Evidence |
 |---|---|---|
+| Planning governance M002 — review index, ownership, and census reconciliation | closed — the CLI census was corrected from 34 to 35 (the undocumented `users` variant), the migration chain from v1–v54 to v1–v63, the route topology from 28 to all 69 registered routes, the workflow index from 21 to all 30 top-level runtime modules, and the wire ownership paragraph no longer credits the twelve root facades with kernel semantics; the managed-user subsystem gained a deep dive, a review-index entry, an ownership row, and a workflow-index entry; five read-only census guards were written first, confirmed to fail against the pre-correction tree, and each shown failing on its own deliberate perturbation; zero production Rust/scripts/docs/plans change | `plans/closure/planning-governance/002-status.md` |
 | Shared provider profile contract M002 — OpenCode Go wire hints for the current endpoint table | closed — four placed-but-unhinted models resolve on their reviewed surfaces with `fixed = false` hints; `gemini-4-argon-contributor` and the five unplaced catalog ids asserted unresolved; the six no-longer-placed entries keep their hints with a recorded disposition and reason; dated catalog snapshot plus a drift guard that passes on the committed artifacts and is demonstrated failing on an injected delta; manual, atomic, CI-free snapshot refresh; crate dependency list and sans-I/O property unchanged; no credential, prompt, raw body or cache key in any artifact | `plans/closure/shared-provider-profile-contract/002-status.md`, implementation `ffac612` |
 | On-prem user access M023 — short-window team fairness | closed — opt-in bounded token buckets, pre-body 429/Retry-After, modified-binary ordinary-Linux/NVMe no-rule matrix, and three active-throttle runs; no registered successor or capacity SLA | `plans/closure/on-prem-user-access/023-performance-qualification.md`; implementation `84482e9`, qualification tooling `83c0779` |
 | On-prem concurrency performance M002 — ordinary-server team baseline | closed — 27 passing Q008 runs across nine cells; Q009 hard-budget, provider-fault, user-disable and restart evidence; bounded competing-I/O and SQLite gate diagnostics; measured host-specific sizing guidance; M023 promoted to ready | `plans/closure/on-prem-concurrency-performance/002-status.md`, artifacts under `artifacts/qualification/on-prem-concurrency-performance/ordinary-server/` |

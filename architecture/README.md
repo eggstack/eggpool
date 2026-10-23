@@ -73,6 +73,20 @@ and stable exit-code mapping. Reusable local process workflows are composed by
 `rust/src/operations/lifecycle.rs` over the primitive safety services in
 `process.rs`, `paths.rs`, and `control.rs`.
 
+The optional on-prem user-access tier is owned by `rust/src/identity.rs`,
+`rust/src/web_session.rs`, `rust/src/model_policy.rs`,
+`rust/src/user_budget.rs`, and `rust/src/instance_budget.rs`, with the
+browser login and CSRF boundary in `rust/src/server/auth.rs` and the admin and
+member surfaces in `rust/src/server/dashboard/admin.rs`. It layers local
+downstream identities, revocable per-user agent tokens, opaque browser
+sessions, versioned per-user model authorization, and per-user plus
+instance-global daily/monthly budgets on top of the single-user core. It owns
+no router, no upstream dispatch, and no second database writer:
+`server/middleware.rs` keeps the route-role gate, `coordinator/` keeps
+publication and settlement, and `routing/`, `quota/`, and `health/` keep
+owning upstream accounts, provider quota, and provider health. See
+[On-prem user access](deep-dive-on-prem-user-access.md).
+
 ## Request lifecycle
 
 `rust/src/coordinator/` owns endpoint detection, bounded request preparation,
@@ -118,6 +132,7 @@ the ordinary finite retry, publication, wire, and finalization loop.
 | SQLite and migrations | `rust/src/db/`, `rust/assets/db/migrations/` |
 | Runtime and reload | `rust/src/runtime_lifecycle/`, `rust/src/reload.rs` |
 | HTTP server and control-plane adapters | `rust/src/server/mod.rs`, `rust/src/server/{middleware,health,inference}.rs`, `rust/src/server/dashboard/` (`health.rs` also serves the authenticated compact `GET /api/status` snapshot and the authenticated versioned `GET /api/integrations/v1/profile`, and shares readiness evaluation with `readyz`) |
+| On-prem user access | `rust/src/identity.rs`, `rust/src/web_session.rs`, `rust/src/model_policy.rs`, `rust/src/user_budget.rs`, `rust/src/instance_budget.rs`, `rust/src/server/auth.rs`, `rust/src/server/dashboard/admin.rs` (local identities and credentials, browser sessions and CSRF, per-user model policy, per-user and instance-global budgets, and the admin/member surfaces; the route-role gate stays in `server/middleware.rs` and publication/settlement stay in `coordinator/`) |
 | Operations and local lifecycle | `rust/src/operations/`, especially `config_mutation.rs`, `lifecycle.rs`, `process.rs`, `paths.rs`, `control.rs`, and `status.rs` (compact proxy/provider health aggregation; `runtime.rs` only renders) |
 
 See the corresponding deep dive for details:
@@ -143,6 +158,7 @@ See the corresponding deep dive for details:
 - [Metrics](deep-dive-metrics.md)
 - [Lifecycle](deep-dive-lifecycle.md)
 - [Deployment](deep-dive-deployment.md)
+- [On-prem user access](deep-dive-on-prem-user-access.md)
 
 ## Configuration and deployment
 
