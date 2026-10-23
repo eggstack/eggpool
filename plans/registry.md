@@ -14,8 +14,47 @@ Canonical direction:
 
 Legacy archive (pre-251, immutable, top level): `plans/001-*` through
 `plans/250-*` plus `python_hotpath_dispatch_compression_optimization.md`.
-Most recently closed: Deployment and Packaging M007 (release action-pin enforcement and guard correction; the qualification workflows are SHA-pinned and held to the rule, and the cited glob guard now reads the repository; `plans/closure/deployment-packaging/007-status.md`).
-Previously: Request Admission and Wire M009 (terminal detail redaction coverage correction; the JSON spelling, the standalone scheme words, the URL userinfo authority, and the case-insensitive vendor prefix are covered; `plans/closure/request-admission-wire/009-status.md`), Routing Selection M007 (durable backoff scope and reason correction; the model-scoped row carries the live reason and the model's own rung, and the hydration restores a row by its scope; `plans/closure/routing-selection/007-status.md`), Operations CLI M003 (watchdog start-guard ownership correction; a lock that names no owner is reclaimable while an undeterminable owner is still held, the publisher confirms the path still names its own file, and a vanished lock is free; `plans/closure/operations-cli/003-status.md`), Dashboard M013 (observation projection derivation reconciliation; five duplicated derivations single-sourced, no published field name or shape changed; `plans/closure/dashboard/013-status.md`), Persistence M011 (post-M010 roadmap and documentation reconciliation; the remaining detailed milestone bodies now read closed; `plans/closure/persistence/011-status.md`), Planning Governance M002 (review index, ownership, and census reconciliation; the CLI, migration, route, and module censuses are corrected and guarded; `plans/closure/planning-governance/002-status.md`), and On-prem Concurrency Performance M001 (conditionally closed after three paired physical Pi 5/MMC and tmpfs runs; durable publication/SQLite/storage attribution; remaining controls in `plans/closure/on-prem-concurrency-performance/001-status.md`).
+Most recently closed: Request Admission and Wire M008 (remote compaction capability
+contract; a compact request against an installation with no eligible provider surface
+fails with a typed capability outcome and consumes no provider attempt;
+`plans/closure/request-admission-wire/008-status.md`),
+Operations CLI M003 (watchdog start-guard ownership
+correction; a lock that names no owner is reclaimable while an undeterminable
+owner is still held, the publisher confirms the path still names its own file,
+and a vanished lock is free; `plans/closure/operations-cli/003-status.md`),
+Routing Selection M007 (durable backoff scope and reason correction; the
+model-scoped row carries the live reason and the model's own rung, and the
+hydration restores a row by its scope; `plans/closure/routing-selection/007-status.md`),
+Request Admission and Wire M009 (terminal detail redaction coverage
+correction; the JSON spelling, the standalone scheme words, the URL userinfo
+authority, and the case-insensitive vendor prefix are covered;
+`plans/closure/request-admission-wire/009-status.md`),
+and Deployment and Packaging M007 (release action-pin enforcement and guard
+correction; the qualification workflows are SHA-pinned and held to the rule,
+and the cited glob guard now reads the repository;
+`plans/closure/deployment-packaging/007-status.md`).
+Previously: Operations CLI M002 (local process lifecycle safety; an
+undeterminable lock owner is a held lock whose file is left in place, nine
+deadline sites go through one checked helper returning a typed error, and
+non-finite seconds are rejected instead of coercing; `plans/closure/operations-cli/002-status.md`),
+Routing Selection M006 (backoff policy adoption and health-reason
+vocabulary unification; the live path now applies the existing bounded policy
+and writes one typed reason vocabulary; `plans/closure/routing-selection/006-status.md`),
+Deployment and Packaging M006 (release artifact version derivation and
+repository artifact hygiene; the qualification workflows derive the version
+and the tracked/ignored artifact conflict is reconciled; `plans/closure/deployment-packaging/006-status.md`),
+Planning Governance M002 (review index, ownership, and census reconciliation;
+the CLI, migration, route, and module censuses are corrected and guarded;
+`plans/closure/planning-governance/002-status.md`),
+and Persistence M011 (post-M010 roadmap and documentation reconciliation;
+the remaining detailed milestone bodies now read closed; `plans/closure/persistence/011-status.md`).
+Earlier: Dashboard M013 (observation projection derivation
+reconciliation; five duplicated derivations single-sourced, no published
+field name or shape changed; `plans/closure/dashboard/013-status.md`).
+Previously: On-prem Concurrency Performance M001 (conditionally
+closed after three paired physical Pi 5/MMC and tmpfs runs; durable
+publication/SQLite/storage attribution; remaining controls in
+`plans/closure/on-prem-concurrency-performance/001-status.md`).
 Legacy archive latest: Plan 250
 (EggServe 0.3.0 direct-Tower migration, `7879cbf9`). Plans 244–245, 215–220,
 241 remain historical per their own closure passes; the `146-*` duplicate
@@ -59,7 +98,7 @@ No new runtime, schema or performance claim lands with these plans.
 | On-prem user access | closed | `plans/subsystems/on-prem-user-access-roadmap.md` | M023 closed — short-window fairness controls | M017–M023 complete. Modified-binary ordinary-Linux/NVMe no-rule and active-throttle qualification is recorded; no successor is registered. The subsystem's documentation coverage gap is tracked by Planning Governance M002, not here. |
 | On-prem concurrency performance | active | `plans/subsystems/on-prem-concurrency-performance-roadmap.md` | M002 closed — ordinary-server synthetic baseline recorded | M001's Pi/microSD solo tail attribution stays conditionally closed; M002 authorizes no WAL/SQLite topology change. |
 | Operations CLI | active | `plans/subsystems/operations-cli-roadmap.md` | M003 closed — watchdog start-guard ownership correction | New subsystem roadmap opened at baseline `e6822d8f78` for `rust/src/operations/` and `rust/src/runtime.rs`, which no other roadmap claims as a primary owner. M001 is closed and M002 is closed through M003; no successor is registered in this subsystem. |
-| Request admission and wire | active | `plans/subsystems/request-admission-wire-roadmap.md` | M008 closing — remote compaction capability contract | ADR-0003 accepted; the capability outcome, the capability failure contract, the bundled-profile guard, and the API reference change are implemented; closure evidence is being gathered. |
+| Request admission and wire | active | `plans/subsystems/request-admission-wire-roadmap.md` | M008 closed — remote compaction capability contract | ADR-0003 accepted; M001–M007 and M009 remain closed; M008 is closed; no successor is registered in this subsystem. |
 | Planning governance | active | `plans/subsystems/planning-governance-roadmap.md` | M002 closed — review index, ownership, and census reconciliation | M001 closed; M002 closed with five census guards. The subsystem's ongoing obligation — that the review index and the agent workflow index stay aligned with the shipped runtime — is now enforced by guards rather than by review alone. No successor is registered. |
 
 Evidence-based reopening at baseline `e6822d8f78` (2026-10-22): a repository
@@ -77,13 +116,14 @@ milestone records remain immutable. The Operations CLI roadmap is new, opened
 for `rust/src/operations/` and `rust/src/runtime.rs`, which no other roadmap
 claims as a primary owner. The canonical long-term documents are not touched.
 
-`plans/adrs/ADR-0003-remote-compaction-capability-contract.md` is proposed. It
+`plans/adrs/ADR-0003-remote-compaction-capability-contract.md` is accepted. It
 records the capability contract for the public `POST /v1/responses/compact`
 endpoint, which is fully implemented, tested, and documented while no provider
 surface advertises the capability, so a real request cannot reach a capable
 upstream. Request Admission and Wire M008 implements that decision and is
-blocked until the ADR is accepted. A bundled provider opt-in is explicitly not
-authorized by it.
+closed; a compact request that finds no eligible provider surface now fails
+with a typed capability outcome instead of an ordinary selection failure. A
+bundled provider opt-in is explicitly not authorized by it.
 
 ## Dependency-ready implementation plans
 
@@ -94,7 +134,6 @@ authorized by it.
 
 | Subsystem | Milestone | Status | Implementation plan | Handoff note |
 |---|---|---|---|---|
-| Request admission and wire | M008 — remote compaction capability contract | closing | `plans/implementation/request-admission-wire/008-remote-compaction-capability-contract.md` | ADR-0003 accepted; the implementation landed and the closure evidence is being gathered. |
 
 
 ## Blocked work
@@ -132,6 +171,7 @@ Historical M007 blocker assessment at baseline `7e241ad` (`plans/closure/persist
 ## Recently closed
 
 | Subsystem / plan | Disposition | Evidence |
+| Request admission and wire M008 — remote compaction capability contract | closed — a compact request against an installation with no eligible provider surface fails with a typed capability outcome and consumes no provider attempt; the ordinary selection failure stays distinguishable; the bundled profile advertises no capability; nine new tests, each guard shown failing on a deliberate revert | `plans/closure/request-admission-wire/008-status.md` |
 |---|---|---|
 | Operations CLI M003 — watchdog start-guard ownership correction | closed — a lock that names no owner is reclaimable, so a publication that never completed no longer wedges the watchdog forever, while a lock whose owner cannot be determined is still held and left in place; the reclaim re-reads the moved file and restores a lock that gained an owner, and the publisher confirms the path still names its own file before it claims ownership; a lock that vanishes during the removal decision is free rather than reported as held; the file identity outside unix now distinguishes two files of the same length; 9 tests in the lock target, each guard shown failing on a deliberate revert; the lock file format, the PID file behaviour, and the CLI contract are unchanged | `plans/closure/operations-cli/003-status.md` |
 | Routing Selection M007 — durable backoff scope and reason correction | closed — the model-scoped durable backoff row records the reason the live path classified instead of a fixed `model_unavailable`, so two unrelated failure classes no longer collapse onto one persisted reason, and it carries the model's own escalation rung instead of the account's, so a run of account-scoped 408 or 5xx failures no longer inflates the model-absence ladder a restart restores; the hydration restores a durable row by its scope rather than by its reason value; the model's counter gained a read-only accessor and the newly-live hydration diagnostic now honours the tracing subscriber; the backoff policy table is unchanged; three new durable-effects tests, each guard shown failing on a deliberate revert | `plans/closure/routing-selection/007-status.md` |
