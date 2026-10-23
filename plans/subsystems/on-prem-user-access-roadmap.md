@@ -1,6 +1,6 @@
 # On-Prem User Access Roadmap
 
-Status: active
+Status: closed
 
 Long-term references:
 
@@ -357,9 +357,9 @@ synthetic; it establishes no universal capacity or latency guarantee.
 Source: `plans/implementation/on-prem-user-access/023-short-window-fairness-controls.md`.
 Final performance evidence: `plans/closure/on-prem-user-access/023-performance-qualification.md`.
 
-#### M024 — Browser session CSRF delivery and member account surface corrective (ready)
+#### M024 — Browser session CSRF delivery and member account surface corrective (closed)
 
-Class: invariant. Ready. `plans/adrs/ADR-0004-browser-session-csrf-delivery-and-account-scoped-sign-in-throttling.md`
+Class: invariant. Closed. `plans/adrs/ADR-0004-browser-session-csrf-delivery-and-account-scoped-sign-in-throttling.md`
 was accepted on 2026-10-23, and M024 implements that decision.
 The CSRF cookie is currently delivered on a strictly narrower set of requests
 than the session cookie, so an operator who reaches an administrative page by
@@ -375,6 +375,25 @@ presentation, and the navigation without weakening the server-side origin
 check, the double-submit token requirement, the transport gate, or the
 disjointness of the member and administrator surfaces.
 Source: `plans/implementation/on-prem-user-access/024-browser-session-csrf-delivery-and-member-account-surface-corrective.md`.
+
+Outcome: the CSRF cookie is delivered on exactly the requests the session
+cookie is delivered on, the sign-in throttle bounds an account rather than an
+(account, source address) pair, one document builder renders every sign-in and
+member surface, every sign-in response is `no-store`, and a member has a
+landing page that links the member surface. The server-side origin check, the
+double-submit token requirement, the transport gate, and the disjointness of
+the member and administrator surfaces are unchanged. No schema, configuration,
+dependency, or published API change. Closure:
+`plans/closure/on-prem-user-access/024-status.md`; implementation `c2ca0a6e`;
+the ADR acceptance `7aa5d2d9`.
+
+Two findings are recorded against the subsystem rather than carried by a new
+milestone, because neither is a defect in the corrected behavior. The account
+lockout stays a hard refusal, so a correct password does not break an active
+lockout; that is the intended behavior of an account-scoped limiter and the
+consequence is recorded in ADR-0004. The on-prem browser reference artifact
+records the member refusal as a bare string and has to be regenerated on
+hardware, because the recorded evidence must come from a real run.
 
 ### Post-merge dependency and hardware policy
 
@@ -396,8 +415,8 @@ Source: `plans/implementation/on-prem-user-access/024-browser-session-csrf-deliv
   after core operability closure.
 - M024 has no hard dependency on any earlier milestone. It depended on the
   acceptance of ADR-0004, which the project maintainers accepted on 2026-10-23,
-  and on nothing else, and it is independent of the dashboard corrective
-  milestone M014, whose file ownership is disjoint.
+  and on nothing else, and it was independent of the dashboard corrective
+  milestone M014, whose file ownership was disjoint. M024 is closed.
 
 ## 8. Cross-cutting requirements
 
@@ -468,6 +487,13 @@ credential model that those milestones settled. It closes only when the CSRF
 delivery and the sign-in throttle are corrected per ADR-0004, and the member and
 sign-in surfaces are usable. It may close **again** on that evidence.
 
+It closed again on that evidence. M024 is closed, the CSRF delivery and the
+sign-in throttle are corrected per ADR-0004, and the member and sign-in
+surfaces are usable, so the subsystem closes. The two findings recorded
+against M024 are consequences the maintainers accepted — the account lockout
+stays a hard refusal, and the on-prem browser reference artifact has to be
+regenerated on hardware — and neither reopens the subsystem.
+
 ## 12. Milestone status
 
 | Milestone | Status | Implementation plan | Closure record | Blockers |
@@ -495,4 +521,4 @@ sign-in surfaces are usable. It may close **again** on that evidence.
 | M021 | closed | `plans/implementation/on-prem-user-access/021-default-member-policy-provisioning.md` | `plans/closure/on-prem-user-access/021-status.md` | Transactional future-only profile default; CLI/browser and no-profile journeys, migration, policy and budget boundaries verified. |
 | M022 | closed | `plans/implementation/on-prem-user-access/022-hard-budget-agent-compatibility.md` | `plans/closure/on-prem-user-access/022-status.md` | Captured Codex/OpenCode output-cap behavior; preserved hard proof-or-reject semantics and added actionable error codes. |
 | M023 | closed | `plans/implementation/on-prem-user-access/023-short-window-fairness-controls.md` | `plans/closure/on-prem-user-access/023-performance-qualification.md` | Modified-binary no-rule matrix and active-throttle measurements pass on ordinary Linux/NVMe. No successor is registered; no universal capacity claim. |
-| M024 | ready | `plans/implementation/on-prem-user-access/024-browser-session-csrf-delivery-and-member-account-surface-corrective.md` | — | ADR-0004 accepted 2026-10-23. No hard dependency on any earlier milestone. |
+| M024 | closed | `plans/implementation/on-prem-user-access/024-browser-session-csrf-delivery-and-member-account-surface-corrective.md` | `plans/closure/on-prem-user-access/024-status.md` | ADR-0004 accepted 2026-10-23. No hard dependency on any earlier milestone. |
