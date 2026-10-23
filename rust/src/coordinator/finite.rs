@@ -209,6 +209,8 @@ pub enum FiniteCoordinatorError {
     Admission(#[from] AdmissionError),
     #[error("no eligible account was available for finite request")]
     NoEligibleRoute,
+    #[error("remote compaction is not supported by any eligible provider wire surface")]
+    RemoteCompactionUnsupported,
     #[error("finite request selected unknown provider {provider_id:?}")]
     MissingProvider { provider_id: String },
     #[error("finite request has no configured wire profile for provider {provider_id:?}")]
@@ -225,6 +227,40 @@ pub enum FiniteCoordinatorError {
     Effects(String),
     #[error("finite request facts do not match admitted model or surface")]
     InvalidFacts,
+}
+
+/// Whether the generation exposes at least one provider wire surface that
+/// natively advertises remote compaction v1.
+///
+/// The compact operation is finite-only and is forwarded natively: a provider
+/// qualifies only when it owns an OpenAI Responses wire profile *and* that
+/// surface's operator facts advertise `supports_remote_compaction_v1`
+/// together with a `compact_path_template`. The predicate mirrors the
+/// per-account filter used during selection exactly, so the installation-level
+/// answer and the route-level answer can never disagree.
+///
+/// A generation with no provider configuration at all is not "capable" and not
+/// "incapable": there is no surface on which an operator could advertise the
+/// capability, so the caller reports the ordinary selection failure instead.
+pub fn remote_compaction_capable(
+    providers: &BTreeMap<String, ProviderConfig>,
+    provider_profiles: &BTreeMap<String, Vec<ConfiguredWireProfile>>,
+) -> bool {
+    providers.iter().any(|(provider_id, provider)| {
+        let Some(profiles) = provider_profiles.get(provider_id) else {
+            return false;
+        };
+        profiles.iter().any(|profile| {
+            profile.definition.surface == crate::wire::WireSurface::OpenaiResponses
+                && provider
+                    .wire_surfaces
+                    .get(profile.definition.surface.as_str())
+                    .is_some_and(|surface| {
+                        crate::wire::compaction_capabilities_from_surface_config(surface)
+                            .native_v1_supported()
+                    })
+        })
+    })
 }
 
 /// Request input for C007.  Admission is performed once here; the result is
@@ -627,6 +663,24 @@ impl FiniteCoordinator {
         let mut last_upstream: Option<LastUpstream> = None;
         let request_start = Instant::now();
         let request_bytes = request.raw_body.len();
+        // Compact operations are forwarded natively and only to a provider
+        // surface that advertises the capability. The installation-level check
+        // runs before any selection, so a generation with no capable surface
+        // fails with the typed capability outcome instead of an ordinary
+        // selection failure, and it consumes no claim, no provider attempt, and
+        // no quota reservation.
+        let is_compact = request.operation == super::endpoints::InferenceOperation::Compact;
+        if is_compact
+            && !self.providers.is_empty()
+            && !remote_compaction_capable(&self.providers, &self.provider_profiles)
+        {
+            return Err(FiniteCoordinatorError::RemoteCompactionUnsupported);
+        }
+        // A route-level capability miss is recorded when an otherwise eligible
+        // account turns out to belong to a provider without the capability.
+        // The ordinary selection failure would then be indistinguishable from
+        // a missing account, so the capability outcome reports it instead.
+        let mut compact_capability_missed = false;
 
         loop {
             let claim = if let Some(account_name) = preferred_account.as_deref() {
@@ -713,7 +767,19 @@ impl FiniteCoordinator {
                             ..FinalizationData::default()
                         },
                     )),
-                    None => Err(FiniteCoordinatorError::NoEligibleRoute),
+                    // No dispatch ever reached an upstream, so the failure is
+                    // a selection failure. A recorded capability miss means the
+                    // accounts that were reachable could not have served the
+                    // operation: report the typed capability outcome instead
+                    // of the ordinary no-eligible-route outcome, so an
+                    // operator can tell the two apart.
+                    None => {
+                        if compact_capability_missed {
+                            Err(FiniteCoordinatorError::RemoteCompactionUnsupported)
+                        } else {
+                            Err(FiniteCoordinatorError::NoEligibleRoute)
+                        }
+                    }
                 };
             };
 
@@ -734,9 +800,8 @@ impl FiniteCoordinator {
             // Compact operations filter to natively compact-capable Responses
             // surfaces before submission. Accounts without a qualified compact
             // target are skipped without upstream I/O; when none remain the
-            // loop converges to no-eligible-route rather than a lossy
-            // translated compaction.
-            let is_compact = request.operation == super::endpoints::InferenceOperation::Compact;
+            // loop converges to the typed capability outcome rather than a
+            // lossy translated compaction.
             let candidates = if is_compact {
                 let compact_profiles: Vec<_> = profiles
                     .iter()
@@ -755,6 +820,10 @@ impl FiniteCoordinator {
                     .cloned()
                     .collect();
                 if compact_profiles.is_empty() {
+                    // The account was routable but its provider cannot serve
+                    // the operation. The claim is rolled back, so no attempt,
+                    // reservation, or attribution row is created.
+                    compact_capability_missed = true;
                     claim.rollback_claim()?;
                     excluded_accounts.insert(claim.account_name().to_owned());
                     preferred_account = None;
@@ -1035,7 +1104,7 @@ impl FiniteCoordinator {
                     }
                     let (effects, first) = self.decide(&observation)?;
                     if first {
-                        self.apply_effects(&published.claim, &effects);
+                        self.apply_effects(&published.claim, &effects).await;
                     }
                     if self.should_retry(&effects) {
                         self.cleanup_failed_attempt(
@@ -1125,7 +1194,7 @@ impl FiniteCoordinator {
                     observation.error_class = Some(error.diagnostic_class().into());
                     let (effects, first) = self.decide(&observation)?;
                     if first {
-                        self.apply_effects(&published.claim, &effects);
+                        self.apply_effects(&published.claim, &effects).await;
                     }
                     if self.should_retry(&effects) {
                         self.cleanup_failed_attempt(
@@ -1220,7 +1289,7 @@ impl FiniteCoordinator {
                         );
                         let (effects, first) = self.decide(&observation)?;
                         if first {
-                            self.apply_effects(&published.claim, &effects);
+                            self.apply_effects(&published.claim, &effects).await;
                         }
                         if self.should_retry(&effects) {
                             self.cleanup_failed_attempt(
@@ -1340,7 +1409,7 @@ impl FiniteCoordinator {
                             );
                         let (effects, first) = self.decide(&observation)?;
                         if first {
-                            self.apply_effects(&published.claim, &effects);
+                            self.apply_effects(&published.claim, &effects).await;
                         }
                         if effects.wire_effect == "reject_candidate" {
                             self.wire_resolver.reject(
@@ -1438,7 +1507,7 @@ impl FiniteCoordinator {
                         );
                         let (effects, first) = self.decide(&observation)?;
                         if first {
-                            self.apply_effects(&published.claim, &effects);
+                            self.apply_effects(&published.claim, &effects).await;
                         }
                         // A 2xx compact body that fails replacement-history
                         // validation is terminal and never replayed; a lossy
@@ -1489,7 +1558,7 @@ impl FiniteCoordinator {
                     );
                     let (effects, first) = self.decide(&observation)?;
                     if first {
-                        self.apply_effects(&published.claim, &effects);
+                        self.apply_effects(&published.claim, &effects).await;
                     }
                     // M6 client-surface encoding failed after a decodable upstream
                     // response. The upstream payload arrived but could not be
@@ -1592,7 +1661,7 @@ impl FiniteCoordinator {
                         ));
                     let (effects, first) = self.decide(&observation)?;
                     if first {
-                        self.apply_effects(&published.claim, &effects);
+                        self.apply_effects(&published.claim, &effects).await;
                     }
                     if effects.wire_effect == "reject_candidate" {
                         self.wire_resolver.reject(
@@ -1705,7 +1774,7 @@ impl FiniteCoordinator {
                     );
                     let (effects, first) = self.decide(&observation)?;
                     if first {
-                        self.apply_effects(&published.claim, &effects);
+                        self.apply_effects(&published.claim, &effects).await;
                     }
                     // A 2xx body that M6 cannot decode as the selected
                     // surface is upstream garbage, not a client error.
@@ -1821,16 +1890,18 @@ impl FiniteCoordinator {
             .map_err(|error| FiniteCoordinatorError::Effects(error.to_string()))
     }
 
-    fn apply_effects(&self, claim: &SelectionClaim, effects: &FailureEffects) {
-        self.router.apply_failure_effects(
-            claim,
-            effects.apply_account_penalty,
-            effects.quarantine_model,
-            &effects.model_effect,
-            effects.backoff_reason.as_deref(),
-            effects.backoff_until,
-            effects.circuit_penalty,
-        );
+    async fn apply_effects(&self, claim: &SelectionClaim, effects: &FailureEffects) {
+        self.router
+            .apply_failure_effects(
+                claim,
+                effects.apply_account_penalty,
+                effects.quarantine_model,
+                &effects.model_effect,
+                effects.backoff_reason.as_deref(),
+                effects.backoff_until,
+                effects.circuit_penalty,
+            )
+            .await;
     }
 
     fn should_retry(&self, effects: &FailureEffects) -> bool {

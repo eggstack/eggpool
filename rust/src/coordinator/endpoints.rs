@@ -36,7 +36,7 @@ use crate::{
     catalog::{CatalogService, ModelCatalogCache, ModelInput, ProtocolResolutionStatus},
     config::{Config, ProviderConfig},
     db::{Account, Database},
-    health::HealthManager,
+    health::{AccountBackoffRepository, HealthManager, ModelQuarantine, ModelQuarantineRepository},
     model_router::{
         AffinitySelection, CompiledModelRouter, ModelRouterAffinity, ModelRouterRegistry,
     },
@@ -47,7 +47,7 @@ use crate::{
         admit_parsed_request, canonical_request_from_object, parse_request_body,
         validate_responses_stateless_policy,
     },
-    routing::{EligibilityPolicy, RoutingRouter},
+    routing::{DurableHealth, EligibilityPolicy, RoutingRouter},
     wire::{
         ConfiguredWireProfile, WireCodecId, WireProfileDefinition, WireProfileRegistry,
         WireRuntime, WireSurface, configured_profiles, ir::ClientSurface,
@@ -105,6 +105,10 @@ pub enum EndpointError {
     Admission,
     #[error("No eligible account was available")]
     NoEligibleRoute,
+    #[error(
+        "Remote compaction is not supported by any eligible provider surface; set supports_remote_compaction_v1 and compact_path_template on the provider wire surface"
+    )]
+    RemoteCompactionUnsupported,
     #[error("Unknown provider {provider_id:?}")]
     MissingProvider { provider_id: String },
     #[error("No configured wire profile for provider {provider_id:?}")]
@@ -189,6 +193,11 @@ impl EndpointError {
             Self::ModelForbidden => StatusCode::FORBIDDEN,
             Self::BudgetExceeded | Self::BudgetNotEnforceable => StatusCode::TOO_MANY_REQUESTS,
             Self::NoEligibleRoute | Self::Attempt => StatusCode::SERVICE_UNAVAILABLE,
+            // The endpoint exists and is implemented, but no eligible provider
+            // surface advertises the capability it needs. That is a missing
+            // capability, not a temporarily unavailable route, so it carries
+            // its own status instead of the generic 503.
+            Self::RemoteCompactionUnsupported => StatusCode::NOT_IMPLEMENTED,
             Self::Claim | Self::Finalization => StatusCode::INTERNAL_SERVER_ERROR,
             Self::MissingProvider { .. } | Self::MissingWireProfile { .. } | Self::Internal => {
                 StatusCode::INTERNAL_SERVER_ERROR
@@ -220,18 +229,25 @@ pub fn endpoint_error_body(surface: ClientSurface, message: &str) -> Vec<u8> {
     body.into_iter().take(MAX_CLIENT_ERROR_BYTES).collect()
 }
 
-/// Render stable machine-readable codes for budget decisions while keeping
-/// the generic envelope used by other endpoint errors.
+/// Render stable machine-readable codes for budget and capability decisions
+/// while keeping the generic envelope used by other endpoint errors.
 pub fn endpoint_error_body_for(surface: ClientSurface, error: &EndpointError) -> Vec<u8> {
-    let budget_code = match error {
+    let stable_code = match error {
         EndpointError::BudgetExceeded => Some(("budget_exceeded", "User budget limit reached")),
         EndpointError::BudgetNotEnforceable => Some((
             "hard_budget_not_enforceable",
             "Hard budget cannot be enforced: include a positive output cap supported by this API, and configure an operator tariff when a hard USD limit applies",
         )),
+        // The capability message names only the operator-facing configuration
+        // keys. It carries no account name, credential material, provider
+        // secret configuration, or request body material.
+        EndpointError::RemoteCompactionUnsupported => Some((
+            "remote_compaction_unsupported",
+            "Remote compaction is not supported by any eligible provider surface; set supports_remote_compaction_v1 and compact_path_template on the provider wire surface",
+        )),
         _ => None,
     };
-    let Some((code, message)) = budget_code else {
+    let Some((code, message)) = stable_code else {
         return endpoint_error_body(surface, &error.to_string());
     };
     let value = if surface == ClientSurface::Messages {
@@ -573,6 +589,7 @@ fn map_finite_error(error: super::FiniteCoordinatorError) -> EndpointError {
     match error {
         Finite::Admission(_) | Finite::InvalidFacts => EndpointError::Admission,
         Finite::NoEligibleRoute => EndpointError::NoEligibleRoute,
+        Finite::RemoteCompactionUnsupported => EndpointError::RemoteCompactionUnsupported,
         Finite::MissingProvider { provider_id } => EndpointError::MissingProvider { provider_id },
         Finite::MissingWireProfile { provider_id } => {
             EndpointError::MissingWireProfile { provider_id }
@@ -1361,11 +1378,13 @@ pub(crate) async fn build_inference_state_with_shared_and_accounts(
     let mut quotas = Vec::new();
     // The health gate resolves accounts by name and treats an unregistered
     // account as unhealthy, so every routable account is registered here. The
-    // router is otherwise constructed without a manager and no cooldown,
-    // circuit-breaker, or model-withdrawal effect ever runs in production.
+    // manager is handed to the router below, so cooldowns, circuit-breaker
+    // transitions, and model withdrawal do run in production.
     let health = HealthManager::new();
+    let mut account_names = BTreeMap::new();
     for account in registry.all() {
         health.register_account(account.account_id, &account.account_name);
+        account_names.insert(account.account_id, account.account_name.clone());
         let mut quota = AccountQuota::new(account.account_name.clone());
         // The operator-configured weight and window offsets are routing state,
         // not decoration: without them `utilization` cannot scale capacity by
@@ -1387,13 +1406,38 @@ pub(crate) async fn build_inference_state_with_shared_and_accounts(
         credentials.clone(),
         Arc::clone(&shared_catalog),
     ));
+    // Durable health state is hydrated before the generation is published, so
+    // a restart observes the backoffs and quarantines the previous process
+    // decided instead of routing as if nothing had happened. Hydration is
+    // bounded and skips a row that names an account this generation does not
+    // know; a repository failure that cannot be bounded fails the generation
+    // closed rather than publishing partially hydrated health.
+    let backoff_repository = AccountBackoffRepository::new(database);
+    let quarantine_repository = ModelQuarantineRepository::new(database);
+    let quarantine = ModelQuarantine::default();
+    let wall_now = crate::routing::epoch_seconds() as f64;
+    crate::health::hydrate_generation_health(
+        &backoff_repository,
+        &quarantine_repository,
+        &health,
+        &quarantine,
+        &account_names,
+        wall_now,
+    )
+    .await
+    .map_err(|error| format!("durable health hydration failed: {error}"))?;
     let router = RoutingRouter::with_shared_catalog(
         registry,
         shared_catalog,
         estimator,
         Some(health),
         EligibilityPolicy::from_config(config),
-    );
+    )
+    .with_quarantine(quarantine)
+    .with_durable_health(DurableHealth::new(
+        backoff_repository,
+        quarantine_repository,
+    ));
     let wire = WireRuntime::embedded().map_err(|error| format!("wire runtime failed: {error}"))?;
     let attempts = AttemptBuilder::new(client_pool, wire.clone());
     let publication = PublicationService::new(database.clone());

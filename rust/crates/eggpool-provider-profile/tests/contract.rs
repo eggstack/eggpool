@@ -181,6 +181,39 @@ fn embedded_data_has_no_field_that_could_carry_a_secret() {
     }
 }
 
+/// The bundled provider-profile asset must not advertise remote compaction.
+///
+/// ADR-0003 makes the remote-compaction capability an operator-configured
+/// provider wire surface fact and explicitly defers any bundled opt-in to a
+/// separate, evidence-gated change. A bundled claim needs first-party provider
+/// documentation *and* a runtime guarantee that the upstream response shape
+/// matches what the compact endpoint expects; neither exists, so the shared
+/// contract carries no compaction key at all.
+#[test]
+fn embedded_data_advertises_no_remote_compaction_capability() {
+    let text = eggpool_provider_profile::EMBEDDED_PROVIDER_PROFILES_TOML;
+    for key in ["supports_remote_compaction_v1", "compact_path_template"] {
+        assert!(
+            !contains_key(text, key),
+            "the bundled provider-profile asset must not declare `{key}`; a remote compaction opt-in needs first-party evidence and its own approved change"
+        );
+    }
+    for profile in registry().profiles() {
+        for (surface, entry) in &profile.wire_surfaces {
+            assert!(
+                !entry.supports_remote_compaction_v1,
+                "{} {surface:?} must not advertise remote compaction v1",
+                profile.id
+            );
+            assert!(
+                entry.compact_path_template.is_none(),
+                "{} {surface:?} must not declare a compact path template",
+                profile.id
+            );
+        }
+    }
+}
+
 #[test]
 fn composition_invariants_hold_for_every_declared_surface() {
     for profile in registry().profiles() {

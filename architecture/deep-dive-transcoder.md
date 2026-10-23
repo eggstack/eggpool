@@ -141,6 +141,29 @@ is ever converted to user text. Production compact execution takes the private s
 `CompactAdmittedRequest` (`execute_compact_admitted`) so the preserved JSON tree is never duplicated, while
 public `FiniteRequest` constructors stay unchanged.
 
+**Capability contract.** ADR-0003 makes the remote-compaction capability an operator-configured provider
+wire surface fact and keeps it out of the bundled provider-profile asset. `remote_compaction_capable`
+(`coordinator::finite`) derives the installation-level answer from the same operator facts the per-account
+selection filter uses — an OpenAI Responses wire profile plus `supports_remote_compaction_v1` together with a
+`compact_path_template` — so the two answers cannot disagree. The compact path checks it before selection: a
+generation with provider configuration but no capable surface fails with `FiniteCoordinatorError::RemoteCompactionUnsupported`,
+which the endpoint maps to `EndpointError::RemoteCompactionUnsupported` (`501 Not Implemented`, error code
+`remote_compaction_unsupported`). The check runs before any claim, provider attempt, quota reservation, or
+durable attribution row exists, and a route-level capability miss (an eligible account whose provider lacks the
+capability) reports the same typed outcome so an operator can tell a missing capability from a missing account.
+The ordinary no-eligible-account failure keeps its `503` status and generic envelope. The capability body names
+only the two operator-facing configuration keys; it carries no account name, credential material, provider secret
+configuration, or request body material. No bundled provider profile advertises the capability, and the
+provider-profile contract test asserts that the asset declares neither compaction key.
+
+**Finite-only asymmetry.** The finite coordinator's response context resolves the compaction capabilities from
+the provider-owned `wire_surfaces` table so trigger validation and compact decoding observe the same operator
+facts as attempt preparation. The streaming coordinator's response context deliberately does not: the compact
+operation is finite-only, so there is no compact decoding for the streaming path to perform. The asymmetry is
+intentional and must not be "corrected" into a shared builder. The shared attempt builder still attaches the
+selected surface's capabilities while preparing a request, because the v2 `compaction_trigger` validation reads
+them on both the finite and the streaming Responses path; that is a different contract and is unchanged.
+
 ## Streaming: observe-and-forward versus synthesis
 
 Responses-to-Responses streaming uses observe-and-forward: the bounded `SseDecoder` frames each event within

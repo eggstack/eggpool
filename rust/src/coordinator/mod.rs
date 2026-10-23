@@ -33,7 +33,7 @@ pub use finalization::{
 pub use finite::{
     ClientResponseHeaders, DownstreamResult, FiniteClientResponse, FiniteCoordinator,
     FiniteCoordinatorError, FiniteExecution, FiniteRequest, ResponseHandoffState,
-    filter_response_headers,
+    filter_response_headers, remote_compaction_capable,
 };
 
 pub use publication::{

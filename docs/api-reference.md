@@ -10,7 +10,7 @@ EggPool exposes OpenAI Chat Completions- and Anthropic Messages-compatible paths
 | `GET` | `/api/user-budget` | Authenticated user rules and bounded usage; admins may add `?user_id=<id>` to inspect one user |
 | `POST` | `/v1/chat/completions` | OpenAI Chat Completions-compatible requests |
 | `POST` | `/v1/responses` | Stateless OpenAI Responses-compatible requests; canonical adaptation is allowed to eligible upstream surfaces |
-| `POST` | `/v1/responses/compact` | Bounded remote-compaction operation returning replacement history/checkpoint material; native compact-capable upstreams only, otherwise rejected before submission |
+| `POST` | `/v1/responses/compact` | Bounded remote-compaction operation returning replacement history/checkpoint material; native compact-capable upstreams only, otherwise rejected before submission with `501` and the code `remote_compaction_unsupported` |
 | `POST` | `/v1/messages` | Anthropic Messages-compatible requests |
 
 The compact endpoint is a distinct operation, not an ordinary Responses
@@ -21,8 +21,24 @@ whose provider surface opts in with `supports_remote_compaction_v1 = true`
 plus a `compact_path_template` are eligible; without a qualified native
 target the request fails before upstream submission. There is no translated
 compaction fallback. Current Codex custom providers default to local
-compaction, so remote compaction is opt-in forward compatibility rather than
-a requirement for normal Codex operation. See
+compaction, so remote compaction is not required for normal Codex operation.
+
+**Capability requirement.** Remote compaction is an operator-configured
+provider wire surface fact, not a bundled one. A provider qualifies only when
+its `wire_surfaces` entry for `openai_responses` sets
+`supports_remote_compaction_v1 = true` and supplies a `compact_path_template`.
+No bundled provider profile advertises the capability.
+
+**Failure outcomes.** A compact request against an installation with no
+eligible provider surface advertising the capability fails with
+`501 Not Implemented` and the error code `remote_compaction_unsupported`. That
+body names only the configuration keys an operator must set; it carries no
+account name, credential material, provider secret configuration, or request
+body material. A capability failure consumes no provider attempt, no quota
+reservation, and no durable attribution row. A compact request that fails for
+an unrelated reason — for example, no eligible account serves the requested
+model — keeps the ordinary `503 Service Unavailable` selection failure, so a
+missing capability is distinguishable from a missing account. See
 [Stateless Responses](stateless-responses.md).
 
 `/v1/models` remains the standard OpenAI-compatible model-list contract. It is
@@ -67,7 +83,7 @@ metric label, or forwarded upstream. See [Model routing](model-routing.md).
 | Method | Path | Auth | Description |
 |--------|------|------|-------------|
 | `GET` | `/api/stats/summary` | Dashboard-gated (`?period=1h\|24h\|7d\|30d`) | Aggregate request stats (counts, tokens, cost, latency) |
-| `GET` | `/api/stats/transcoding` | Dashboard-gated (`?period=1h\|24h\|7d\|30d`) | Native/transcoded request counts and bounded loss-warning summary |
+| `GET` | `/api/stats/transcoding` | Dashboard-gated (`?period=1h\|24h\|7d\|30d`) | Native/transcoded request counts, the `client→upstream` breakdown, and a bounded loss-warning summary |
 | `GET` | `/api/stats/cache-observability` | Dashboard-gated (`?period=1h\|24h\|7d\|30d`) | Cache-counter coverage and known-only token ratios |
 | `GET` | `/api/stats/canonical-request-segmentation` | Dashboard-gated (`?period=1h\|24h\|7d\|30d`) | Segmentation status and scalar token/byte totals |
 | `GET` | `/api/stats/cache-stability` | Dashboard-gated (`?period=1h\|24h\|7d\|30d`) | Persisted transcoded request count; in-memory boundary detail is unavailable |
@@ -76,6 +92,21 @@ metric label, or forwarded upstream. See [Model routing](model-routing.md).
 | `GET` | `/api/timeseries/grouped` | Dashboard-gated (`period`, `group_by=provider_model\|provider\|model\|account`, bounded `limit`; `metric` retained for compatibility) | Grouped request-count chart series and bucket totals |
 | `GET` | `/api/stats/runtime` | Always key | Runtime metrics, routing guardrails, background task summaries, stream diagnostics, and `finalization_supervisor` snapshot |
 | `GET` | `/api/stats/update` | Always key | Release update-check status |
+
+Both timeseries endpoints measure time to first token over the same
+population and the same storage layer: the raw request table, averaged over
+the streamed requests that carry a first-byte observation. The grouped
+endpoint's `avg_ttft_ms` is the average over that same population, so the
+two endpoints report an equal first-byte average for the same data and
+filters.
+
+`/api/stats/transcoding` and `eggpool stats transcoding` report the same
+counts. Both cover the finalized requests of the selected period: a pending
+request has no upstream protocol yet, so it is neither a native nor a
+transcoded observation. A request is transcoded when the protocol its client
+spoke differs from the protocol it was finally sent with, and the
+`per_direction` object breaks those requests down per `client→upstream`
+direction.
 
 Other backoff/model-info/network/event projections remain HTML-only:
 account backoffs, model-info detail, per-model/account roll-ups, latency and

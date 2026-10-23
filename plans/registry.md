@@ -59,7 +59,7 @@ No new runtime, schema or performance claim lands with these plans.
 | On-prem user access | closed | `plans/subsystems/on-prem-user-access-roadmap.md` | M023 closed — short-window fairness controls | M017–M023 complete. Modified-binary ordinary-Linux/NVMe no-rule and active-throttle qualification is recorded; no successor is registered. The subsystem's documentation coverage gap is tracked by Planning Governance M002, not here. |
 | On-prem concurrency performance | active | `plans/subsystems/on-prem-concurrency-performance-roadmap.md` | M002 closed — ordinary-server synthetic baseline recorded | M001's Pi/microSD solo tail attribution stays conditionally closed; M002 authorizes no WAL/SQLite topology change. |
 | Operations CLI | active | `plans/subsystems/operations-cli-roadmap.md` | M003 closed — watchdog start-guard ownership correction | New subsystem roadmap opened at baseline `e6822d8f78` for `rust/src/operations/` and `rust/src/runtime.rs`, which no other roadmap claims as a primary owner. M001 is closed and M002 is closed through M003; no successor is registered in this subsystem. |
-| Request admission and wire | active | `plans/subsystems/request-admission-wire-roadmap.md` | M009 closed — terminal detail redaction coverage correction | Reopened on evidence at baseline `e6822d8f78`: M001–M006 remain closed. M007 is closed through M009. M008 — remote compaction capability contract — is blocked on `plans/adrs/ADR-0003-remote-compaction-capability-contract.md` being accepted. |
+| Request admission and wire | active | `plans/subsystems/request-admission-wire-roadmap.md` | M008 closing — remote compaction capability contract | ADR-0003 accepted; the capability outcome, the capability failure contract, the bundled-profile guard, and the API reference change are implemented; closure evidence is being gathered. |
 | Planning governance | active | `plans/subsystems/planning-governance-roadmap.md` | M002 closed — review index, ownership, and census reconciliation | M001 closed; M002 closed with five census guards. The subsystem's ongoing obligation — that the review index and the agent workflow index stay aligned with the shipped runtime — is now enforced by guards rather than by review alone. No successor is registered. |
 
 Evidence-based reopening at baseline `e6822d8f78` (2026-10-22): a repository
@@ -94,13 +94,13 @@ authorized by it.
 
 | Subsystem | Milestone | Status | Implementation plan | Handoff note |
 |---|---|---|---|---|
+| Request admission and wire | M008 — remote compaction capability contract | closing | `plans/implementation/request-admission-wire/008-remote-compaction-capability-contract.md` | ADR-0003 accepted; the implementation landed and the closure evidence is being gathered. |
 
 
 ## Blocked work
 
 | Subsystem | Milestone | Blocker |
 |---|---|---|
-| Request admission and wire | M008 — remote compaction capability contract | Hard: `plans/adrs/ADR-0003-remote-compaction-capability-contract.md` accepted. The milestone implements a public compatibility contract and the decision about what that contract is is the ADR. |
 
 Unblock audit (on-prem user access reopening after M012 closure, baseline
 `3c7def1e`): M001–M013 closure records remain immutable; no
