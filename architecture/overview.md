@@ -154,8 +154,8 @@ operation, not a Responses alias); discovery and health at `/v1/models`,
 (`/api/stats/transcoding`, `/api/stats/cache-observability`,
 `/api/stats/canonical-request-segmentation`, `/api/stats/cache-stability`,
 `/api/stats/request-shaping`, `/api/timeseries`, `/api/timeseries/grouped`);
-managed-user at `/login`, `/logout`, `/account`, `/account/password`,
-`/my-account`, `/my-account/models`, `/account/tokens`,
+managed-user at `/login`, `/logout`, `/account`, `/account/landing`,
+`/account/password`, `/my-account`, `/my-account/models`, `/account/tokens`,
 `/account/tokens/revoke`, `/usage`, `/api/user-budget`; dashboard pages at
 `/`, `/accounts`, `/models`, `/models/{*model_id}`, `/latency`, `/events`,
 `/timeseries`, `/bandwidth`, `/pings`, `/reliability`, `/routing`,

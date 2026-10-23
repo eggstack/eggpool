@@ -12,7 +12,9 @@ mod health;
 mod inference;
 mod middleware;
 
-use auth::{account_page, login_page, login_submit, logout_submit, password_change};
+use auth::{
+    account_page, login_page, login_submit, logout_submit, member_landing_page, password_change,
+};
 use dashboard::{
     accounts_page, assign_user_profile, audit_page, bandwidth_page, cache_page,
     create_personal_token, create_profile, create_user, delete_profile, events_page,
@@ -1190,6 +1192,7 @@ pub fn build_router(state: AppState) -> Router {
     router = router
         .route("/login", get(login_page).post(login_submit))
         .route("/account", get(account_page))
+        .route("/account/landing", get(member_landing_page))
         .route("/account/password", post(password_change))
         .route("/my-account", get(my_account_page))
         .route("/my-account/models", get(my_models_page))

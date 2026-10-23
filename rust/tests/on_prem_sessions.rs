@@ -298,7 +298,7 @@ async fn expired_sessions_and_disabled_users_are_rejected() {
 }
 
 #[test]
-fn login_throttle_is_bounded_by_username_and_peer() {
+fn login_throttle_is_bounded_by_username_across_peers() {
     let username = format!("login-test-{}", std::process::id());
     let peer = Some("192.0.2.19".parse().unwrap());
     let other_peer = Some("198.51.100.19".parse().unwrap());
@@ -308,7 +308,9 @@ fn login_throttle_is_bounded_by_username_and_peer() {
     }
     assert!(!web_session::login_allowed(&username, peer));
     assert!(!web_session::login_allowed(&format!(" {username} "), peer));
-    assert!(web_session::login_allowed(&username, other_peer));
+    // The account's budget is the account's, not the pair's: a different
+    // source address does not buy a fresh budget for the same username.
+    assert!(!web_session::login_allowed(&username, other_peer));
 }
 
 #[test]

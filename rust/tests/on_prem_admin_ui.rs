@@ -740,12 +740,25 @@ async fn managed_server(
     ServerRuntimeHandle,
     tokio::task::JoinHandle<()>,
 ) {
+    managed_server_with_proxies(database, Vec::new()).await
+}
+
+/// Start the managed dashboard with a trusted-proxy list.
+async fn managed_server_with_proxies(
+    database: &Database,
+    trusted_proxies: Vec<String>,
+) -> (
+    std::net::SocketAddr,
+    ServerRuntimeHandle,
+    tokio::task::JoinHandle<()>,
+) {
     let process = ProcessRuntime::new(database.clone()).expect("process runtime");
     let mut config = Config::default();
     config.server.host = "127.0.0.1".to_owned();
     config.server.api_key = None;
     config.dashboard.enabled = true;
     config.dashboard.public = true;
+    config.security.trusted_proxies = trusted_proxies;
     let candidate =
         RuntimeGenerationFactory::prepare(&process, config.clone(), "browser-signin".into(), 1)
             .await
@@ -818,5 +831,644 @@ async fn browser_sign_in_accepts_the_origin_and_referer_pair_a_real_browser_send
         .await
         .expect("server shutdown completes")
         .expect("server task joins");
+    database.close().await.unwrap();
+}
+
+const ADMIN_PASSWORD: &str = "M024 strong admin password passphrase";
+const MEMBER_PASSWORD: &str = "M024 member password passphrase";
+const MEMBER_TEMPORARY_PASSWORD: &str = "M024 temporary member password";
+
+/// The full `Set-Cookie` header for one cookie, so the attributes can be
+/// asserted rather than only the value.
+fn set_cookie_header(response: &str, name: &str) -> String {
+    response
+        .lines()
+        .find_map(|line| {
+            let (header, value) = line.split_once(':')?;
+            if !header.eq_ignore_ascii_case("set-cookie") {
+                return None;
+            }
+            value
+                .trim()
+                .strip_prefix(&format!("{name}="))
+                .map(str::to_owned)
+        })
+        .expect("cookie is set")
+}
+
+/// One response header value, for the redirect targets.
+fn response_header(response: &str, name: &str) -> Option<String> {
+    response.lines().find_map(|line| {
+        let (header, value) = line.split_once(':')?;
+        header
+            .eq_ignore_ascii_case(name)
+            .then(|| value.trim().to_owned())
+    })
+}
+
+/// The value of the page's hidden CSRF field.
+fn hidden_csrf(body: &str) -> String {
+    let marker = "name=\"csrf\" value=\"";
+    let start = body
+        .find(marker)
+        .expect("the page carries a hidden csrf field")
+        + marker.len();
+    let end = start + body[start..].find('"').expect("the csrf field is closed");
+    body[start..end].to_owned()
+}
+
+/// A managed instance with an administrator and a member.
+///
+/// `forced_change` keeps the member's forced password change, so the sign-in
+/// lands on the forced-change redirect rather than on the member landing
+/// page.
+async fn managed_member_instance(
+    forced_change: bool,
+) -> (
+    tempfile::TempDir,
+    Database,
+    std::net::SocketAddr,
+    ServerRuntimeHandle,
+    tokio::task::JoinHandle<()>,
+) {
+    let (directory, database) = database().await;
+    identity::mark_fresh_uninitialized(&database).await.unwrap();
+    let (admin, _) = identity::bootstrap_admin(&database, "admin", ADMIN_PASSWORD)
+        .await
+        .unwrap();
+    identity::enable_managed(&database, &admin.id)
+        .await
+        .unwrap();
+    identity::create_member_without_profile(
+        &database,
+        &admin.id,
+        "member",
+        MEMBER_TEMPORARY_PASSWORD,
+    )
+    .await
+    .unwrap();
+    if !forced_change {
+        identity::reset_password(&database, "member", MEMBER_PASSWORD)
+            .await
+            .unwrap();
+    }
+    let (address, handle, task) = managed_server(&database).await;
+    (directory, database, address, handle, task)
+}
+
+async fn shutdown(handle: ServerRuntimeHandle, task: tokio::task::JoinHandle<()>) {
+    handle.request_shutdown(ShutdownReason::Requested);
+    tokio::time::timeout(Duration::from_secs(10), task)
+        .await
+        .expect("server shutdown completes")
+        .expect("server task joins");
+}
+
+/// The account and the client address the sign-in throttle test spends.
+///
+/// The throttle table is process-local, so the test claims an account and a
+/// client address of its own and keeps its budget out of the other tests in
+/// this binary.
+const THROTTLE_ACCOUNT: &str = "throttle-account";
+const THROTTLE_PASSWORD: &str = "M024 throttle account password";
+const THROTTLE_CLIENT: &str = "198.51.100.77";
+
+/// A managed instance that trusts the loopback listener as a proxy, so a
+/// request can name its own client address in `X-Forwarded-For`.
+async fn managed_throttle_instance() -> (
+    tempfile::TempDir,
+    Database,
+    std::net::SocketAddr,
+    ServerRuntimeHandle,
+    tokio::task::JoinHandle<()>,
+) {
+    let (directory, database) = database().await;
+    identity::mark_fresh_uninitialized(&database).await.unwrap();
+    let (admin, _) = identity::bootstrap_admin(&database, "admin", ADMIN_PASSWORD)
+        .await
+        .unwrap();
+    identity::enable_managed(&database, &admin.id)
+        .await
+        .unwrap();
+    identity::create_member_without_profile(
+        &database,
+        &admin.id,
+        THROTTLE_ACCOUNT,
+        THROTTLE_PASSWORD,
+    )
+    .await
+    .unwrap();
+    identity::reset_password(&database, THROTTLE_ACCOUNT, THROTTLE_PASSWORD)
+        .await
+        .unwrap();
+    let (address, handle, task) =
+        managed_server_with_proxies(&database, vec!["127.0.0.1".to_owned()]).await;
+    (directory, database, address, handle, task)
+}
+
+/// A form POST that names its client address in `X-Forwarded-For`.
+async fn throttle_form_post(
+    address: std::net::SocketAddr,
+    path: &str,
+    body: &str,
+    origin: &str,
+    referer: &str,
+) -> String {
+    let mut stream = TcpStream::connect(address).await.expect("connect");
+    let request = format!(
+        "POST {path} HTTP/1.1\r\nHost: {address}\r\nConnection: close\r\nContent-Type: application/x-www-form-urlencoded\r\nContent-Length: {}\r\nOrigin: {origin}\r\nReferer: {referer}\r\nX-Forwarded-For: {THROTTLE_CLIENT}\r\n\r\n{body}",
+        body.len()
+    );
+    stream
+        .write_all(request.as_bytes())
+        .await
+        .expect("write request");
+    let mut response = String::new();
+    stream
+        .read_to_string(&mut response)
+        .await
+        .expect("read response");
+    response
+}
+
+#[tokio::test]
+async fn browser_sign_in_sets_both_cookies_with_the_same_attributes() {
+    let (_directory, database) = database().await;
+    identity::mark_fresh_uninitialized(&database).await.unwrap();
+    let (admin, _) = identity::bootstrap_admin(&database, "admin", ADMIN_PASSWORD)
+        .await
+        .unwrap();
+    identity::enable_managed(&database, &admin.id)
+        .await
+        .unwrap();
+    let (address, handle, task) = managed_server(&database).await;
+    let origin = format!("http://{address}");
+
+    let signed_in = browser_form_post(
+        address,
+        "/login",
+        "username=admin&password=M024+strong+admin+password+passphrase",
+        None,
+        &origin,
+        &format!("{origin}/login"),
+    )
+    .await;
+    assert!(signed_in.starts_with("HTTP/1.1 303"), "{signed_in}");
+
+    // The CSRF cookie is delivered on exactly the requests that carry the
+    // session cookie, so both carry the same attributes.
+    for name in ["eggpool_session", "eggpool_csrf"] {
+        let header = set_cookie_header(&signed_in, name);
+        assert!(header.contains("Path=/"), "{name}: {header}");
+        assert!(header.contains("HttpOnly"), "{name}: {header}");
+        assert!(header.contains("SameSite=Lax"), "{name}: {header}");
+        assert!(header.contains("Max-Age=604800"), "{name}: {header}");
+        assert!(!header.contains("SameSite=Strict"), "{name}: {header}");
+        // The loopback listener is not secure, so `Secure` is not added.
+        assert!(!header.contains("Secure"), "{name}: {header}");
+    }
+
+    shutdown(handle, task).await;
+    database.close().await.unwrap();
+}
+
+#[tokio::test]
+async fn every_sign_in_failure_is_a_no_store_html_page_with_an_alert() {
+    let (_directory, database, address, handle, task) = managed_member_instance(false).await;
+    let origin = format!("http://{address}");
+
+    let refused = browser_form_post(
+        address,
+        "/login",
+        "username=admin&password=not-the-admin-password",
+        None,
+        &origin,
+        &format!("{origin}/login"),
+    )
+    .await;
+    assert!(refused.starts_with("HTTP/1.1 401"), "{refused}");
+    assert!(refused.contains("text/html"), "{refused}");
+    assert!(refused.contains("role=\"alert\""), "{refused}");
+    assert!(
+        refused
+            .to_ascii_lowercase()
+            .contains("cache-control: no-store"),
+        "{refused}"
+    );
+
+    let cross_origin = browser_form_post(
+        address,
+        "/login",
+        "username=admin&password=M024+strong+admin+password+passphrase",
+        None,
+        "http://attacker.test",
+        "http://attacker.test/login",
+    )
+    .await;
+    assert!(cross_origin.starts_with("HTTP/1.1 403"), "{cross_origin}");
+    assert!(cross_origin.contains("text/html"), "{cross_origin}");
+    assert!(cross_origin.contains("role=\"alert\""), "{cross_origin}");
+    assert!(
+        cross_origin
+            .to_ascii_lowercase()
+            .contains("cache-control: no-store"),
+        "{cross_origin}"
+    );
+    assert!(
+        cross_origin.contains("Cross-origin sign-in is not allowed."),
+        "{cross_origin}"
+    );
+
+    shutdown(handle, task).await;
+    database.close().await.unwrap();
+}
+
+#[tokio::test]
+async fn a_session_without_the_csrf_cookie_renders_an_empty_field_and_the_mutation_is_refused() {
+    let (_directory, database, address, handle, task) = managed_member_instance(false).await;
+    let origin = format!("http://{address}");
+    let signed_in = browser_form_post(
+        address,
+        "/login",
+        "username=admin&password=M024+strong+admin+password+passphrase",
+        None,
+        &origin,
+        &format!("{origin}/login"),
+    )
+    .await;
+    assert!(signed_in.starts_with("HTTP/1.1 303"), "{signed_in}");
+    let (session, _csrf, _cookies) = session_pair(&signed_in);
+    let session_only = format!("eggpool_session={session}");
+
+    // The rendered field is derived from the cookie alone, so a request that
+    // carries the session but not the CSRF cookie renders an empty field.
+    let account = http_request(
+        address,
+        "GET",
+        "/account",
+        "",
+        Some(&session_only),
+        None,
+        None,
+    )
+    .await;
+    assert!(account.starts_with("HTTP/1.1 200"), "{account}");
+    assert_eq!(hidden_csrf(&account), "");
+
+    let refused = browser_form_post(
+        address,
+        "/account/password",
+        "current_password=M024+strong+admin+password+passphrase&new_password=M024+new+admin+password+passphrase&csrf=",
+        Some(&session_only),
+        &origin,
+        &format!("{origin}/account"),
+    )
+    .await;
+    assert!(refused.starts_with("HTTP/1.1 403"), "{refused}");
+    assert!(refused.contains("Invalid request token."), "{refused}");
+
+    shutdown(handle, task).await;
+    database.close().await.unwrap();
+}
+
+#[tokio::test]
+async fn a_session_with_both_cookies_renders_a_verifying_field_and_the_mutation_succeeds() {
+    let (_directory, database, address, handle, task) = managed_member_instance(false).await;
+    let origin = format!("http://{address}");
+    let signed_in = browser_form_post(
+        address,
+        "/login",
+        "username=admin&password=M024+strong+admin+password+passphrase",
+        None,
+        &origin,
+        &format!("{origin}/login"),
+    )
+    .await;
+    assert!(signed_in.starts_with("HTTP/1.1 303"), "{signed_in}");
+    let (_session, csrf, cookies) = session_pair(&signed_in);
+
+    let account = http_request(address, "GET", "/account", "", Some(&cookies), None, None).await;
+    assert!(account.starts_with("HTTP/1.1 200"), "{account}");
+    let field = hidden_csrf(&account);
+    assert!(!field.is_empty());
+    // The rendered field is the token the session's CSRF digest verifies.
+    assert!(field == csrf);
+
+    let changed = browser_form_post(
+        address,
+        "/account/password",
+        &format!("current_password=M024+strong+admin+password+passphrase&new_password=M024+new+admin+password+passphrase&csrf={field}"),
+        Some(&cookies),
+        &origin,
+        &format!("{origin}/account"),
+    )
+    .await;
+    assert!(changed.starts_with("HTTP/1.1 303"), "{changed}");
+
+    shutdown(handle, task).await;
+    database.close().await.unwrap();
+}
+
+#[tokio::test]
+async fn a_successful_sign_in_clears_the_account_failure_counter() {
+    let (_directory, database, address, handle, task) = managed_throttle_instance().await;
+    let origin = format!("http://{address}");
+    let wrong = format!("username={THROTTLE_ACCOUNT}&password=not-the-account-password");
+    let right = format!("username={THROTTLE_ACCOUNT}&password=M024+throttle+account+password");
+
+    // Nine failures spend nine of the account's ten attempts.
+    for _ in 0..9 {
+        let refused = throttle_form_post(
+            address,
+            "/login",
+            &wrong,
+            &origin,
+            &format!("{origin}/login"),
+        )
+        .await;
+        assert!(refused.starts_with("HTTP/1.1 401"), "{refused}");
+    }
+
+    // The successful sign-in clears the account counter.
+    let signed_in = throttle_form_post(
+        address,
+        "/login",
+        &right,
+        &origin,
+        &format!("{origin}/login"),
+    )
+    .await;
+    assert!(signed_in.starts_with("HTTP/1.1 303"), "{signed_in}");
+
+    // Nine more failures fit inside the account's budget again. Without the
+    // clear the counter would already stand at ten and these attempts would
+    // be refused as throttled.
+    for _ in 0..9 {
+        let refused = throttle_form_post(
+            address,
+            "/login",
+            &wrong,
+            &origin,
+            &format!("{origin}/login"),
+        )
+        .await;
+        assert!(refused.starts_with("HTTP/1.1 401"), "{refused}");
+    }
+
+    // The tenth attempt is still inside the budget.
+    let allowed = throttle_form_post(
+        address,
+        "/login",
+        &wrong,
+        &origin,
+        &format!("{origin}/login"),
+    )
+    .await;
+    assert!(allowed.starts_with("HTTP/1.1 401"), "{allowed}");
+
+    shutdown(handle, task).await;
+    database.close().await.unwrap();
+}
+
+#[tokio::test]
+async fn a_cross_site_unsafe_request_is_rejected_by_the_origin_check_before_the_handler_runs() {
+    let (_directory, database, address, handle, task) = managed_member_instance(false).await;
+    let origin = format!("http://{address}");
+    let signed_in = browser_form_post(
+        address,
+        "/login",
+        "username=admin&password=M024+strong+admin+password+passphrase",
+        None,
+        &origin,
+        &format!("{origin}/login"),
+    )
+    .await;
+    assert!(signed_in.starts_with("HTTP/1.1 303"), "{signed_in}");
+    let (_session, _csrf, cookies) = session_pair(&signed_in);
+
+    // A cross-site form POST that carries the session but no CSRF cookie is
+    // refused by the server-side origin check. The handler's own token
+    // rejection is a different answer, so the two are distinguishable.
+    let refused = browser_form_post(
+        address,
+        "/account/password",
+        "current_password=M024+strong+admin+password+passphrase&new_password=M024+new+admin+password+passphrase&csrf=",
+        Some(&cookies),
+        "http://attacker.test",
+        "http://attacker.test/attack",
+    )
+    .await;
+    assert!(refused.starts_with("HTTP/1.1 403"), "{refused}");
+    assert!(
+        refused.contains("Cross-origin or insecure request rejected."),
+        "{refused}"
+    );
+    assert!(!refused.contains("Invalid request token."), "{refused}");
+
+    // A cross-site form POST that carries no cookie at all is refused by the
+    // sign-in surface's own origin check, again before any credential check.
+    let anonymous = browser_form_post(
+        address,
+        "/login",
+        "username=admin&password=M024+strong+admin+password+passphrase",
+        None,
+        "http://attacker.test",
+        "http://attacker.test/attack",
+    )
+    .await;
+    assert!(anonymous.starts_with("HTTP/1.1 403"), "{anonymous}");
+    assert!(
+        anonymous.contains("Cross-origin sign-in is not allowed."),
+        "{anonymous}"
+    );
+    assert!(!anonymous.contains("Invalid request token."), "{anonymous}");
+    assert!(!anonymous.contains("eggpool_session="), "{anonymous}");
+
+    shutdown(handle, task).await;
+    database.close().await.unwrap();
+}
+
+#[tokio::test]
+async fn a_member_lands_on_the_member_landing_page_and_reaches_the_member_surface() {
+    let (_directory, database, address, handle, task) = managed_member_instance(false).await;
+    let origin = format!("http://{address}");
+    let signed_in = browser_form_post(
+        address,
+        "/login",
+        "username=member&password=M024+member+password+passphrase",
+        None,
+        &origin,
+        &format!("{origin}/login"),
+    )
+    .await;
+    assert!(signed_in.starts_with("HTTP/1.1 303"), "{signed_in}");
+    assert_eq!(
+        response_header(&signed_in, "location").as_deref(),
+        Some("/account/landing")
+    );
+    let (_session, _csrf, member_cookies) = session_pair(&signed_in);
+
+    let landing = http_request(
+        address,
+        "GET",
+        "/account/landing",
+        "",
+        Some(&member_cookies),
+        None,
+        None,
+    )
+    .await;
+    assert!(landing.starts_with("HTTP/1.1 200"), "{landing}");
+    for destination in ["/my-account", "/my-account/models", "/usage"] {
+        assert!(
+            landing.contains(&format!("href=\"{destination}\"")),
+            "{landing}"
+        );
+    }
+    // The landing page exposes no administrative route.
+    for administrative in ["href=\"/users\"", "href=\"/profiles\"", "href=\"/admin/"] {
+        assert!(!landing.contains(administrative), "{landing}");
+    }
+
+    // Every member destination is reachable from the landing page.
+    for path in ["/my-account", "/my-account/models", "/usage"] {
+        let page = http_request(address, "GET", path, "", Some(&member_cookies), None, None).await;
+        assert!(page.starts_with("HTTP/1.1 200"), "{path}: {page}");
+    }
+
+    shutdown(handle, task).await;
+    database.close().await.unwrap();
+}
+
+#[tokio::test]
+async fn an_administrator_still_lands_on_the_account_page_which_links_the_dashboard() {
+    let (_directory, database, address, handle, task) = managed_member_instance(false).await;
+    let origin = format!("http://{address}");
+    let signed_in = browser_form_post(
+        address,
+        "/login",
+        "username=admin&password=M024+strong+admin+password+passphrase",
+        None,
+        &origin,
+        &format!("{origin}/login"),
+    )
+    .await;
+    assert!(signed_in.starts_with("HTTP/1.1 303"), "{signed_in}");
+    assert_eq!(
+        response_header(&signed_in, "location").as_deref(),
+        Some("/account")
+    );
+    let (_session, _csrf, admin_cookies) = session_pair(&signed_in);
+
+    let account = http_request(
+        address,
+        "GET",
+        "/account",
+        "",
+        Some(&admin_cookies),
+        None,
+        None,
+    )
+    .await;
+    assert!(account.starts_with("HTTP/1.1 200"), "{account}");
+    assert!(account.contains("href=\"/\""), "{account}");
+
+    shutdown(handle, task).await;
+    database.close().await.unwrap();
+}
+
+#[tokio::test]
+async fn a_member_refused_an_administrative_page_gets_an_actionable_html_page() {
+    let (_directory, database, address, handle, task) = managed_member_instance(false).await;
+    let origin = format!("http://{address}");
+    let signed_in = browser_form_post(
+        address,
+        "/login",
+        "username=member&password=M024+member+password+passphrase",
+        None,
+        &origin,
+        &format!("{origin}/login"),
+    )
+    .await;
+    assert!(signed_in.starts_with("HTTP/1.1 303"), "{signed_in}");
+    let (_session, _csrf, member_cookies) = session_pair(&signed_in);
+
+    for path in [
+        "/users",
+        "/profiles",
+        "/accounts",
+        "/models",
+        "/admin/audit",
+        "/admin/users/create",
+    ] {
+        let refused =
+            http_request(address, "GET", path, "", Some(&member_cookies), None, None).await;
+        assert!(refused.starts_with("HTTP/1.1 403"), "{path}: {refused}");
+        assert!(refused.contains("text/html"), "{path}: {refused}");
+        assert!(
+            refused.contains("Administrator access required."),
+            "{path}: {refused}"
+        );
+        assert!(
+            refused.contains("href=\"/account/landing\""),
+            "{path}: {refused}"
+        );
+    }
+
+    // The member surface itself is unchanged: those paths stay reachable.
+    for path in [
+        "/account",
+        "/account/landing",
+        "/my-account",
+        "/my-account/models",
+        "/usage",
+    ] {
+        let page = http_request(address, "GET", path, "", Some(&member_cookies), None, None).await;
+        assert!(page.starts_with("HTTP/1.1 200"), "{path}: {page}");
+    }
+
+    shutdown(handle, task).await;
+    database.close().await.unwrap();
+}
+
+#[tokio::test]
+async fn an_operator_who_must_change_their_password_is_still_redirected_to_the_account_page() {
+    let (_directory, database, address, handle, task) = managed_member_instance(true).await;
+    let origin = format!("http://{address}");
+    let signed_in = browser_form_post(
+        address,
+        "/login",
+        "username=member&password=M024+temporary+member+password",
+        None,
+        &origin,
+        &format!("{origin}/login"),
+    )
+    .await;
+    assert!(signed_in.starts_with("HTTP/1.1 303"), "{signed_in}");
+    assert_eq!(
+        response_header(&signed_in, "location").as_deref(),
+        Some("/account?password=required")
+    );
+    let (_session, _csrf, member_cookies) = session_pair(&signed_in);
+
+    // The middleware's forced-change redirect is unchanged: the member is
+    // sent to the account page from any other page.
+    let redirected = http_request(
+        address,
+        "GET",
+        "/my-account",
+        "",
+        Some(&member_cookies),
+        None,
+        None,
+    )
+    .await;
+    assert!(redirected.starts_with("HTTP/1.1 303"), "{redirected}");
+    assert_eq!(
+        response_header(&redirected, "location").as_deref(),
+        Some("/account?password=required")
+    );
+
+    shutdown(handle, task).await;
     database.close().await.unwrap();
 }

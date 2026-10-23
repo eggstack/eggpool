@@ -37,9 +37,11 @@ selector and stored digest on each agent request. A new empty schema is marked
 `fresh_uninitialized`, and a keyless listener refuses to start until local
 bootstrap. In `admin_initialized` and `managed`, the public-dashboard setting
 does not expose dashboard or `/api/*` data. Browser login/account routes are
-session-only; agent credentials cannot access them. Health/readiness and
-static assets remain public. Unknown `/api/*` routes require an administrator
-session before normal 404 handling.
+session-only; agent credentials cannot access them. `/account/landing`, the
+member landing page a member reaches after a successful sign-in, is one of
+those session-only routes and exposes no administrative route. Health,
+readiness, and static assets remain public. Unknown `/api/*` routes require an
+administrator session before normal 404 handling.
 
 Downstream human identity is separate from provider `accounts`. Migration 55
 adds local users, credentials, and access state; migration 56 adds opaque
@@ -54,13 +56,20 @@ and browser sessions. The configured shared key stops authenticating when the
 first local identity is created. Upgraded schemas remain `legacy_unmigrated`
 until that identity is initialized.
 
-Sessions have a 12-hour idle bound and 7-day absolute expiry. Cookies are
-HttpOnly, SameSite=Lax, root-path scoped, and Secure when the accepted
-connection is HTTPS. Unsafe browser forms require same-origin Origin/Referer
-and a session-bound CSRF token. A same-origin browser form POST presents `Origin`
-and `Referer` together, so `server::auth::same_origin` requires every provenance
-header that is present to agree with the request `Host` rather than exactly one
-of them; duplicated headers and userinfo-bearing authorities still fail closed.
+Sessions have a 12-hour idle bound and 7-day absolute expiry. Both cookies —
+`eggpool_session` and `eggpool_csrf` — are HttpOnly, SameSite=Lax, root-path
+scoped, and Secure when the accepted connection is HTTPS. The CSRF cookie is
+not `Strict`: a `Strict` cookie is withheld on a cross-site top-level
+navigation, which is exactly the request that already carries the session
+cookie, so the account page would render without the token its hidden field is
+derived from. `Lax` still withholds the cookie on a cross-site unsafe request,
+so the same-origin check below stays the authoritative defense and the
+double-submit token stays defense in depth. Unsafe browser forms require
+same-origin Origin/Referer and a session-bound CSRF token. A same-origin
+browser form POST presents `Origin` and `Referer` together, so
+`server::auth::same_origin` requires every provenance header that is present
+to agree with the request `Host` rather than exactly one of them; duplicated
+headers and userinfo-bearing authorities still fail closed.
 Remote login requires HTTPS or a trusted proxy peer listed as a literal IP in
 `security.trusted_proxies` that sends one `X-Forwarded-Proto: https` value.
 For browser-login and failed personal-token throttling, one literal client IP
@@ -70,6 +79,15 @@ values fall back to the proxy peer. No other forwarded header establishes
 trust.
 `security.allow_insecure_web_auth` is an explicit development override and
 emits a startup warning.
+
+Browser sign-in throttling is process-local and unpersisted: ten failures per
+account and thirty per peer address inside a fifteen-minute window. The
+account budget is keyed on the normalized username alone and is a hard refusal
+consulted before the credential check, so a new source address does not reset
+it and an exhausted budget is not broken by a correct password. A successful
+sign-in clears the account budget only; the per-peer budget deliberately
+survives, because clearing it too would let any valid account reset an
+address's cross-account failure budget.
 
 The local operator CLI uses the data-directory owner's filesystem authority.
 `users add` commits a member, an explicit or configured default initial profile,
@@ -88,7 +106,10 @@ auth epoch. Re-enabling does not un-revoke credentials, and the last active
 administrator remains protected.
 Session-authenticated responses carry `Cache-Control: no-store, max-age=0` so
 account and administration HTML containing identity, budget, or CSRF data is
-not retained by shared or browser caches. Privileged browser mutations also
+not retained by shared or browser caches. Sign-in responses carry the same
+header; `/login` is an unconditionally public path that the middleware returns
+from before it applies the header, so the sign-in surface sets it itself.
+Privileged browser mutations also
 revalidate the exact session, user role, auth epoch, and forced-password state
 inside the SQLite transaction that commits the write; creating a user and
 assigning its initial profile is one transaction. This closes the interval

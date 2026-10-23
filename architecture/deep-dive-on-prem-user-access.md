@@ -101,9 +101,14 @@ comparison, so a stolen selector alone is not a session.
 
 Session rows carry a 7-day expiry, a 12-hour idle-use window, and an explicit
 revocation timestamp. `last_used_at` is refreshed at most once every 15
-minutes. The two cookies are deliberately asymmetric: `eggpool_session` is
-`HttpOnly; SameSite=Lax` and `eggpool_csrf` is `HttpOnly; SameSite=Strict`;
-both gain `Secure` when the request is determined to be secure.
+minutes. Both cookies are `HttpOnly; SameSite=Lax`, and both gain `Secure`
+when the request is determined to be secure. The CSRF cookie is deliberately
+not `Strict`: a `Strict` cookie is withheld on a cross-site top-level
+navigation, so a deep-linked operator's page would arrive without it, and the
+account page derives its hidden CSRF field from the cookie alone. `Lax` still
+withholds the cookie on a cross-site unsafe request, so the server-side
+same-origin check stays the authoritative defense and the double-submit token
+stays defense in depth.
 
 `server/auth.rs` owns the transport side of the boundary. A login form is
 refused unless the connection is local or is fronted by a trusted HTTPS proxy;
@@ -112,10 +117,26 @@ of asking for a password over an unsafe transport. Unsafe methods require
 same-origin, and every browser-originated mutation additionally carries a CSRF
 form field verified against the session's CSRF digest.
 
-Login throttling is local and bounded: a 15-minute window with 10 failures per
-username and 30 per peer IP, 30 personal-token attempts per peer IP, and a
-2048-bucket capacity. Failed token digests are remembered for one second so a
-repeated wrong token is rejected before it reaches SQLite.
+The sign-in page, the account page, the account-error page, the transport
+refusal, the member landing page, and the member refusal all render through one
+document builder, so a browser never meets an unstyled fragment. Every sign-in
+failure — transport, origin, throttle, and unavailable service alike — renders
+that document with a `role="alert"` message. Every sign-in response carries
+`Cache-Control: no-store`, because `/login` is an unconditionally public path
+that the middleware returns from before it applies that header.
+
+Login throttling is local, bounded, and unpersisted: a 15-minute window with 10
+failures per account, 30 per peer IP, 30 personal-token attempts per peer IP,
+and a 2048-bucket capacity. The account bucket is keyed on the normalized
+username alone, so the ten-failure budget belongs to the account rather than to
+an (account, source address) pair: an attempt from a new address does not reset
+it. The account check is a hard refusal consulted before the credential check,
+so an exhausted account budget is not broken by a correct password. A
+successful sign-in clears the account bucket only; the per-peer bucket
+deliberately survives, because clearing it would let any valid account reset an
+address's cross-account failure budget and multiply that address's brute-force
+throughput without bound. Failed token digests are remembered for one second so
+a repeated wrong token is rejected before it reaches SQLite.
 
 `web_session::SessionFence` is the transaction-time fence for browser-originated
 mutations. It binds a mutation to the exact session and privilege snapshot
@@ -203,15 +224,22 @@ tokens, profile assignment, override add/remove, budget), the
 `/admin/budget/instance*` family, and the `/admin/profiles/*` family (create,
 default, update, delete, rule add/remove, preference).
 
-Member surfaces: `/login`, `/logout`, `/account`, `/account/password`,
-`/my-account`, `/my-account/models`, `/account/tokens`,
+Member surfaces: `/login`, `/logout`, `/account`, `/account/landing`,
+`/account/password`, `/my-account`, `/my-account/models`, `/account/tokens`,
 `/account/tokens/revoke`, `/usage`, and `/api/user-budget`.
+
+A member who signs in lands on `/account/landing`, which links the member
+destinations (`/my-account`, `/my-account/models`, `/usage`) and exposes no
+administrative route and no administrative datum, so the member surface is
+reachable without knowing a URL. An administrator who signs in lands on
+`/account`, which links back to the dashboard overview.
 
 The route-role gate lives in `server/middleware.rs`, not here. A non-administrator
 browser principal is confined to the member surfaces; an administrator-only
-path answers `403` instead of leaking its existence. A principal that must
-change its password is redirected to the account surface rather than to the
-surface it asked for. The administrative audit trail (`user_admin_audit`)
+path answers `403` with a page that names the refusal and points at the member
+surface instead of leaking its existence. A principal that must change its
+password is redirected to the account surface rather than to the surface it
+asked for. The administrative audit trail (`user_admin_audit`)
 records the actor, the action, the target kind, and the target id only —
 never a password, a token, or any other secret.
 

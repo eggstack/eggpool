@@ -274,18 +274,33 @@ pub fn session_set_cookie(token: &str, secure: bool) -> String {
     )
 }
 
+/// The CSRF cookie carries the same `SameSite` attribute as the session
+/// cookie.
+///
+/// `Lax` and `Strict` differ in exactly one browser behavior that matters
+/// here: a `Lax` cookie is delivered on a cross-site top-level `GET`
+/// navigation and a `Strict` cookie is not. The session cookie was already
+/// `Lax`, so a `Strict` CSRF cookie was withheld on exactly the requests that
+/// already carried the session: the deep-linked operator's page rendered with
+/// an empty hidden CSRF field and every mutation on it was refused. Both
+/// attributes withhold the cookie on a cross-site unsafe request, so the
+/// server-side same-origin check remains the authoritative defense and the
+/// double-submit token remains defense in depth.
 pub fn csrf_set_cookie(token: &str, secure: bool) -> String {
     format!(
-        "eggpool_csrf={token}; Path=/; HttpOnly; SameSite=Strict; Max-Age=604800{}",
+        "eggpool_csrf={token}; Path=/; HttpOnly; SameSite=Lax; Max-Age=604800{}",
         if secure { "; Secure" } else { "" }
     )
 }
 
+/// Clear both browser cookies. The CSRF cookie is cleared with the same
+/// `SameSite` attribute it is set with, so the set and clear paths stay
+/// consistent.
 pub fn clear_cookies(secure: bool) -> [String; 2] {
     let secure = if secure { "; Secure" } else { "" };
     [
         format!("eggpool_session=; Path=/; HttpOnly; SameSite=Lax; Max-Age=0{secure}"),
-        format!("eggpool_csrf=; Path=/; HttpOnly; SameSite=Strict; Max-Age=0{secure}"),
+        format!("eggpool_csrf=; Path=/; HttpOnly; SameSite=Lax; Max-Age=0{secure}"),
     ]
 }
 
@@ -298,7 +313,7 @@ pub fn request_peer_ip(request: &axum::http::Request<axum::body::Body>) -> Optio
 }
 
 pub fn login_allowed(username: &str, peer: Option<IpAddr>) -> bool {
-    let username_key = username_throttle_key(username, peer);
+    let username_key = username_throttle_key(username);
     let ip_key = throttle_key(
         "ip",
         &peer.map_or_else(|| "unknown".to_owned(), |ip| ip.to_string()),
@@ -319,7 +334,7 @@ pub fn login_allowed(username: &str, peer: Option<IpAddr>) -> bool {
 
 pub fn record_login_failure(username: &str, peer: Option<IpAddr>) {
     let keys = [
-        (username_throttle_key(username, peer), LOGIN_USERNAME_LIMIT),
+        (username_throttle_key(username), LOGIN_USERNAME_LIMIT),
         (
             throttle_key(
                 "ip",
@@ -408,12 +423,30 @@ pub fn record_personal_token_failure(peer: Option<IpAddr>) {
     );
 }
 
-fn username_throttle_key(username: &str, peer: Option<IpAddr>) -> String {
-    let peer = peer.map_or_else(|| "unknown".to_owned(), |ip| ip.to_string());
-    throttle_key(
-        "username",
-        &format!("{}:{peer}", username.trim().to_ascii_lowercase()),
-    )
+/// The account-scoped throttle key.
+///
+/// The key is the normalized username alone. Folding the peer address into it
+/// made the documented "10 failures per username" limit a per
+/// (username, source address) limit: every additional source address reset
+/// the account's budget, so a distributed attempt against one account met one
+/// budget per address instead of one budget.
+fn username_throttle_key(username: &str) -> String {
+    throttle_key("username", &username.trim().to_ascii_lowercase())
+}
+
+/// Clear an account's failure bucket after a successful sign-in.
+///
+/// Only the account bucket is cleared. The per-peer bucket deliberately
+/// survives: clearing it would let any valid account reset an address's
+/// cross-account failure budget and thereby multiply that address's
+/// brute-force throughput without bound.
+pub fn clear_login_failures(username: &str) {
+    let username_key = username_throttle_key(username);
+    let mut failures = LOGIN_FAILURES
+        .get_or_init(|| std::sync::Mutex::new(HashMap::new()))
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner);
+    failures.remove(&username_key);
 }
 
 fn throttle_key(kind: &str, value: &str) -> String {
@@ -454,4 +487,136 @@ fn constant_time_equal(left: &[u8], right: &[u8]) -> bool {
             left.get(index).copied().unwrap_or(0) ^ right.get(index).copied().unwrap_or(0);
     }
     difference == 0
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{
+        LOGIN_FAILURES, clear_login_failures, login_allowed, record_login_failure, throttle_key,
+        username_throttle_key,
+    };
+    use std::{collections::HashMap, net::IpAddr};
+
+    /// The failure table is process-local and shared by every test in this
+    /// binary, so each test claims its own usernames and starts from an empty
+    /// table.
+    fn reset_failures() {
+        LOGIN_FAILURES
+            .get_or_init(|| std::sync::Mutex::new(HashMap::new()))
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .clear();
+    }
+
+    fn peer(address: &str) -> Option<IpAddr> {
+        Some(address.parse().expect("peer address"))
+    }
+
+    #[test]
+    fn the_account_bucket_is_shared_across_source_addresses() {
+        reset_failures();
+        let username = "account-scoped-throttle";
+        let first = peer("192.0.2.41");
+        let second = peer("198.51.100.41");
+        let third = peer("203.0.113.41");
+        for _ in 0..5 {
+            record_login_failure(username, first);
+        }
+        for _ in 0..5 {
+            record_login_failure(username, second);
+        }
+        // Ten failures for one account exhaust the account budget no matter
+        // which source address they came from.
+        assert!(!login_allowed(username, first));
+        assert!(!login_allowed(username, second));
+        assert!(!login_allowed(username, third));
+        reset_failures();
+    }
+
+    #[test]
+    fn one_peers_failures_do_not_consume_another_peers_ip_budget() {
+        reset_failures();
+        let username = "peer-scoped-throttle";
+        let first = peer("192.0.2.42");
+        let second = peer("198.51.100.42");
+        for _ in 0..10 {
+            record_login_failure(username, first);
+        }
+        // The second address has spent nothing: a different account is still
+        // allowed there.
+        assert!(login_allowed("other-account", second));
+        // The account budget, by contrast, is spent for every address.
+        assert!(!login_allowed(username, second));
+        // The first address has spent ten of its thirty, so the per-peer
+        // budget still holds for it and still admits another account.
+        assert!(login_allowed("another-account", first));
+        for _ in 0..30 {
+            record_login_failure("third-account", second);
+        }
+        assert!(!login_allowed("fourth-account", second));
+        assert!(login_allowed("fourth-account", first));
+        reset_failures();
+    }
+
+    #[test]
+    fn a_successful_sign_in_clears_the_account_failure_counter() {
+        reset_failures();
+        let username = "success-clears-account";
+        let source = peer("192.0.2.43");
+        for _ in 0..9 {
+            record_login_failure(username, source);
+        }
+        assert!(login_allowed(username, source));
+        clear_login_failures(username);
+        for _ in 0..9 {
+            record_login_failure(username, source);
+        }
+        // Without the clear the counter would still stand at ten and the
+        // attempt would be refused.
+        assert!(login_allowed(username, source));
+        reset_failures();
+    }
+
+    #[test]
+    fn a_successful_sign_in_does_not_clear_the_per_peer_bucket() {
+        reset_failures();
+        let username = "success-keeps-peer";
+        let source = peer("192.0.2.44");
+        for _ in 0..30 {
+            record_login_failure(username, source);
+        }
+        clear_login_failures(username);
+        // The address's cross-account budget survives the success, so another
+        // account is still refused from it.
+        assert!(!login_allowed("unrelated-account", source));
+        reset_failures();
+    }
+
+    #[test]
+    fn the_account_bucket_key_does_not_contain_the_peer_address() {
+        reset_failures();
+        // The account key is the normalized username alone: no peer address
+        // takes part in it.
+        assert_eq!(
+            username_throttle_key("Operator"),
+            username_throttle_key("  operator  ")
+        );
+        assert_ne!(
+            username_throttle_key("operator"),
+            throttle_key("ip", "192.0.2.45")
+        );
+        // The peer bucket is a digest of the peer address, so two addresses
+        // never share one.
+        assert_ne!(
+            throttle_key("ip", "192.0.2.45"),
+            throttle_key("ip", "198.51.100.45")
+        );
+        // And the two accounts really do share one bucket.
+        let username = "shared-account-bucket";
+        for _ in 0..10 {
+            record_login_failure(username, peer("192.0.2.45"));
+        }
+        assert!(!login_allowed(username, peer("198.51.100.45")));
+        reset_failures();
+    }
 }

@@ -94,6 +94,7 @@ pub(super) async fn authenticate(
     let account_surface = matches!(
         path.as_str(),
         "/account"
+            | "/account/landing"
             | "/account/password"
             | "/logout"
             | "/api/user-budget"
@@ -103,7 +104,14 @@ pub(super) async fn authenticate(
     );
     let account_surface = account_surface || path.starts_with("/account/tokens");
     if principal.role != "admin" && !account_surface {
-        return (StatusCode::FORBIDDEN, "Administrator access required.").into_response();
+        // A member is refused an administrative path with a page that names
+        // the refusal and points at the member surface the member does have,
+        // rather than a bare text body.
+        return (
+            StatusCode::FORBIDDEN,
+            axum::response::Html(super::auth::member_refusal_html()),
+        )
+            .into_response();
     }
     if principal.must_change_password
         && !matches!(path.as_str(), "/account" | "/account/password" | "/logout")
@@ -165,6 +173,7 @@ fn requires_browser_session(path: &str) -> bool {
     matches!(
         path,
         "/account"
+            | "/account/landing"
             | "/account/password"
             | "/logout"
             | "/my-account"
@@ -213,6 +222,7 @@ pub(super) fn requires_auth(path: &str, method: &http::Method, server: &ServerSt
     if matches!(
         path,
         "/account"
+            | "/account/landing"
             | "/account/password"
             | "/logout"
             | "/my-account"
