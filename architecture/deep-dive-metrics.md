@@ -53,6 +53,24 @@ to one ordered `Arc<[MetricFlushRow]>` batch, and runs a single
 increments `flush_failures` and rebuffers the shared rows subject to the
 same capacity/drop policy.
 
+## Time-to-first-token population and storage layer
+
+The dashboard's two timeseries endpoints measure time to first token over
+one population and one storage layer: the raw `requests` table, averaged
+over the streamed rows that carry a first-byte observation.
+
+The grouped endpoint used to prefer the `usage_rollups` table when a rollup
+existed and fall back to the raw table otherwise, so its reported average
+changed depending on whether a rollup had been flushed yet, and it weighted
+each group's average by the group's request count rather than by the number
+of first-byte observations. Both endpoints now read the raw request table,
+and the grouped projection carries the first-byte observation count next to
+each group's average so the aggregate average is taken over the same
+population the ungrouped endpoint averages over.
+
+The coalescer's rollup schedule, the rollup table layout, and the rollup
+readers behind the bandwidth and token-calendar projections are unchanged.
+
 ## Retention and companion config
 
 `MetricsConfig` also owns `trace_sample_rate` (default `0.05`),

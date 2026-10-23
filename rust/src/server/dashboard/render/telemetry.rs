@@ -652,9 +652,6 @@ pub(in crate::server::dashboard) fn render_bandwidth_heatmap(
             top + day * step + cell / 2
         ));
     }
-    let months = [
-        "Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec",
-    ];
     let mut last_month = 0;
     for week in 0..weeks {
         let (_, month, _) = civil_date_from_days(grid_start + week * 7);
@@ -663,7 +660,7 @@ pub(in crate::server::dashboard) fn render_bandwidth_heatmap(
             cells.push_str(&format!(
                 "<text x=\"{}\" y=\"10\" class=\"heatmap-label\" text-anchor=\"start\">{}</text>",
                 left + week * step,
-                months[(month - 1) as usize]
+                month_name(month)
             ));
         }
     }
@@ -698,7 +695,7 @@ pub(in crate::server::dashboard) fn render_bandwidth_heatmap(
                 [(day_number + 4).rem_euclid(7) as usize];
             let tooltip = format!(
                 "{pretty_day}, {} {day} {year}\n{} in · {} out · {} request{}",
-                months[(month - 1) as usize],
+                month_name(month),
                 format_bytes(received),
                 format_bytes(emitted),
                 requests,

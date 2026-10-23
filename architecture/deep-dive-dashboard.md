@@ -189,6 +189,54 @@ full eligible population. Both paths use the same time bounds and percentile
 ranks; this remains a query-only optimization with no additional database
 connection, distinct-cardinality selector, or index.
 
+## Single-source derivations
+
+A dashboard fact that two surfaces report is derived once and consumed by
+both. The milestone that reconciled them is
+`plans/implementation/dashboard/013-observation-projection-derivation-reconciliation.md`.
+
+**Transcoding.** `TranscodingSummary` in `rust/src/db/repositories.rs` is the
+only owner of the transcoding derivation. `eggpool stats transcoding` and
+`/api/stats/transcoding` both read it, so the two surfaces report the same
+counts and the same `client→upstream` breakdown. The population is the
+finalized requests of the selected period: a pending request has no upstream
+protocol yet, so it is neither a native nor a transcoded observation. A
+request is transcoded when the protocol its client spoke differs from the
+protocol it was finally sent with; the persisted `transcoded` column is a
+materialized copy of that predicate, so the derivation reads the protocol
+columns and the copy stays redundant rather than authoritative. The native
+count is the total minus the transcoded count.
+
+**Cache read ratio.** One denominator serves the overview page and the
+summary JSON: `cache_read / (input + cache_read + cache_write)`. The
+dashboard counts "input tokens" without the cache counters, so the total
+input tokens a provider was asked to read are the fresh input plus the
+tokens it served from cache plus the tokens it wrote to cache. The ratio is
+`None` when that denominator is zero.
+
+**Time to first token.** Both timeseries endpoints read the raw `requests`
+table and average the first-byte duration over the streamed rows that carry
+a first-byte observation. The grouped projection used to prefer the
+`usage_rollups` table, which is a lossy aggregate flushed on its own
+schedule, so its reported average changed as soon as a rollup appeared; it
+now weights each group's average by its first-byte observation count rather
+than by its request count. The rollup schedule and the persistence layout
+are unchanged, and the rollup table still backs the bandwidth and token
+calendar projections.
+
+**Routing-policy facts.** The mode, cache-metric, compression-metric,
+stable-prefix-hash, and compression-policy facts the dashboard reports are
+derived from the routing module's own reported score surface
+(`RoutingCapabilitySurface`): a capability the router does not implement
+cannot appear as a score component, and adding one later changes the
+reported value without touching the dashboard. `routing_policy_guard`
+compares the reported projection against that source and names every
+divergence it finds.
+
+**Bounded lookups.** The telemetry renderer resolves every month label
+through the total `month_name` lookup, so no month value can index a month
+array out of bounds.
+
 ## Telemetry, Routing, Reliability, and Traces projections
 
 M004 telemetry pages are projections of persisted request attempts, requests,

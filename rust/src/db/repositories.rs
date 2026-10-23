@@ -545,11 +545,304 @@ fn cache_status_breakdown(
     Ok(Value::Object(output))
 }
 
+/// The period filter every transcoding aggregate shares.
+const TRANSCODING_PERIOD_FILTER: &str = "started_at >= CASE ?1 WHEN '1h' THEN datetime('now','-1 hour') WHEN '7d' THEN datetime('now','-7 days') WHEN '30d' THEN datetime('now','-30 days') ELSE datetime('now','-24 hours') END AND started_at < datetime('now') AND status!='pending'";
+
+/// A request is transcoded when the protocol the client spoke differs from
+/// the protocol it was finally sent with. The persisted `transcoded` column
+/// is a materialized copy of this predicate, so both spellings agree for
+/// every request the coordinator finalized; the predicate is the definition
+/// and the column is the redundant copy.
+const TRANSCODED_PREDICATE: &str =
+    "upstream_protocol IS NOT NULL AND protocol != upstream_protocol";
+
+/// The complement of [`TRANSCODED_PREDICATE`]: the request was forwarded with
+/// the protocol its client already spoke.
+const NATIVE_PREDICATE: &str = "protocol = COALESCE(upstream_protocol, protocol)";
+
+/// The single owner of the transcoding derivation.
+///
+/// `eggpool stats transcoding` and the dashboard's `/api/stats/transcoding`
+/// report the same facts, so both consume this one derivation instead of
+/// carrying their own SQL. The population is the finalized requests of the
+/// selected period: a pending request has no upstream protocol yet, so it is
+/// neither a native nor a transcoded observation.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct TranscodingSummary {
+    /// Finalized requests in the period.
+    pub total: i64,
+    /// Requests forwarded under a protocol other than the client's.
+    pub transcoded: i64,
+    /// Transcoded requests per `client→upstream` direction.
+    pub per_direction: BTreeMap<String, i64>,
+}
+
+impl TranscodingSummary {
+    /// Requests forwarded without changing the client's protocol.
+    pub fn native(&self) -> i64 {
+        self.total.saturating_sub(self.transcoded)
+    }
+
+    /// The published transcoding projection. The CLI command and the HTTP
+    /// endpoint return this same object.
+    pub fn to_projection(&self) -> Value {
+        serde_json::json!({
+            "native_count": self.native(),
+            "per_direction": self.per_direction,
+            "top_loss_warnings": [],
+            "total": self.total,
+            "transcoded_count": self.transcoded,
+        })
+    }
+}
+
+/// Read the transcoding summary for the selected period.
+fn query_transcoding_summary(
+    connection: &mut tokio_rusqlite::rusqlite::Connection,
+    period: &str,
+) -> Result<TranscodingSummary, tokio_rusqlite::rusqlite::Error> {
+    let (total, transcoded) = connection.query_row(
+        &format!(
+            "SELECT COUNT(*), COALESCE(SUM(CASE WHEN {TRANSCODED_PREDICATE} THEN 1 ELSE 0 END),0) \
+             FROM requests WHERE {TRANSCODING_PERIOD_FILTER}"
+        ),
+        [period],
+        |row| Ok((row.get::<_, i64>(0)?, row.get::<_, i64>(1)?)),
+    )?;
+    let mut statement = connection.prepare(&format!(
+        "SELECT protocol, upstream_protocol, COUNT(*) FROM requests \
+         WHERE {TRANSCODING_PERIOD_FILTER} AND {TRANSCODED_PREDICATE} \
+         GROUP BY protocol, upstream_protocol \
+         ORDER BY COUNT(*) DESC, protocol, upstream_protocol"
+    ))?;
+    let mut per_direction = BTreeMap::new();
+    let rows = statement.query_map([period], |row| {
+        Ok((
+            row.get::<_, String>(0)?,
+            row.get::<_, String>(1)?,
+            row.get::<_, i64>(2)?,
+        ))
+    })?;
+    for row in rows {
+        let (client, upstream, count) = row?;
+        per_direction.insert(format!("{client}→{upstream}"), count);
+    }
+    Ok(TranscodingSummary {
+        total,
+        transcoded,
+        per_direction,
+    })
+}
+
+/// The routing capabilities the dashboard reports.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum RoutingCapability {
+    /// Provider cache counters consumed by routing.
+    CacheMetrics,
+    /// Compression or segmentation metrics consumed by routing.
+    CompressionMetrics,
+    /// A stable-prefix hash consumed by routing.
+    StablePrefixHash,
+    /// A compression policy consumed by routing.
+    CompressionPolicy,
+}
+
+/// The score-component name fragments that identify a routing capability.
+///
+/// The fragments are ordered from the most specific to the least: a
+/// component that names a compression policy is a policy component, not a
+/// compression metric.
+const ROUTING_CAPABILITY_FRAGMENTS: &[(RoutingCapability, &[&str])] = &[
+    (RoutingCapability::CacheMetrics, &["cache"]),
+    (
+        RoutingCapability::CompressionPolicy,
+        &["compression_policy"],
+    ),
+    (RoutingCapability::CompressionMetrics, &["compression"]),
+    (
+        RoutingCapability::StablePrefixHash,
+        &["stable_prefix_hash", "prefix_hash"],
+    ),
+];
+
+/// The routing module's own reported capability surface.
+///
+/// The dashboard reports whether routing consumes cache metrics, compression
+/// metrics, a stable-prefix hash, or a compression policy. Those are
+/// statements about the routing implementation, not about configuration, so
+/// they are derived from the routing module's own reported score: every
+/// signal the scorer produces is a component of the routing score it
+/// reports. A capability that does not exist cannot appear there, and adding
+/// one later changes the derived value without touching the dashboard.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct RoutingCapabilitySurface {
+    components: BTreeSet<String>,
+}
+
+impl RoutingCapabilitySurface {
+    /// Read the surface from the routing module's own reported score.
+    pub fn current() -> Self {
+        // Score an account the estimator does not know so the surface comes
+        // from the routing module's reported score rather than from a
+        // hand-written list of its fields.
+        let estimator = crate::quota::QuotaEstimator::default();
+        let scores = crate::quota::QuotaFairScorer::new(crate::quota::ScoringPolicy::default())
+            .score_accounts(
+                &estimator,
+                &[String::from("routing-capability-surface")],
+                &BTreeMap::new(),
+                &BTreeMap::new(),
+                &BTreeMap::new(),
+                0.0,
+            );
+        let components = scores
+            .first()
+            .and_then(|score| serde_json::to_value(score).ok())
+            .and_then(|value| value.as_object().cloned())
+            .map(|object| object.keys().cloned().collect())
+            .unwrap_or_default();
+        Self { components }
+    }
+
+    /// Build a surface from an explicit component list.
+    pub fn from_components<I>(components: I) -> Self
+    where
+        I: IntoIterator<Item = String>,
+    {
+        Self {
+            components: components.into_iter().collect(),
+        }
+    }
+
+    /// The score components the routing module reports.
+    pub fn components(&self) -> &BTreeSet<String> {
+        &self.components
+    }
+
+    /// Whether the routing module reports a signal for this capability.
+    pub fn uses(&self, capability: RoutingCapability) -> bool {
+        self.components.iter().any(|component| {
+            ROUTING_CAPABILITY_FRAGMENTS
+                .iter()
+                .find(|(_, fragments)| {
+                    fragments
+                        .iter()
+                        .any(|fragment| component.contains(fragment))
+                })
+                .is_some_and(|(matched, _)| *matched == capability)
+        })
+    }
+}
+
+/// The routing-policy facts the dashboard reports, derived from the routing
+/// module's own capability surface.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct RoutingPolicyFacts {
+    /// `reporting_only` while no routing capability consumes a cache or
+    /// compression signal.
+    pub mode: &'static str,
+    /// Whether routing consumes provider cache counters.
+    pub uses_cache_metrics: bool,
+    /// Whether routing consumes compression or segmentation metrics.
+    pub uses_compression_metrics: bool,
+    /// Whether routing consumes a stable-prefix hash.
+    pub uses_stable_prefix_hash: bool,
+    /// Whether routing consumes a compression policy.
+    pub uses_compression_policy: bool,
+}
+
+impl RoutingPolicyFacts {
+    /// Whether routing stays isolated from the reported cache and compression
+    /// signals.
+    pub fn routing_isolated(&self) -> bool {
+        !(self.uses_cache_metrics
+            || self.uses_compression_metrics
+            || self.uses_stable_prefix_hash
+            || self.uses_compression_policy)
+    }
+}
+
+/// Derive the routing-policy facts from the routing module's own reported
+/// capability surface.
+pub fn routing_policy_facts() -> RoutingPolicyFacts {
+    routing_policy_facts_for(&RoutingCapabilitySurface::current())
+}
+
+/// Derive the routing-policy facts from an explicit capability surface.
+pub fn routing_policy_facts_for(surface: &RoutingCapabilitySurface) -> RoutingPolicyFacts {
+    let uses_cache_metrics = surface.uses(RoutingCapability::CacheMetrics);
+    let uses_compression_metrics = surface.uses(RoutingCapability::CompressionMetrics);
+    let uses_stable_prefix_hash = surface.uses(RoutingCapability::StablePrefixHash);
+    let uses_compression_policy = surface.uses(RoutingCapability::CompressionPolicy);
+    let isolated = !(uses_cache_metrics
+        || uses_compression_metrics
+        || uses_stable_prefix_hash
+        || uses_compression_policy);
+    RoutingPolicyFacts {
+        mode: if isolated {
+            "reporting_only"
+        } else {
+            "routing_aware"
+        },
+        uses_cache_metrics,
+        uses_compression_metrics,
+        uses_stable_prefix_hash,
+        uses_compression_policy,
+    }
+}
+
+/// Guard against drift between the reported routing-policy facts and the
+/// routing module's own capability surface.
+///
+/// `reported` is the `request_shaping` projection. The guard returns a
+/// description of the first divergence, or `None` while the reported facts
+/// still match the source.
+pub fn routing_policy_guard(reported: &Value, facts: &RoutingPolicyFacts) -> Option<String> {
+    let mut divergences = Vec::new();
+    let mode = reported["mode"]["routing"].as_str().unwrap_or_default();
+    if mode != facts.mode {
+        divergences.push(format!(
+            "request_shaping.mode.routing reports {mode:?} but the routing module reports {:?}",
+            facts.mode
+        ));
+    }
+    let guardrails = &reported["guardrails"];
+    let reported_cache_metrics = guardrails["routing_uses_cache_metrics"].as_bool();
+    if reported_cache_metrics != Some(facts.uses_cache_metrics) {
+        divergences.push(format!(
+            "request_shaping.guardrails.routing_uses_cache_metrics reports {reported_cache_metrics:?} but the routing module reports {}",
+            facts.uses_cache_metrics
+        ));
+    }
+    let reported_stable_prefix_hash = guardrails["routing_uses_stable_prefix_hash"].as_bool();
+    if reported_stable_prefix_hash != Some(facts.uses_stable_prefix_hash) {
+        divergences.push(format!(
+            "request_shaping.guardrails.routing_uses_stable_prefix_hash reports {reported_stable_prefix_hash:?} but the routing module reports {}",
+            facts.uses_stable_prefix_hash
+        ));
+    }
+    if divergences.is_empty() {
+        return None;
+    }
+    Some(divergences.join("; "))
+}
+
 impl DashboardRepository {
     pub fn new(database: &Database) -> Self {
         Self {
             database: database.clone(),
         }
+    }
+
+    /// The published transcoding projection. The CLI command and the
+    /// dashboard endpoint both read this one derivation.
+    pub async fn transcoding_summary(&self, period: &str) -> Result<Value, DatabaseError> {
+        let period = period.to_owned();
+        self.database
+            .call(move |connection| {
+                Ok(query_transcoding_summary(connection, &period)?.to_projection())
+            })
+            .await
     }
 
     /// Return the compatibility API's bounded, bucketed request series.
@@ -611,6 +904,12 @@ impl DashboardRepository {
     /// Return raw rows for the server's bounded top-N grouped timeseries
     /// compatibility projection. Identifiers and SQL expressions are chosen
     /// only from the server's validated grouping enum.
+    ///
+    /// The rows always come from the raw request table, so the grouped and
+    /// the ungrouped timeseries read the same storage layer over the same
+    /// streamed-row population. The returned flag reports whether a rollup
+    /// supplied the rows; it is `false` because the projection no longer
+    /// prefers the rollup table.
     pub async fn grouped_timeseries_json(
         &self,
         period: String,
@@ -634,63 +933,13 @@ impl DashboardRepository {
                     "account" => ("CAST(r.account_id AS TEXT)", "CAST(r.account_id AS TEXT)"),
                     _ => ("r.provider_id || '/' || r.model_id", "r.provider_id || ' / ' || r.model_id"),
                 };
-                let provider = if matches!(group_by.as_str(), "provider" | "provider_model") {
-                    "r.provider_id"
-                } else {
-                    "''"
-                };
-                let model_value = if matches!(group_by.as_str(), "model" | "provider_model") {
-                    "r.model_id"
-                } else {
-                    "''"
-                };
-                let rollup_sql = dashboard_sql(&format!(
-                    "SELECT strftime('{format}',r.bucket_start), {key}, {label}, {provider},\
-                    {model_value}, '', SUM(r.request_count), SUM(r.error_count),\
-                    SUM(r.input_tokens), SUM(r.output_tokens), SUM(r.cache_read_tokens),\
-                    SUM(r.cache_write_tokens), SUM(r.reasoning_tokens),\
-                    SUM(r.input_tokens)+SUM(r.output_tokens), SUM(r.cost_microdollars),\
-                    SUM(r.bytes_received), SUM(r.bytes_emitted),\
-                    CASE WHEN SUM(r.request_count)>0 THEN CAST(SUM(r.latency_ms_sum) AS REAL)/SUM(r.request_count) ELSE 0 END,\
-                    CASE WHEN SUM(r.first_byte_ms_count)>0 THEN CAST(SUM(r.first_byte_ms_sum) AS REAL)/SUM(r.first_byte_ms_count) ELSE 0 END\
-                    FROM usage_rollups r WHERE r.bucket_start >= CASE ?1 WHEN '1h' THEN datetime('now','-1 hour')\
-                    WHEN '7d' THEN datetime('now','-7 days') WHEN '30d' THEN datetime('now','-30 days')\
-                    ELSE datetime('now','-24 hours') END AND r.bucket_start < datetime('now')\
-                    AND r.bucket_size_s=(SELECT MAX(bucket_size_s) FROM usage_rollups WHERE bucket_start >= CASE ?1 WHEN '1h' THEN datetime('now','-1 hour')\
-                    WHEN '7d' THEN datetime('now','-7 days') WHEN '30d' THEN datetime('now','-30 days')\
-                    ELSE datetime('now','-24 hours') END AND bucket_start < datetime('now'))\
-                    AND (?2 IS NULL OR r.account_id=(SELECT id FROM accounts WHERE name=?2))\
-                    AND (?3 IS NULL OR r.model_id=?3) GROUP BY 1,2,3,4,5 ORDER BY 1,2 LIMIT 5000"
-                ));
-                let mut rollup_statement = connection.prepare(&rollup_sql)?;
-                let rollup_rows = rollup_statement
-                    .query_map(params![period, account, model], |row| {
-                        Ok(serde_json::json!({
-                            "bucket": row.get::<_, String>(0)?,
-                            "raw_series_key": row.get::<_, String>(1)?,
-                            "raw_series_label": row.get::<_, String>(2)?,
-                            "provider_id": row.get::<_, String>(3)?,
-                            "model_id": row.get::<_, String>(4)?,
-                            "account_name": "",
-                            "request_count": row.get::<_, i64>(6)?,
-                            "error_count": row.get::<_, i64>(7)?,
-                            "input_tokens": row.get::<_, i64>(8)?,
-                            "output_tokens": row.get::<_, i64>(9)?,
-                            "cache_read_tokens": row.get::<_, i64>(10)?,
-                            "cache_write_tokens": row.get::<_, i64>(11)?,
-                            "reasoning_tokens": row.get::<_, i64>(12)?,
-                            "total_tokens": row.get::<_, i64>(13)?,
-                            "cost_microdollars": row.get::<_, i64>(14)?,
-                            "bytes_received": row.get::<_, i64>(15)?,
-                            "bytes_emitted": row.get::<_, i64>(16)?,
-                            "avg_latency_ms": row.get::<_, f64>(17)?,
-                            "avg_ttft_ms": row.get::<_, f64>(18)?,
-                        }))
-                    })?
-                    .collect::<Result<Vec<_>, _>>()?;
-                if !rollup_rows.is_empty() {
-                    return Ok((rollup_rows, true));
-                }
+                // The grouped projection reads the raw request table: the same
+                // storage layer and the same streamed-row population the
+                // ungrouped timeseries reads, so both endpoints report the
+                // same average first-byte value whether or not a rollup has
+                // been written yet. The rollup table is a lossy aggregate
+                // flushed on its own schedule, so reading it here made the
+                // reported average change as soon as a rollup appeared.
                 let sql = dashboard_sql(&format!(
                     "SELECT strftime('{format}',r.started_at), {key}, {label}, r.provider_id,\
                     COALESCE(r.original_model_id,r.model_id), a.name, COUNT(*),\
@@ -701,7 +950,8 @@ impl DashboardRepository {
                     COALESCE(SUM(r.input_tokens),0)+COALESCE(SUM(r.output_tokens),0),\
                     COALESCE(SUM(r.cost_microdollars),0), COALESCE(SUM(r.bytes_received),0),\
                     COALESCE(SUM(r.bytes_emitted),0), COALESCE(AVG(r.upstream_latency_ms),0),\
-                    COALESCE(AVG(CASE WHEN r.streamed=1 THEN r.first_byte_ms END),0)\
+                    COALESCE(AVG(CASE WHEN r.streamed=1 THEN r.first_byte_ms END),0),\
+                    COUNT(CASE WHEN r.streamed=1 THEN r.first_byte_ms END)\
                     FROM requests r JOIN accounts a ON a.id=r.account_id\
                     WHERE r.started_at >= CASE ?1 WHEN '1h' THEN datetime('now','-1 hour')\
                     WHEN '7d' THEN datetime('now','-7 days') WHEN '30d' THEN datetime('now','-30 days')\
@@ -733,6 +983,7 @@ impl DashboardRepository {
                             "bytes_emitted": row.get::<_, i64>(16)?,
                             "avg_latency_ms": row.get::<_, f64>(17)?,
                             "avg_ttft_ms": row.get::<_, f64>(18)?,
+                            "ttft_count": row.get::<_, i64>(19)?,
                         }))
                     })?
                     .collect::<Result<Vec<_>, _>>()
@@ -746,18 +997,32 @@ impl DashboardRepository {
     pub async fn observability_stats(&self, period: &str) -> Result<Value, DatabaseError> {
         let period = period.to_owned();
         self.database.call(move |connection| {
-            let sql = "SELECT COUNT(*), COALESCE(SUM(transcoded),0), COALESCE(SUM(CASE WHEN cache_counter_status='reported' THEN cache_read_tokens ELSE 0 END),0), COALESCE(SUM(CASE WHEN cache_counter_status='reported' THEN cache_write_tokens ELSE 0 END),0), COALESCE(SUM(CASE WHEN cache_counter_status='reported' THEN COALESCE(cached_input_tokens,0) ELSE 0 END),0), COALESCE(SUM(cache_counter_status='reported'),0), COALESCE(SUM(cache_counter_status='not_reported' OR cache_counter_status IS NULL),0), COALESCE(SUM(CASE WHEN cache_counter_status='unknown_format' OR (cache_counter_status IS NOT NULL AND cache_counter_status NOT IN ('reported','not_reported','unknown_format')) THEN 1 ELSE 0 END),0), COALESCE(SUM(segmentation_status='segmented'),0), COALESCE(SUM(segmentation_status='not_collected'),0), COALESCE(SUM(segmentation_status='parse_failure'),0), COALESCE(SUM(segmentation_status='empty_request'),0), COALESCE(SUM(CASE WHEN stable_prefix_bytes>0 THEN 1 ELSE 0 END),0), COALESCE(SUM(COALESCE(stable_prefix_estimated_tokens,0)),0), COALESCE(SUM(COALESCE(semi_stable_estimated_tokens,0)),0), COALESCE(SUM(COALESCE(volatile_estimated_tokens,0)),0), COALESCE(SUM(COALESCE(stable_prefix_bytes,0)),0), COALESCE(SUM(COALESCE(semi_stable_bytes,0)),0), COALESCE(SUM(COALESCE(volatile_bytes,0)),0), COALESCE(SUM(compression_status='observed'),0), COALESCE(SUM(compression_candidate_count),0), COALESCE(SUM(compression_eligible_candidate_count),0), COALESCE(SUM(compression_suppressed_candidate_count),0), COALESCE(SUM(CASE WHEN volatile_bytes>0 THEN 1 ELSE 0 END),0), COALESCE(SUM(input_tokens),0), COALESCE(SUM(output_tokens),0), COALESCE(SUM(cache_counter_status='reported' AND transcoded=0),0), COALESCE(SUM(cache_read_tokens>0),0) FROM requests WHERE started_at >= CASE ?1 WHEN '1h' THEN datetime('now','-1 hour') WHEN '7d' THEN datetime('now','-7 days') WHEN '30d' THEN datetime('now','-30 days') ELSE datetime('now','-24 hours') END AND started_at < datetime('now') AND status!='pending'";
-            let values = connection.query_row(sql, [&period], |row| (0..28).map(|index| row.get::<_, i64>(index)).collect::<Result<Vec<_>, _>>())?;
-            debug_assert_eq!(values.len(), 28);
+            let sql = format!("SELECT COALESCE(SUM(CASE WHEN cache_counter_status='reported' THEN cache_read_tokens ELSE 0 END),0), COALESCE(SUM(CASE WHEN cache_counter_status='reported' THEN cache_write_tokens ELSE 0 END),0), COALESCE(SUM(CASE WHEN cache_counter_status='reported' THEN COALESCE(cached_input_tokens,0) ELSE 0 END),0), COALESCE(SUM(cache_counter_status='reported'),0), COALESCE(SUM(cache_counter_status='not_reported' OR cache_counter_status IS NULL),0), COALESCE(SUM(CASE WHEN cache_counter_status='unknown_format' OR (cache_counter_status IS NOT NULL AND cache_counter_status NOT IN ('reported','not_reported','unknown_format')) THEN 1 ELSE 0 END),0), COALESCE(SUM(segmentation_status='segmented'),0), COALESCE(SUM(segmentation_status='not_collected'),0), COALESCE(SUM(segmentation_status='parse_failure'),0), COALESCE(SUM(segmentation_status='empty_request'),0), COALESCE(SUM(CASE WHEN stable_prefix_bytes>0 THEN 1 ELSE 0 END),0), COALESCE(SUM(COALESCE(stable_prefix_estimated_tokens,0)),0), COALESCE(SUM(COALESCE(semi_stable_estimated_tokens,0)),0), COALESCE(SUM(COALESCE(volatile_estimated_tokens,0)),0), COALESCE(SUM(COALESCE(stable_prefix_bytes,0)),0), COALESCE(SUM(COALESCE(semi_stable_bytes,0)),0), COALESCE(SUM(COALESCE(volatile_bytes,0)),0), COALESCE(SUM(compression_status='observed'),0), COALESCE(SUM(compression_candidate_count),0), COALESCE(SUM(compression_eligible_candidate_count),0), COALESCE(SUM(compression_suppressed_candidate_count),0), COALESCE(SUM(CASE WHEN volatile_bytes>0 THEN 1 ELSE 0 END),0), COALESCE(SUM(input_tokens),0), COALESCE(SUM(output_tokens),0), COALESCE(SUM(CASE WHEN cache_counter_status='reported' AND {NATIVE_PREDICATE} THEN 1 ELSE 0 END),0), COALESCE(SUM(cache_read_tokens>0),0) FROM requests WHERE {TRANSCODING_PERIOD_FILTER}");
+            let values = connection.query_row(&sql, [&period], |row| (0..26).map(|index| row.get::<_, i64>(index)).collect::<Result<Vec<_>, _>>())?;
+            debug_assert_eq!(values.len(), 26);
             let cell = |index: usize| values.get(index).copied().unwrap_or(0);
-            let total=cell(0); let transcoded=cell(1); let read=cell(2); let write=cell(3); let cached=cell(4);
-            let reported=cell(5); let not_reported=cell(6); let unknown=cell(7);
+            let read=cell(0); let write=cell(1); let cached=cell(2);
+            let reported=cell(3); let not_reported=cell(4); let unknown=cell(5);
+            let segmented=cell(6); let not_collected=cell(7); let parse_failure=cell(8); let empty_request=cell(9);
+            let protected=cell(10);
+            let stable_tokens=cell(11); let semi_tokens=cell(12); let volatile_tokens=cell(13);
+            let stable_bytes=cell(14); let semi_bytes=cell(15); let volatile_bytes=cell(16);
+            let compression_observed=cell(17); let compression_candidates=cell(18); let compression_eligible=cell(19); let compression_suppressed=cell(20);
+            let compressible_candidates=cell(21);
+            let input_tokens=cell(22); let output_tokens=cell(23);
+            let native_cache_observed=cell(24); let cache_read_rows=cell(25);
+            // The transcoding counts and the per-direction breakdown come from
+            // the single owner the CLI command also reads, so the dashboard
+            // and `eggpool stats transcoding` never report two derivations.
+            let transcoding_summary = query_transcoding_summary(connection, &period)?;
+            let total = transcoding_summary.total;
+            let transcoded = transcoding_summary.transcoded;
             let known=reported+not_reported+unknown;
             let ratio=|numerator:i64, denominator:i64| if denominator==0 { Value::Null } else { serde_json::json!(numerator as f64/denominator as f64) };
             let per_account_status = cache_status_breakdown(connection, &period, "CAST(account_id AS TEXT)")?;
             let per_model_cache_status = cache_status_breakdown(connection, &period, "model_id")?;
             let per_protocol_status = cache_status_breakdown(connection, &period, "COALESCE(provider_id,'unknown') || '->' || COALESCE(upstream_protocol,'unknown')")?;
-            let cache=serde_json::json!({"by_status":{"not_reported":not_reported,"reported":reported,"unknown_format":unknown},"cache_benefited_request_rate":ratio(cell(27),total),"cache_benefited_requests":cell(27),"cache_counter_coverage_rate":ratio(reported,total),"cache_counter_not_reported_requests":not_reported,"cache_counter_reported_requests":reported,"cache_counter_unknown_requests":unknown,"cache_eligible_input_tokens":read+write+cached,"cache_eligible_requests":reported,"cache_hit_ratio_known_only":ratio(read,read+write),"cache_read_tokens_canonical":read,"cache_write_rate":ratio(write,read+write),"cache_write_tokens_canonical":write,"inconsistent_cache_counter_rows":0,"input_tokens_total":cell(24),"output_tokens_total":cell(25),"per_account_status":per_account_status,"per_model_status":per_model_cache_status,"per_protocol_status":per_protocol_status,"provider_cache_hit_rate":Value::Null,"requests_total":total,"total_cache_creation_input_tokens":write,"total_cache_read_input_tokens":read,"total_cache_write_input_tokens":write,"total_cached_input_tokens":cached,"total_requests":total,"transcoded_requests":transcoded});
+            let cache=serde_json::json!({"by_status":{"not_reported":not_reported,"reported":reported,"unknown_format":unknown},"cache_benefited_request_rate":ratio(cache_read_rows,total),"cache_benefited_requests":cache_read_rows,"cache_counter_coverage_rate":ratio(reported,total),"cache_counter_not_reported_requests":not_reported,"cache_counter_reported_requests":reported,"cache_counter_unknown_requests":unknown,"cache_eligible_input_tokens":read+write+cached,"cache_eligible_requests":reported,"cache_hit_ratio_known_only":ratio(read,read+write),"cache_read_tokens_canonical":read,"cache_write_rate":ratio(write,read+write),"cache_write_tokens_canonical":write,"inconsistent_cache_counter_rows":0,"input_tokens_total":input_tokens,"output_tokens_total":output_tokens,"per_account_status":per_account_status,"per_model_status":per_model_cache_status,"per_protocol_status":per_protocol_status,"provider_cache_hit_rate":Value::Null,"requests_total":total,"total_cache_creation_input_tokens":write,"total_cache_read_input_tokens":read,"total_cache_write_input_tokens":write,"total_cached_input_tokens":cached,"total_requests":total,"transcoded_requests":transcoded});
             let mut per_model = serde_json::Map::new();
             // One row per model with the status split pivoted into columns.
             // Grouping by `(model_id, segmentation_status)` and applying the
@@ -777,11 +1042,12 @@ impl DashboardRepository {
                 let key=format!("{}->{}",provider.chars().take(128).collect::<String>(),protocol.chars().take(32).collect::<String>());
                 per_provider.insert(key, serde_json::json!({"segmented":segmented,"not_collected":not_collected,"empty_request":empty_request,"parse_failure":parse_failure}));
             }
-            let segmentation=serde_json::json!({"total_requests":total,"by_status":{"segmented":values[8],"not_collected":values[9],"parse_failure":values[10],"empty_request":values[11]},"compressible_candidate_requests":values[23],"protected_requests":values[12],"byte_totals":{"all":values[16]+values[17]+values[18],"semi_stable":values[17],"stable_prefix":values[16],"volatile":values[18]},"token_totals":{"all":values[13]+values[14]+values[15],"semi_stable":values[14],"stable_prefix":values[13],"volatile":values[15]},"per_model_status":per_model,"per_provider_status":per_provider});
-            let transcoding=serde_json::json!({"native_count":total.saturating_sub(transcoded),"per_direction":{},"top_loss_warnings":[],"total":total,"transcoded_count":transcoded});
+            let segmentation=serde_json::json!({"total_requests":total,"by_status":{"segmented":segmented,"not_collected":not_collected,"parse_failure":parse_failure,"empty_request":empty_request},"compressible_candidate_requests":compressible_candidates,"protected_requests":protected,"byte_totals":{"all":stable_bytes+semi_bytes+volatile_bytes,"semi_stable":semi_bytes,"stable_prefix":stable_bytes,"volatile":volatile_bytes},"token_totals":{"all":stable_tokens+semi_tokens+volatile_tokens,"semi_stable":semi_tokens,"stable_prefix":stable_tokens,"volatile":volatile_tokens},"per_model_status":per_model,"per_provider_status":per_provider});
+            let transcoding=transcoding_summary.to_projection();
             let stability=serde_json::json!({"notes":"Cache-stability tracking is per-request and in-memory on TranscodeContext.cache_boundary_tracker; durable summary counts are reported-only.","transcoded_request_count":transcoded});
-            let shaping=serde_json::json!({"cache":{"cache_counter_known_rows":known,"cache_counter_reported_rate":ratio(reported,total),"cache_counter_reported_rows":reported,"cache_read_tokens":read,"cache_write_tokens":write,"cached_input_tokens":cached,"native_cache_observed_requests":values[26]},"guardrails":{"routing_uses_cache_metrics":false,"routing_uses_stable_prefix_hash":false},"mode":{"routing":"reporting_only"},"period":period,"segmentation":{"compressible_candidate_requests":values[23],"protected_requests":values[12],"requests_empty_request":values[11],"requests_not_collected":values[9],"requests_parse_failure":values[10],"requests_segmented":values[8]}});
-            Ok(serde_json::json!({"transcoding":transcoding,"cache_observability":cache,"canonical_request_segmentation":segmentation,"cache_stability":stability,"request_shaping":shaping,"compression_summary":{"observed_requests":values[19],"candidate_count":values[20],"eligible_candidate_count":values[21],"suppressed_candidate_count":values[22]}}))
+            let routing_policy = routing_policy_facts();
+            let shaping=serde_json::json!({"cache":{"cache_counter_known_rows":known,"cache_counter_reported_rate":ratio(reported,total),"cache_counter_reported_rows":reported,"cache_read_tokens":read,"cache_write_tokens":write,"cached_input_tokens":cached,"native_cache_observed_requests":native_cache_observed},"guardrails":{"routing_uses_cache_metrics":routing_policy.uses_cache_metrics,"routing_uses_stable_prefix_hash":routing_policy.uses_stable_prefix_hash},"mode":{"routing":routing_policy.mode},"period":period,"segmentation":{"compressible_candidate_requests":compressible_candidates,"protected_requests":protected,"requests_empty_request":empty_request,"requests_not_collected":not_collected,"requests_parse_failure":parse_failure,"requests_segmented":segmented}});
+            Ok(serde_json::json!({"transcoding":transcoding,"cache_observability":cache,"canonical_request_segmentation":segmentation,"cache_stability":stability,"request_shaping":shaping,"compression_summary":{"observed_requests":compression_observed,"candidate_count":compression_candidates,"eligible_candidate_count":compression_eligible,"suppressed_candidate_count":compression_suppressed}}))
         }).await
     }
 

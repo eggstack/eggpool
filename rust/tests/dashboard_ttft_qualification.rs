@@ -2,7 +2,9 @@
 
 use std::time::Instant;
 
-use eggpool::db::{Database, DatabaseConfig, MigrationRunner, UsageRollupRepository};
+use eggpool::db::{
+    DashboardRepository, Database, DatabaseConfig, MigrationRunner, UsageRollupRepository,
+};
 use tempfile::TempDir;
 use tokio_rusqlite::rusqlite::params;
 
@@ -80,6 +82,126 @@ async fn legacy_percentiles(database: &Database, period: &str) -> (f64, f64) {
         })
         .await
         .expect("legacy percentile query")
+}
+
+/// The two timeseries endpoints measured time to first token over different
+/// populations and different storage layers: the ungrouped series always read
+/// the raw request table, while the grouped series preferred the rollup table
+/// and weighted its per-group average by the request count instead of by the
+/// number of first-byte observations.
+#[tokio::test(flavor = "current_thread")]
+async fn the_timeseries_endpoints_agree_on_the_first_byte_average() {
+    for with_rollups in [false, true] {
+        let directory = tempfile::tempdir().expect("fixture directory");
+        let (database, _path) = open_database(&directory, "agreement").await;
+        insert_ttft_rows(
+            &database,
+            &[(1, 100, "-1 hour"), (1, 200, "-1 hour"), (0, -1, "-1 hour")],
+        )
+        .await;
+        // A second group: one streamed request next to three non-streamed
+        // ones, so an average weighted by the request count differs from an
+        // average weighted by the first-byte observations.
+        database
+            .call(|connection| {
+                for (streamed, first_byte_ms) in
+                    [(1_i64, Some(600_i64)), (0, None), (0, None), (0, None)]
+                {
+                    connection.execute(
+                        "INSERT INTO requests (account_id, model_id, provider_id, status, streamed, first_byte_ms, started_at) \
+                         VALUES (1, 'qualification-model', 'provider-b', 'completed', ?1, ?2, datetime('now','-1 hour'))",
+                        params![streamed, first_byte_ms],
+                    )?;
+                }
+                Ok(())
+            })
+            .await
+            .expect("second group rows insert");
+        if with_rollups {
+            // A rollup that reports a different first-byte average: reading it
+            // instead of the raw rows is what made the grouped endpoint report
+            // a different number from the ungrouped one.
+            database
+                .call(|connection| {
+                    // The bucket is taken from the seeded request row so the
+                    // rollup lands in the same bucket as the raw rows.
+                    connection.execute(
+                        "INSERT INTO usage_rollups (bucket_start, bucket_size_s, provider_id, model_id, account_id, protocol, streamed, status, request_count, error_count, input_tokens, output_tokens, first_byte_ms_sum, first_byte_ms_count) \
+                         SELECT strftime('%Y-%m-%d %H:00:00', started_at), 300, 'rollup-provider', 'rollup-model', 1, 'openai', 1, 'completed', 4, 0, 0, 0, 1000, 4 FROM requests LIMIT 1",
+                        [],
+                    )?;
+                    Ok(())
+                })
+                .await
+                .expect("rollup row inserts");
+        }
+
+        let repository = DashboardRepository::new(&database);
+        let plain = repository
+            .timeseries_json("24h".into(), "hour".into(), None, None)
+            .await
+            .expect("plain timeseries");
+        let (grouped, from_rollups) = repository
+            .grouped_timeseries_json(
+                "24h".into(),
+                "hour".into(),
+                "provider_model".into(),
+                None,
+                None,
+            )
+            .await
+            .expect("grouped timeseries");
+
+        assert!(
+            !from_rollups,
+            "the grouped timeseries still reads the rollup table"
+        );
+        assert!(
+            grouped
+                .iter()
+                .all(|row| row["account_name"].as_str() == Some("qualification")),
+            "the grouped timeseries did not read the raw request rows: {grouped:?}"
+        );
+
+        // The grouped average is taken over the streamed rows that carry a
+        // first-byte observation.
+        let mut weighted = std::collections::BTreeMap::<String, (f64, i64)>::new();
+        for row in &grouped {
+            let bucket = row["bucket"].as_str().unwrap_or_default().to_owned();
+            let count = row["ttft_count"].as_i64().unwrap_or(0);
+            let average = row["avg_ttft_ms"].as_f64().unwrap_or(0.0);
+            let entry = weighted.entry(bucket).or_insert((0.0, 0));
+            entry.0 += average * count as f64;
+            entry.1 += count;
+        }
+        assert!(
+            !plain.is_empty(),
+            "the ungrouped timeseries reported no rows"
+        );
+        for row in &plain {
+            let bucket = row["bucket"].as_str().unwrap_or_default();
+            let plain_average = row["avg_ttft_ms"].as_f64().unwrap_or(0.0);
+            let (sum, count) = weighted
+                .get(bucket)
+                .copied()
+                .unwrap_or_else(|| panic!("the grouped timeseries reported no rows for {bucket}"));
+            assert!(count > 0, "no first-byte observations in {bucket}");
+            let grouped_average = sum / count as f64;
+            assert!(
+                (grouped_average - plain_average).abs() < 1e-9,
+                "the timeseries endpoints report different first-byte averages for {bucket}: \
+                 grouped {grouped_average} vs ungrouped {plain_average} (rollups present: {with_rollups})"
+            );
+            // (100 + 200 + 600) / 3 streamed rows with a first-byte
+            // observation.
+            assert!(
+                (plain_average - 300.0).abs() < 1e-9,
+                "unexpected first-byte average {plain_average}"
+            );
+        }
+
+        database.close().await.expect("database closes");
+    }
 }
 
 #[tokio::test(flavor = "current_thread")]

@@ -195,7 +195,10 @@ pub(super) fn grouped_timeseries_projection(
         .take(limit)
         .map(|(key, _)| key.clone())
         .collect::<std::collections::BTreeSet<_>>();
-    let mut points = std::collections::BTreeMap::<(String, String), (Value, f64, f64)>::new();
+    // The point accumulator keeps the first-byte population next to the
+    // weighted sum: the average is taken over the streamed rows that carry a
+    // first-byte observation, not over every request in the group.
+    let mut points = std::collections::BTreeMap::<(String, String), (Value, f64, f64, i64)>::new();
     let mut buckets = std::collections::BTreeSet::new();
     for row in rows {
         let bucket_name = row["bucket"].as_str().unwrap_or_default().to_owned();
@@ -218,7 +221,7 @@ pub(super) fn grouped_timeseries_projection(
                 "reasoning_tokens": 0, "total_tokens": 0, "cost_microdollars": 0,
                 "bytes_received": 0, "bytes_emitted": 0, "avg_latency_ms": 0.0,
                 "avg_ttft_ms": 0.0
-            }), 0.0, 0.0)
+            }), 0.0, 0.0, 0)
         });
         let value = &mut point.0;
         let count = row["request_count"].as_i64().unwrap_or(0);
@@ -239,35 +242,45 @@ pub(super) fn grouped_timeseries_projection(
             value[field] = json!(next);
         }
         point.1 += row["avg_latency_ms"].as_f64().unwrap_or(0.0) * count as f64;
-        point.2 += row["avg_ttft_ms"].as_f64().unwrap_or(0.0) * count as f64;
+        let ttft_count = row["ttft_count"].as_i64().unwrap_or(0);
+        point.2 += row["avg_ttft_ms"].as_f64().unwrap_or(0.0) * ttft_count as f64;
+        point.3 += ttft_count;
     }
     let mut finished_points = points
         .into_values()
-        .map(|(mut point, latency_sum, ttft_sum)| {
+        .map(|(mut point, latency_sum, ttft_sum, ttft_count)| {
             let count = point["request_count"].as_i64().unwrap_or(0);
             point["avg_latency_ms"] = json!(if count > 0 {
                 latency_sum / count as f64
             } else {
                 0.0
             });
-            point["avg_ttft_ms"] = json!(if count > 0 {
-                ttft_sum / count as f64
+            point["avg_ttft_ms"] = json!(if ttft_count > 0 {
+                ttft_sum / ttft_count as f64
             } else {
                 0.0
             });
-            point
+            (point, ttft_count)
         })
         .collect::<Vec<_>>();
     finished_points.sort_by(|left, right| {
-        left["bucket"]
+        left.0["bucket"]
             .as_str()
-            .cmp(&right["bucket"].as_str())
-            .then_with(|| left["is_other"].as_bool().cmp(&right["is_other"].as_bool()))
-            .then_with(|| left["label"].as_str().cmp(&right["label"].as_str()))
+            .cmp(&right.0["bucket"].as_str())
+            .then_with(|| {
+                left.0["is_other"]
+                    .as_bool()
+                    .cmp(&right.0["is_other"].as_bool())
+            })
+            .then_with(|| left.0["label"].as_str().cmp(&right.0["label"].as_str()))
     });
     let mut series = std::collections::BTreeMap::<String, Value>::new();
     let mut bucket_totals = std::collections::BTreeMap::<String, Value>::new();
-    for point in &finished_points {
+    let mut series_ttft: std::collections::BTreeMap<String, i64> =
+        std::collections::BTreeMap::new();
+    let mut bucket_ttft: std::collections::BTreeMap<String, i64> =
+        std::collections::BTreeMap::new();
+    for (point, ttft_count) in &finished_points {
         let key = point["series_key"].as_str().unwrap_or_default().to_owned();
         let is_other = point["is_other"].as_bool().unwrap_or(false);
         let entry = series.entry(key.clone()).or_insert_with(|| {
@@ -297,10 +310,11 @@ pub(super) fn grouped_timeseries_projection(
         );
         entry["avg_ttft_ms"] = json!(
             entry["avg_ttft_ms"].as_f64().unwrap_or(0.0)
-                + point["avg_ttft_ms"].as_f64().unwrap_or(0.0) * count as f64
+                + point["avg_ttft_ms"].as_f64().unwrap_or(0.0) * *ttft_count as f64
         );
+        *series_ttft.entry(key.clone()).or_insert(0) += *ttft_count;
         let bucket = point["bucket"].as_str().unwrap_or_default().to_owned();
-        let total = bucket_totals.entry(bucket).or_insert_with(|| json!({"request_count":0,"error_count":0,"input_tokens":0,"output_tokens":0,"cache_read_tokens":0,"cache_write_tokens":0,"reasoning_tokens":0,"total_tokens":0,"cost_microdollars":0,"bytes_received":0,"bytes_emitted":0,"avg_latency_ms":0.0,"avg_ttft_ms":0.0}));
+        let total = bucket_totals.entry(bucket.clone()).or_insert_with(|| json!({"request_count":0,"error_count":0,"input_tokens":0,"output_tokens":0,"cache_read_tokens":0,"cache_write_tokens":0,"reasoning_tokens":0,"total_tokens":0,"cost_microdollars":0,"bytes_received":0,"bytes_emitted":0,"avg_latency_ms":0.0,"avg_ttft_ms":0.0}));
         total["request_count"] = json!(total["request_count"].as_i64().unwrap_or(0) + count);
         for field in [
             "error_count",
@@ -323,26 +337,38 @@ pub(super) fn grouped_timeseries_projection(
         );
         total["avg_ttft_ms"] = json!(
             total["avg_ttft_ms"].as_f64().unwrap_or(0.0)
-                + point["avg_ttft_ms"].as_f64().unwrap_or(0.0) * count as f64
+                + point["avg_ttft_ms"].as_f64().unwrap_or(0.0) * *ttft_count as f64
         );
+        *bucket_ttft.entry(bucket.clone()).or_insert(0) += *ttft_count;
     }
-    for entry in series.values_mut() {
+    for (key, entry) in series.iter_mut() {
         let count = entry["total_requests"].as_i64().unwrap_or(0);
         if count > 0 {
             entry["avg_latency_ms"] =
                 json!(entry["avg_latency_ms"].as_f64().unwrap_or(0.0) / count as f64);
-            entry["avg_ttft_ms"] =
-                json!(entry["avg_ttft_ms"].as_f64().unwrap_or(0.0) / count as f64);
         }
+        // The first-byte average is taken over the streamed rows that carry a
+        // first-byte observation, the same population the ungrouped timeseries
+        // averages over.
+        let ttft_count = series_ttft.get(key).copied().unwrap_or(0);
+        entry["avg_ttft_ms"] = json!(if ttft_count > 0 {
+            entry["avg_ttft_ms"].as_f64().unwrap_or(0.0) / ttft_count as f64
+        } else {
+            0.0
+        });
     }
-    for total in bucket_totals.values_mut() {
+    for (bucket, total) in bucket_totals.iter_mut() {
         let count = total["request_count"].as_i64().unwrap_or(0);
         if count > 0 {
             total["avg_latency_ms"] =
                 json!(total["avg_latency_ms"].as_f64().unwrap_or(0.0) / count as f64);
-            total["avg_ttft_ms"] =
-                json!(total["avg_ttft_ms"].as_f64().unwrap_or(0.0) / count as f64);
         }
+        let ttft_count = bucket_ttft.get(bucket).copied().unwrap_or(0);
+        total["avg_ttft_ms"] = json!(if ttft_count > 0 {
+            total["avg_ttft_ms"].as_f64().unwrap_or(0.0) / ttft_count as f64
+        } else {
+            0.0
+        });
     }
     let series = ranked_series_order(&ranked, &selected, series);
     let total_rows = bucket_totals
@@ -352,6 +378,10 @@ pub(super) fn grouped_timeseries_projection(
             value["bucket"] = json!(bucket);
             value
         })
+        .collect::<Vec<_>>();
+    let finished_points = finished_points
+        .into_iter()
+        .map(|(point, _)| point)
         .collect::<Vec<_>>();
     json!({"bucket":bucket,"group_by":group_by,"metric":"requests","limit":limit,"source":if from_rollups {"rollup"} else {"raw"},"degraded_reason":"none","buckets":buckets,"series":series,"points":finished_points,"bucket_totals":total_rows})
 }

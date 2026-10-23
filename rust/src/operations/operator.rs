@@ -569,16 +569,12 @@ pub async fn transcoding_stats(database: &Database, period: &str) -> Result<Valu
         operation: "validate period".into(),
         source: Box::new(tokio_rusqlite::rusqlite::Error::InvalidParameterName(error)),
     })?;
-    let modifier = period_modifier(period);
-    let (total, native, transcoded): (i64, i64, i64) = database.call(move |connection| connection.query_row("SELECT COUNT(*),COALESCE(SUM(CASE WHEN protocol=COALESCE(upstream_protocol,protocol) THEN 1 ELSE 0 END),0),COALESCE(SUM(CASE WHEN protocol!=COALESCE(upstream_protocol,protocol) AND upstream_protocol IS NOT NULL THEN 1 ELSE 0 END),0) FROM requests WHERE started_at >= datetime('now',?1) AND started_at < datetime('now')", [modifier], |row| Ok((row.get(0)?,row.get(1)?,row.get(2)?)))).await?;
-    let directions: Vec<(String, String, i64)> = database.call(move |connection| { let mut statement = connection.prepare("SELECT protocol,upstream_protocol,COUNT(*) FROM requests WHERE started_at >= datetime('now',?1) AND started_at < datetime('now') AND upstream_protocol IS NOT NULL AND protocol != upstream_protocol GROUP BY protocol,upstream_protocol ORDER BY COUNT(*) DESC,protocol,upstream_protocol")?; statement.query_map([modifier], |row| Ok((row.get(0)?,row.get(1)?,row.get(2)?)))?.collect() }).await?;
-    let per_direction = directions
-        .into_iter()
-        .map(|(client, upstream, count)| (format!("{client}→{upstream}"), count))
-        .collect::<BTreeMap<_, _>>();
-    Ok(
-        json!({"total": total, "native_count": native, "transcoded_count": transcoded, "per_direction": per_direction, "top_loss_warnings": []}),
-    )
+    // The dashboard repository owns the transcoding derivation so the CLI and
+    // the HTTP endpoint report the same counts and the same per-direction
+    // breakdown instead of each carrying its own SQL.
+    crate::db::repositories::DashboardRepository::new(database)
+        .transcoding_summary(period)
+        .await
 }
 
 pub async fn recompute_costs(

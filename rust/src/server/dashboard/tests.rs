@@ -5,6 +5,7 @@ use crate::server::middleware::{is_loopback_host, valid_key_shape, verify_api_ke
 use axum::http::{HeaderMap, HeaderValue};
 use serde::Deserialize;
 use sha2::{Digest, Sha256};
+use tokio_rusqlite::rusqlite::params;
 
 const RENDER_MODULE_SOURCES: [&str; 9] = [
     include_str!("render/mod.rs"),
@@ -304,6 +305,276 @@ fn model_detail_observations_render_only_compact_metadata() {
     assert!(html.contains("&lt;catalog&gt;"));
     assert!(!html.contains("DO_NOT_RENDER"));
     assert!(html.contains("Observations"));
+}
+
+/// The overview page and the summary JSON reported the cache read ratio over
+/// two different denominators: the page used `cache_read / (cache_read +
+/// input)` while the JSON used `cache_read / (input + cache_read +
+/// cache_write)`. The same installation therefore showed two cache read
+/// ratios for the same data.
+#[tokio::test]
+async fn overview_html_and_summary_json_report_the_same_cache_read_ratio() {
+    let directory = tempfile::tempdir().expect("temporary dashboard database");
+    let database = crate::db::Database::open(crate::db::DatabaseConfig {
+        path: directory
+            .path()
+            .join("dashboard.sqlite3")
+            .to_string_lossy()
+            .into_owned(),
+        ..crate::db::DatabaseConfig::default()
+    })
+    .await
+    .expect("database opens");
+    crate::db::MigrationRunner::new(&database)
+        .run()
+        .await
+        .expect("migrations run");
+    database
+        .call(|connection| {
+            connection.execute(
+                "INSERT INTO accounts (id, name, api_key_env) VALUES (1, 'account-a', 'KEY_A')",
+                [],
+            )?;
+            connection.execute("INSERT INTO models (model_id) VALUES ('model-a')", [])?;
+            connection.execute(
+                "INSERT INTO requests (account_id, model_id, status, input_tokens, output_tokens, cache_read_tokens, cache_write_tokens, started_at) \
+                 VALUES (1, 'model-a', 'completed', 600, 0, 300, 100, datetime('now','-1 minute'))",
+                [],
+            )?;
+            Ok(())
+        })
+        .await
+        .expect("fixture rows insert");
+
+    let summary = crate::db::UsageRollupRepository::new(&database)
+        .dashboard_summary_basic("24h")
+        .await
+        .expect("summary reads");
+    let json = super::render::summary_json(&summary, "24h");
+    let ratio = json["cache_read_ratio"]
+        .as_f64()
+        .expect("the summary reports a cache read ratio");
+    // Total input tokens are the fresh input plus the cache read and cache
+    // write tokens: 600 + 300 + 100.
+    assert!(
+        (ratio - 0.3).abs() < 1e-9,
+        "unexpected cache read ratio {ratio}"
+    );
+
+    let html = super::render_overview(
+        &summary,
+        super::OverviewPage {
+            accounts: &[],
+            page_data: &crate::db::DashboardData::default(),
+            period: "24h",
+            theme: "Nord",
+            refresh_interval_s: 60,
+            show_disabled: false,
+            health_snapshots: &[],
+        },
+    );
+    // The page reports the same share the JSON reports.
+    assert!(
+        html.contains("<p class=\"metric\">30.0%</p>"),
+        "the page and the JSON report different cache read ratios: {html}"
+    );
+    // The chosen denominator is the one the existing labels describe: the
+    // card reports the cache reads as a share of total input tokens, and the
+    // dashboard counts input tokens without the cache counters.
+    assert!(html.contains("cache reads / total input"));
+    assert!(html.contains("cache-read tokens as a share of total input tokens"));
+    assert!(html.contains(
+        "Input plus output tokens recorded for the selected period, excluding cache-read and cache-write counters."
+    ));
+    database.close().await.expect("database closes");
+}
+
+/// The grouped timeseries weighted its first-byte average by the request
+/// count, so a group that mixed streamed and non-streamed requests reported
+/// an average the ungrouped timeseries never produced.
+#[tokio::test]
+async fn the_grouped_timeseries_reports_the_ungrouped_first_byte_average() {
+    let directory = tempfile::tempdir().expect("temporary dashboard database");
+    let database = crate::db::Database::open(crate::db::DatabaseConfig {
+        path: directory
+            .path()
+            .join("dashboard.sqlite3")
+            .to_string_lossy()
+            .into_owned(),
+        ..crate::db::DatabaseConfig::default()
+    })
+    .await
+    .expect("database opens");
+    crate::db::MigrationRunner::new(&database)
+        .run()
+        .await
+        .expect("migrations run");
+    database
+        .call(|connection| {
+            connection.execute(
+                "INSERT INTO accounts (id, name, api_key_env) VALUES (1, 'account-a', 'KEY_A')",
+                [],
+            )?;
+            connection.execute("INSERT INTO models (model_id) VALUES ('model-a')", [])?;
+            // Two groups: the first carries two streamed requests, the second
+            // one streamed request next to three non-streamed ones, so an
+            // average weighted by the request count differs from an average
+            // weighted by the first-byte observations.
+            for (id, provider, streamed, first_byte_ms) in [
+                (1_i64, "provider-a", 1_i64, Some(100_i64)),
+                (2, "provider-a", 1, Some(200)),
+                (3, "provider-b", 1, Some(600)),
+                (4, "provider-b", 0, None),
+                (5, "provider-b", 0, None),
+                (6, "provider-b", 0, None),
+            ] {
+                connection.execute(
+                    "INSERT INTO requests (id, account_id, model_id, provider_id, status, streamed, first_byte_ms, started_at) \
+                     VALUES (?1, 1, 'model-a', ?4, 'completed', ?2, ?3, datetime('now','-1 minute'))",
+                    params![id, streamed, first_byte_ms, provider],
+                )?;
+            }
+            Ok(())
+        })
+        .await
+        .expect("fixture rows insert");
+
+    let repository = crate::db::DashboardRepository::new(&database);
+    let plain = repository
+        .timeseries_json("24h".into(), "hour".into(), None, None)
+        .await
+        .expect("plain timeseries");
+    let (grouped, from_rollups) = repository
+        .grouped_timeseries_json(
+            "24h".into(),
+            "hour".into(),
+            "provider_model".into(),
+            None,
+            None,
+        )
+        .await
+        .expect("grouped timeseries");
+    let projection =
+        super::grouped_timeseries_projection(&grouped, "hour", "provider_model", 12, from_rollups);
+    let totals = projection["bucket_totals"]
+        .as_array()
+        .expect("bucket totals array");
+    assert!(
+        !totals.is_empty(),
+        "the grouped projection reported no totals"
+    );
+    for total in totals {
+        let bucket = total["bucket"].as_str().unwrap_or_default();
+        let plain_average = plain
+            .iter()
+            .find(|row| row["bucket"].as_str() == Some(bucket))
+            .and_then(|row| row["avg_ttft_ms"].as_f64())
+            .unwrap_or_else(|| panic!("the ungrouped timeseries reported no row for {bucket}"));
+        let grouped_average = total["avg_ttft_ms"].as_f64().unwrap_or(0.0);
+        assert!(
+            (grouped_average - plain_average).abs() < 1e-9,
+            "the timeseries endpoints report different first-byte averages for {bucket}: \
+             grouped {grouped_average} vs ungrouped {plain_average}"
+        );
+        // (100 + 200 + 600) / 3 streamed rows with a first-byte observation.
+        assert!(
+            (plain_average - 300.0).abs() < 1e-9,
+            "unexpected first-byte average {plain_average}"
+        );
+    }
+    database.close().await.expect("database closes");
+}
+
+/// The routing-policy facts the dashboard reports are derived from the
+/// routing module's own reported capability surface, and a guard fails when
+/// the reported fact diverges from that source.
+#[tokio::test]
+async fn reported_routing_policy_facts_are_derived_and_guarded() {
+    let directory = tempfile::tempdir().expect("temporary dashboard database");
+    let database = crate::db::Database::open(crate::db::DatabaseConfig {
+        path: directory
+            .path()
+            .join("dashboard.sqlite3")
+            .to_string_lossy()
+            .into_owned(),
+        ..crate::db::DatabaseConfig::default()
+    })
+    .await
+    .expect("database opens");
+    crate::db::MigrationRunner::new(&database)
+        .run()
+        .await
+        .expect("migrations run");
+
+    let facts = crate::db::repositories::routing_policy_facts();
+    assert!(
+        facts.routing_isolated(),
+        "the routing module reports no cache or compression signal: {facts:?}"
+    );
+    assert_eq!(facts.mode, "reporting_only");
+
+    let stats = crate::db::DashboardRepository::new(&database)
+        .observability_stats("24h")
+        .await
+        .expect("observability stats project");
+    assert_eq!(
+        crate::db::repositories::routing_policy_guard(&stats["request_shaping"], &facts),
+        None,
+        "the reported routing-policy facts diverge from the routing module"
+    );
+
+    // Enabling the capability in the routing module changes the derived
+    // facts, and the guard then fails against a projection that still
+    // reports the old value.
+    let enabled = crate::db::repositories::routing_policy_facts_for(
+        &crate::db::repositories::RoutingCapabilitySurface::from_components([
+            "quota_score".to_owned(),
+            "cache_read_tokens".to_owned(),
+        ]),
+    );
+    assert!(enabled.uses_cache_metrics);
+    assert!(!enabled.routing_isolated());
+    assert_eq!(enabled.mode, "routing_aware");
+    let divergence =
+        crate::db::repositories::routing_policy_guard(&stats["request_shaping"], &enabled).expect(
+            "the guard must fail when the capability is enabled without the projection changing",
+        );
+    assert!(
+        divergence.contains("routing_uses_cache_metrics"),
+        "unexpected divergence: {divergence}"
+    );
+    database.close().await.expect("database closes");
+}
+
+/// The telemetry renderer indexed a twelve-element month-name array with a
+/// month value converted to `usize`, so an out-of-range month indexed out of
+/// bounds.
+#[test]
+fn out_of_range_month_values_render_without_panicking() {
+    for month in [0_i64, 13, -1, i64::MIN, i64::MAX] {
+        let label = super::format::month_name(month);
+        assert!(!label.is_empty(), "month {month} produced an empty label");
+    }
+    assert_eq!(super::format::month_name(1), "Jan");
+    assert_eq!(super::format::month_name(12), "Dec");
+
+    // The renderer routes every month label through the total lookup.
+    let source = include_str!("render/telemetry.rs");
+    assert!(
+        !source.contains("months[("),
+        "the telemetry renderer indexes a month array directly"
+    );
+
+    // The heatmap still renders its month labels.
+    let rows = [crate::db::repositories::DashboardTokenActivityRow {
+        day: "2026-10-01".to_owned(),
+        total_tokens: 1234,
+        requests: 2,
+        bytes_received: 2048,
+        bytes_emitted: 4096,
+    }];
+    let html = super::render_token_heatmap(&rows, "Cyber Red");
+    assert!(html.contains("heatmap-label"));
 }
 
 #[tokio::test]

@@ -30,6 +30,17 @@ pub(in crate::server::dashboard) fn render_cache_page(
         num(&["request_shaping", "cache", "cache_counter_reported_rows"]),
         num(&["request_shaping", "cache", "cache_counter_known_rows"]),
     );
+    // The routing-policy facts are derived from the routing module's own
+    // reported capability surface, so the page follows the router instead of
+    // asserting what the router does.
+    let routing_policy = db::repositories::routing_policy_facts();
+    let routing_uses = |uses: bool| {
+        if uses {
+            "yes".to_owned()
+        } else {
+            "no".to_owned()
+        }
+    };
     let stability_notes = stats["cache_stability"]["notes"]
         .as_str()
         .unwrap_or("Boundary detail lives in per-request traces.");
@@ -137,11 +148,23 @@ pub(in crate::server::dashboard) fn render_cache_page(
                 "compressible_candidate_requests",
             ]),
         ),
-        ("Mode", "reporting_only".to_owned()),
-        ("Cache metrics", "no".to_owned()),
-        ("Compression metrics", "no".to_owned()),
-        ("Stable-prefix hash", "no".to_owned()),
-        ("Compression policy", "no".to_owned()),
+        ("Mode", routing_policy.mode.to_owned()),
+        (
+            "Cache metrics",
+            routing_uses(routing_policy.uses_cache_metrics),
+        ),
+        (
+            "Compression metrics",
+            routing_uses(routing_policy.uses_compression_metrics),
+        ),
+        (
+            "Stable-prefix hash",
+            routing_uses(routing_policy.uses_stable_prefix_hash),
+        ),
+        (
+            "Compression policy",
+            routing_uses(routing_policy.uses_compression_policy),
+        ),
     ];
     let cards = [
         runtime_metric_card("Request changes", "no changes", "disabled by config"),
@@ -155,8 +178,20 @@ pub(in crate::server::dashboard) fn render_cache_page(
         ),
         runtime_metric_card(
             "Routing isolation",
-            "Isolated",
-            "mode reporting_only · cache/compression stay out of scorer",
+            if routing_policy.routing_isolated() {
+                "Isolated"
+            } else {
+                "Not isolated"
+            },
+            &format!(
+                "mode {} · cache/compression {}",
+                routing_policy.mode,
+                if routing_policy.routing_isolated() {
+                    "stay out of scorer"
+                } else {
+                    "reach the scorer"
+                }
+            ),
         ),
     ]
     .concat();
@@ -233,8 +268,13 @@ pub(in crate::server::dashboard) fn render_cache_page(
             })
             .collect::<String>()
     };
+    let routing_isolation = if routing_policy.routing_isolated() {
+        "Cache and compression metrics are reporting-only. The <code>QuotaFairScorer</code> does NOT consume cache, compression, stable-prefix-hash, or compression-policy fields.".to_owned()
+    } else {
+        "Cache and compression metrics reach the scorer. The <code>QuotaFairScorer</code> consumes the reported cache or compression signal.".to_owned()
+    };
     let advanced = format!(
-        "<section class=\"panel\"><h3>Native cache preservation ({})</h3><p class=\"sub\">Native cache annotations are tracked per request during transcoding. The durable summary below confirms the tracker is wired and counts transcoded requests in window; per-boundary detail is in the request trace.</p><section class=\"cards\">{}</section><p class=\"sub\">{}</p></section><section class=\"panel\"><h3>Request segmentation ({})</h3><p class=\"sub\">Structural segmentation shows how much traffic was segmented, intentionally skipped, or had no segmentable content without mutating requests.</p><section class=\"cards\">{}</section><div class=\"table-scroll\" tabindex=\"0\" role=\"region\" aria-label=\"Scrollable data table\"><table class=\"data compact\"><thead><tr><th data-priority=\"1\">Metric</th><th data-priority=\"2\">Value</th></tr></thead><tbody>{}</tbody></table></div></section><section class=\"panel\"><h3>Routing isolation</h3><p class=\"sub\">Cache and compression metrics are reporting-only. The <code>QuotaFairScorer</code> does NOT consume cache, compression, stable-prefix-hash, or compression-policy fields. Same-provider account scoring stays load-based. These flags are hardcoded; they reflect how the router is built, not the current request stream.</p><section class=\"cards\">{}</section><p class=\"sub\">Scorer inputs (allowed): <code>health, quota, active_requests, model_eligibility</code></p></section>",
+        "<section class=\"panel\"><h3>Native cache preservation ({})</h3><p class=\"sub\">Native cache annotations are tracked per request during transcoding. The durable summary below confirms the tracker is wired and counts transcoded requests in window; per-boundary detail is in the request trace.</p><section class=\"cards\">{}</section><p class=\"sub\">{}</p></section><section class=\"panel\"><h3>Request segmentation ({})</h3><p class=\"sub\">Structural segmentation shows how much traffic was segmented, intentionally skipped, or had no segmentable content without mutating requests.</p><section class=\"cards\">{}</section><div class=\"table-scroll\" tabindex=\"0\" role=\"region\" aria-label=\"Scrollable data table\"><table class=\"data compact\"><thead><tr><th data-priority=\"1\">Metric</th><th data-priority=\"2\">Value</th></tr></thead><tbody>{}</tbody></table></div></section><section class=\"panel\"><h3>Routing isolation</h3><p class=\"sub\">{routing_isolation} Same-provider account scoring stays load-based. These flags are derived from the routing module's own reported score components, so they follow the router and not the current request stream.</p><section class=\"cards\">{}</section><p class=\"sub\">Scorer inputs (allowed): <code>health, quota, active_requests, model_eligibility</code></p></section>",
         html_escape(period),
         runtime_metric_card(
             "Transcoded requests",
@@ -246,6 +286,7 @@ pub(in crate::server::dashboard) fn render_cache_page(
         card_slice(values.get(11..17).unwrap_or(&[])),
         segmentation_totals,
         card_slice(values.get(17..).unwrap_or(&[])),
+        routing_isolation = routing_isolation,
     );
     format!(
         "<h2>Cache</h2><p class=\"sub\">Cache reporting, request shaping, and safety guardrails.</p>{}<div id=\"cache-summary\"><section class=\"panel\"><h3>Request shaping ({})</h3><p class=\"sub\">Operator summary for request changes, provider cache counter coverage, safety guardrails, and routing isolation. Routing stays load-based and reporting-only metrics never enter the scorer.</p><section class=\"cards\">{cards}</section></section></div><div id=\"cache-reporting\"><section class=\"panel\"><h3>Provider cache counters ({})</h3><p class=\"sub\">Provider-reported cache counters from upstream payloads. Missing cache fields mean the upstream did not surface them. They are not cache misses and do not prove the upstream is uncached. EggPool never disables provider-side caching.</p><section class=\"cards\">{reporting_cards}</section>{reporting_table}</section></div><details class=\"advanced-details\" id=\"advanced-diagnostics\"><summary>Show advanced diagnostics</summary><div class=\"advanced-body\">{}</div></details>",

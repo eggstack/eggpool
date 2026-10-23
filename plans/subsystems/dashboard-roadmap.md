@@ -1,6 +1,6 @@
 # Dashboard Parity Roadmap
 
-Status: closed
+Status: active
 
 Long-term references:
 
@@ -95,6 +95,18 @@ failure skipped all later CI gates. M008 is the bounded post-merge corrective
 for that current-head CI regression plus compact registry reconciliation; it
 does not reopen dashboard parity semantics.
 
+
+The roadmap reopened on repository evidence gathered at baseline `e6822d8f78`.
+Several observations the dashboard presents are derived more than once, and
+the copies disagree: the CLI statistics command and the dashboard transcoding
+endpoint compute the native and transcoded counts differently and the HTTP
+variant reports an empty per-direction breakdown; the overview page and the
+overview JSON use different denominators for the cache read ratio; the
+ungrouped and grouped timeseries endpoints measure time to first token over
+different populations and different storage layers; and the routing-policy
+facts the cache page and the shaping projection report are fixed literals with
+no source. The historical M001–M012 records remain closed and immutable.
+
 ## 5. Target architecture
 
 The target keeps the current native runtime and historical frontend contract:
@@ -162,6 +174,11 @@ Raw HTML byte equality is not required. Canonical DOM equality must preserve tag
               M006 full matched qualification
 
 M003 and M004 both require the shared M002 shell contract. They may proceed in parallel after M002 closes if their renderer/view-model files remain disjoint. M005 may begin after M002 only if its view-model interfaces are stable, but it cannot close before M003/M004 because the final dashboard stats/read-plane contract must be reviewed as a whole. M006 is hard-blocked on M003-M005.
+
+M013 has no hard dependency on any dashboard milestone: it reconciles the
+duplicated dashboard and CLI derivations against each other and is now
+closed. No dashboard milestone depends on M013, and no successor is
+registered in this subsystem.
 
 No external product dependency is currently known. Browser tooling is qualification-only and must not enter the Rust production graph.
 
@@ -279,7 +296,7 @@ Rust tests run serial with --test-threads=1. Browser dependencies stay out of Ca
 
 ## 11. Completion definition
 
-This roadmap closes only when the native Rust dashboard preserves the final Python dashboard's operator-visible structure and behavior across all 14 page routes and dashboard-only JSON APIs, the unchanged frontend assets execute without contract errors, runtime/cache/model information is data-backed from authoritative Rust owners, public/private and escaping invariants pass, matched browser evidence shows no unexplained material regression, and current docs describe the shipped implementation rather than the reduced migration intermediate.
+This roadmap closes only when the native Rust dashboard preserves the final Python dashboard's operator-visible structure and behavior across all 14 page routes and dashboard-only JSON APIs, the unchanged frontend assets execute without contract errors, runtime/cache/model information is data-backed from authoritative Rust owners, public/private and escaping invariants pass, matched browser evidence shows no unexplained material regression, current docs describe the shipped implementation rather than the reduced migration intermediate, and every duplicated observation derives from a single source so the CLI, the JSON endpoints, and the HTML cannot disagree about the same named fact.
 
 ### Milestone 008 — Post-merge strict-CI and planning reconciliation corrective
 
@@ -392,6 +409,31 @@ M001-M012 have closure links; current ownership docs are accurate; no
 production/oracle files change; merge-head CI/dependency-audit evidence is
 recorded.
 
+### Milestone 013 — Observation projection derivation reconciliation
+
+Class: invariant
+
+Objective: make every duplicated observation derive its numbers from one
+source, so the same named fact cannot mean two different things depending on
+whether it is read from the CLI, the dashboard JSON, or the dashboard HTML.
+
+Dependencies: none. Each divergence is between two existing derivations.
+
+Deliverable boundary: one derivation for the transcoding counts and the
+per-direction breakdown; one denominator for the cache read ratio; one
+population and storage layer for time to first token across both timeseries
+endpoints; a named source for the reported routing-policy facts with a drift
+guard; a bounds check on the telemetry month-name lookup. No published field
+name or shape changes.
+
+Exit conditions: the CLI and HTTP transcoding surfaces agree; the HTML and
+JSON cache ratios agree; the two timeseries endpoints report the same average
+first-byte value; every reported routing-policy fact is derived and guarded;
+the telemetry renderer cannot index out of bounds.
+
+Deferred work: the parity harness's recorded baselines remain the reference;
+no new dashboard route or field is in scope.
+
 ## 12. Milestone status
 
 | Milestone | Status | Implementation plan | Closure record | Blockers |
@@ -408,6 +450,7 @@ recorded.
 | 010 | closed | plans/implementation/dashboard/010-parity-harness-decomposition.md | plans/closure/dashboard/010-status.md | Strict oracle/report semantics, browser/lifecycle, local gates, and hosted CI pass. |
 | 011 | closed | plans/implementation/dashboard/011-hosted-oracle-history-qualification.md | plans/closure/dashboard/011-status.md | Hosted CI run 37049147155 passed all gates, including frozen manifest blob identity. |
 | 012 | closed | plans/implementation/dashboard/012-lifecycle-closure-and-documentation-polish.md | plans/closure/dashboard/012-status.md | M001-M011 closed; terminal planning/docs cleanup only; no production or oracle change. |
+| 013 | closed | plans/implementation/dashboard/013-observation-projection-derivation-reconciliation.md | plans/closure/dashboard/013-status.md | none |
 
 M001-M012 are closed. M008 corrected the post-merge strict-CI failure without
 reopening accepted dashboard parity dispositions.

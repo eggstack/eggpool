@@ -398,20 +398,9 @@ pub(in crate::server::dashboard) fn render_overview(
             format!("{:.2}%", variance.sqrt() / mean * 100.0)
         }
     };
-    // Cache-page hit rate is scoped to the canonical cache counters, which
-    // this page does not load. Derive the summary-level read share instead of
-    // hardcoding a placeholder that could never populate.
-    let cache_input_denominator = summary
-        .total_cache_read_tokens
-        .saturating_add(summary.total_input_tokens);
-    let cache_hit_rate = if cache_input_denominator > 0 {
-        format!(
-            "{:.1}%",
-            summary.total_cache_read_tokens as f64 / cache_input_denominator as f64 * 100.0
-        )
-    } else {
-        "—".to_owned()
-    };
+    // One denominator for the cache read ratio: the page and the JSON
+    // projection report the same share of total input tokens.
+    let cache_hit_rate = format_ratio_percent(cache_read_ratio(summary));
     let cards_second = format!(
         "<section class=\"cards system-health\">{}{}{}{}{}</section>",
         overview_metric_card(
@@ -645,6 +634,26 @@ pub(in crate::server::dashboard) fn render_overview(
     )
 }
 
+/// The cache read ratio: provider cache-read tokens as a share of total input
+/// tokens.
+///
+/// The denominator is `input + cache_read + cache_write`. The dashboard
+/// counts "input tokens" without the cache counters, so the total input
+/// tokens a provider was asked to read are the fresh input plus the tokens
+/// it served from cache plus the tokens it wrote to cache. The page and the
+/// JSON projection both read this one definition, so the same installation
+/// never reports two cache read ratios.
+fn cache_read_ratio(summary: &db::DashboardSummary) -> Option<f64> {
+    let denominator = summary
+        .total_input_tokens
+        .saturating_add(summary.total_cache_read_tokens)
+        .saturating_add(summary.total_cache_write_tokens);
+    if denominator <= 0 {
+        return None;
+    }
+    Some(summary.total_cache_read_tokens as f64 / denominator as f64)
+}
+
 pub(in crate::server::dashboard) fn summary_json(
     summary: &db::DashboardSummary,
     period: &str,
@@ -652,9 +661,6 @@ pub(in crate::server::dashboard) fn summary_json(
     let total_tokens = summary.total_input_tokens + summary.total_output_tokens;
     let accounted_tokens =
         total_tokens + summary.total_cache_read_tokens + summary.total_cache_write_tokens;
-    let cache_denominator = summary.total_input_tokens
-        + summary.total_cache_read_tokens
-        + summary.total_cache_write_tokens;
     json!({
         "period": period,
         "total_requests": summary.total_requests,
@@ -671,7 +677,7 @@ pub(in crate::server::dashboard) fn summary_json(
         "total_cache_read_tokens": summary.total_cache_read_tokens,
         "total_cache_write_tokens": summary.total_cache_write_tokens,
         "total_reasoning_tokens": summary.total_reasoning_tokens,
-        "cache_read_ratio": if cache_denominator > 0 { Some(summary.total_cache_read_tokens as f64 / cache_denominator as f64) } else { None },
+        "cache_read_ratio": cache_read_ratio(summary),
         "streamed_requests": summary.streamed_requests,
         "non_streamed_requests": summary.non_streamed_requests,
         "exact_count": summary.exact_count,

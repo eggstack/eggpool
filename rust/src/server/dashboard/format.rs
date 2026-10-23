@@ -50,9 +50,9 @@ pub(super) fn month_name(month: i64) -> &'static str {
     const MONTH_NAMES: [&str; 12] = [
         "Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec",
     ];
-    debug_assert!((1..=12).contains(&month), "month is 1-based 1..=12");
-    usize::try_from(month - 1)
-        .ok()
+    month
+        .checked_sub(1)
+        .and_then(|index| usize::try_from(index).ok())
         .and_then(|index| MONTH_NAMES.get(index).copied())
         .unwrap_or("???")
 }
