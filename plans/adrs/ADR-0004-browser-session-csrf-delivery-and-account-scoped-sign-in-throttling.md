@@ -1,8 +1,32 @@
 # ADR-0004: Browser session CSRF delivery and account-scoped sign-in throttling
 
-Status: proposed
+Status: accepted
 
 Date: 2026-10-23
+
+Accepted: 2026-10-23 by the project maintainers, on explicit maintainer
+direction. The acceptance revision is the commit that changes this record from
+`proposed` to `accepted`; `plans/closure/on-prem-user-access/024-status.md`
+records the implementing revision.
+
+Two passages in the `proposed` draft were corrected before acceptance, because
+the draft contradicted its own Decision:
+
+- The Negative consequences claimed that a limit was raised so that "a single
+  address cannot lock an account on its own". No limit is raised. The account
+  limit stays at 10 and the per-peer limit stays at 30; a single address can
+  exhaust an account's budget on its own, and the per-peer limit bounds that
+  address's blast radius to three accounts per window. The corrected wording
+  states the bound that actually holds.
+- The Decision and the Consequences said that a successful sign-in clears "the
+  failure buckets for that username and peer". The per-peer bucket is not
+  cleared, because clearing it would let any valid account reset an address's
+  cross-account failure budget and thereby multiply that address's brute-force
+  throughput without bound. The Decision now clears the account bucket only,
+  and records the reason.
+
+The corrected passages are the decision. No other content changed, and no
+option, driver, or consequence was added or removed.
 
 Decision owners: project maintainers
 
@@ -62,9 +86,10 @@ distributed attempt against one account is bounded only by the per-IP limit of
 30, and each additional source address resets the per-username budget to 10. A
 legitimate operator whose source address rotates also never reaches the
 documented limit. Separately, a successful sign-in does not clear the bucket
-(`web_session.rs` has no success recorder), so ten typist failures lock an
-account out for the full 15-minute window even when the next attempt carries
-the correct password.
+(`web_session.rs` has no success recorder). Failures therefore accumulate
+across a successful sign-in: a run of failures that ends in a successful
+sign-in still leaves the account's budget consumed, and ten typist failures
+lock an account out for the full 15-minute window.
 
 Neither defect is a drafting accident in a security control that does not work.
 Both are the boundary between what the server checks and what the browser
@@ -152,8 +177,14 @@ Option A is selected, together with an account-scoped sign-in throttle.
 - The per-username throttle bucket is keyed on the username alone. The per-peer
   bucket stays keyed on the peer IP. Both limits and the 15-minute window stay
   as they are.
-- A successful sign-in clears the failure buckets for that username and peer,
-  so a corrected password is not rejected by a stale counter.
+- A successful sign-in clears the account's failure bucket, so a run of failures
+  that does not end in a successful sign-in is what consumes the account's
+  budget, and a later run of failures starts from a full budget. The per-peer
+  bucket is deliberately not cleared on success: clearing it would let any
+  valid account reset an address's cross-account failure budget and thereby
+  multiply that address's brute-force throughput without bound. Because a
+  success cannot occur while the per-peer bucket is exhausted, the per-peer
+  bound is unconditional.
 
 The deeper contract this records is that browser-session security rests on
 server-side checks over the request, and that a cookie attribute is a delivery
@@ -170,8 +201,9 @@ never be the only thing standing between a cross-site request and a mutation.
   delivered on a cross-site POST, and the origin check still rejects the
   request before a handler runs.
 - The throttle now bounds an account, which is what it is documented to do.
-- A successful sign-in clears the counter, so a legitimate operator is not
-  locked out by earlier typos.
+- A successful sign-in clears the account's counter, so a legitimate operator
+  who recovers from a run of typos starts the next run with a full budget and
+  is not locked out by a stale counter.
 - The security deep dive's description of both cookies as `SameSite=Lax`
   becomes accurate.
 
@@ -184,9 +216,19 @@ never be the only thing standing between a cross-site request and a mutation.
 - The throttle is stricter against an account than against a source address. A
   shared NAT or a rotating address no longer gives an attacker a fresh
   per-username budget; it may also cause a legitimate operator behind a
-  rotating address to reach the account limit sooner than before. The limit is
-  raised to 30 failures per peer IP, so a single address cannot lock an account
-  on its own.
+  rotating address to reach the account limit sooner than before. No limit is
+  raised. The account limit stays at 10 failures and the per-peer limit stays
+  at 30 over the same 15-minute window, so a single address can exhaust one
+  account's budget on its own. The per-peer limit bounds that address's blast
+  radius: at 30 failures per window against 10 failures per account, one
+  address can lock out at most three accounts per window.
+- A correct password is still refused once the account's budget is exhausted,
+  because the account bucket is a hard refusal consulted before the credential
+  check. That is the intended behavior of an account-scoped brute-force
+  limiter. The alternative — verifying the credential whenever the account
+  bucket is exhausted — would make the account bound advisory and raise an
+  address's guess budget against a targeted account from 10 to 30, which
+  defeats the account scoping this decision adopts.
 
 ### Neutral or deferred
 
@@ -239,9 +281,14 @@ matching form field and the cookie.
 
 The throttle change makes the lockout an account property. A distributed
 attacker against a single account now meets one budget rather than one budget
-per source address, which is the intended bound. The counter's process-local
-lifetime is unchanged: it is not persisted, so a restart clears it, and that
-remains a known property rather than a new one.
+per source address, which is the intended bound. The account lockout remains a
+hard refusal: once the account's budget is exhausted, an attempt is refused
+before the credential is checked, so a correct password does not break an
+active lockout. The success-clear prevents the counter from being carried
+across a successful sign-in; it does not shorten or suspend a lockout that is
+already in force. The counter's process-local lifetime is unchanged: it is not
+persisted, so a restart clears it, and that remains a known property rather
+than a new one.
 
 No credential, prompt, raw body, or cache key enters any of the affected
 paths. The throttle keys are digests of the username and peer address, as
@@ -263,8 +310,8 @@ before.
   rejected by the origin check before the handler runs.
 - A test asserts that the per-username bucket is shared across two different
   peer addresses and that the per-peer bucket is not.
-- A test asserts that a successful sign-in clears the failure counter for that
-  username and peer.
+- A test asserts that a successful sign-in clears the account's failure
+  counter, and that it does not clear the per-peer bucket.
 
 ## Supersession
 

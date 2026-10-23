@@ -1,6 +1,6 @@
 # On-prem User Access Milestone 024 — Browser session CSRF delivery and member account surface corrective
 
-Status: blocked
+Status: ready
 
 Repository baseline: `d04ad6831c6e030b7f5fc8a56501fdfecab982bd`
 
@@ -17,7 +17,7 @@ Long-term requirements:
 Applicable ADRs:
 
 - `plans/adrs/ADR-0004-browser-session-csrf-delivery-and-account-scoped-sign-in-throttling.md`
-  (**proposed** — this milestone is blocked on its acceptance; see §2)
+  (**accepted** 2026-10-23 — this milestone implements that decision; see §2)
 
 Primary class: invariant
 
@@ -37,25 +37,28 @@ presentation and a navigation that match the rest of the product.
 
 ## 2. Why this milestone is ready
 
-**Blocked.** This milestone changes auth semantics, and the repository's ADR
-threshold requires an architecture decision for an auth-semantics change. The
-decision — the CSRF cookie's `SameSite` attribute, the sign-in throttle's
-bucket key, and the rule that a cookie attribute is a delivery hint rather
-than a security boundary — is written up in
-`plans/adrs/ADR-0004-browser-session-csrf-delivery-and-account-scoped-sign-in-throttling.md`
-with status `proposed`.
+**Ready.** This milestone changes auth semantics, so the repository's ADR
+threshold required an architecture decision for it. That decision — the CSRF
+cookie's `SameSite` attribute, the sign-in throttle's bucket key, and the rule
+that a cookie attribute is a delivery hint rather than a security boundary — is
+recorded in
+`plans/adrs/ADR-0004-browser-session-csrf-delivery-and-account-scoped-sign-in-throttling.md`,
+which the project maintainers accepted on 2026-10-23.
 
-The milestone is otherwise ready: it has no hard dependency on another
-milestone, it changes no schema and no public API, and every defect it
-addresses is reproducible from the repository at the stated baseline.
+The milestone has no hard dependency on another milestone, it changes no schema
+and no public API, and every defect it addresses is reproducible from the
+repository at the stated baseline.
 
-Accepting ADR-0004 is what promotes this plan to `ready`. Acceptance is a
-one-line status change on the ADR plus the acceptance note, in the same shape
-as `plans/adrs/ADR-0003-remote-compaction-capability-contract.md`.
+Two passages in the ADR's `proposed` draft were corrected before acceptance, and
+this plan follows the corrected decision:
 
-The presentation and navigation work in work packages C through F is
-independent of the ADR and could proceed before acceptance, but it is held
-here so the milestone closes as one coherent change.
+- No throttle limit is raised. The account limit stays at 10 failures and the
+  per-peer limit stays at 30 over the same 15-minute window.
+- A successful sign-in clears the **account's** failure bucket only. The
+  per-peer bucket is not cleared, because clearing it would let any valid
+  account reset an address's cross-account failure budget.
+
+§6 and work package B state the corrected contract.
 
 ## 3. Current implementation evidence
 
@@ -242,10 +245,14 @@ stay consistent.
 **Account-scoped sign-in throttle.** The per-username bucket is keyed on the
 normalized username alone. The per-peer bucket stays keyed on the peer
 address. The limits (10 per username, 30 per peer IP), the 15-minute window,
-and the 2048-bucket capacity stay as they are. A successful credential check
-clears the buckets for that username and peer so a corrected password is not
-rejected by a stale counter. The throttle remains process-local and is not
-persisted.
+and the 2048-bucket capacity stay as they are, and no limit is raised. A
+successful credential check clears the account's failure bucket, so a run of
+failures that does not end in a successful sign-in is what consumes the
+account's budget and a later run starts from a full budget. A successful
+credential check does **not** clear the per-peer bucket: clearing it would let
+any valid account reset an address's cross-account failure budget and thereby
+multiply that address's brute-force throughput without bound. The throttle
+remains process-local and is not persisted.
 
 **Shared sign-in and account document.** The sign-in page, the account page,
 the account error page, and the transport-refusal page are rendered through one
@@ -333,20 +340,24 @@ correct password clear a stale counter.
 Required changes:
 
 - Key the per-username bucket on the normalized username alone.
-- Clear the buckets for a username and peer after a successful credential
-  check.
+- Clear the account's failure bucket after a successful credential check. Do
+  not clear the per-peer bucket.
 - Keep the per-peer bucket, the limits, the window, and the bucket capacity
   as they are.
 
 Acceptance evidence:
 
 - A test asserts that ten failures for one username from two different peer
-  addresses exhaust the account's budget, and that a further attempt is
-  refused.
+  addresses exhaust the account's budget, and that a further attempt is refused.
 - A test asserts that failures for one username from one peer do not consume
   another peer's per-IP budget, and that the per-IP limit still holds.
-- A test asserts that a successful sign-in clears the counter, so an attempt
-  with the correct password succeeds immediately after ten failures.
+- A test asserts that a successful sign-in clears the account's failure
+  counter, so the counter is not carried across a successful sign-in: after
+  nine failures followed by a successful sign-in, the account can absorb nine
+  further failures before it is refused.
+- A test asserts that a successful sign-in does **not** clear the per-peer
+  bucket, so a valid account cannot reset an address's cross-account failure
+  budget.
 
 ### Work package C — Shared sign-in and account document
 
