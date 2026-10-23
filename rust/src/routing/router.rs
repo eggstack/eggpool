@@ -11,7 +11,11 @@ use tokio::sync::Mutex as AsyncMutex;
 use crate::{
     accounts::AccountRegistry,
     catalog::ModelCatalogCache,
-    health::{BackoffReason, HealthManager, ModelQuarantine},
+    health::{
+        AccountBackoffRecord, AccountBackoffRepository, BackoffReason, EvidenceProvenance,
+        HealthManager, ModelQuarantine, ModelQuarantineRepository, compute_backoff_seconds,
+        get_backoff_policy,
+    },
     quota::QuotaEstimator,
     wire::ir::CanonicalUsage,
 };
@@ -28,12 +32,60 @@ use super::{
 };
 
 const RECOVERY_KEY_HARD_CAP: usize = 4_096;
+/// The one floor both missing-account recovery readers apply. Keeping the
+/// floor in a single place is what stops the attempt-retention window and the
+/// attempt-allowance check from disagreeing about the same configured value.
+const RECOVERY_MIN_INTERVAL_FLOOR_S: f64 = 1.0;
+
+/// The policy-derived outcome of one failure effect.
+struct PolicyBackoff {
+    /// The bounded relative backoff, or `None` when the reason's policy has
+    /// no timed backoff at all.
+    delay: Option<Duration>,
+    /// The model-scoped escalation rung.  The model-scoped durable row
+    /// carries this, so a restart restores the model's own ladder.
+    model_rung: u32,
+    /// The account-scoped escalation rung.  The account-scoped durable row
+    /// carries this.
+    account_rung: u32,
+}
+
+impl PolicyBackoff {
+    fn none() -> Self {
+        Self {
+            delay: None,
+            model_rung: 1,
+            account_rung: 1,
+        }
+    }
+}
 type RecoveryCallback = Arc<dyn Fn(&str) + Send + Sync>;
 
 /// Non-persistent trace value passed to M7 for durable routing-decision
 /// publication. Accepted traces are immutable claim snapshots; no request
 /// body, credential, or error text enters the value.
 pub type RoutingDecisionTrace = claim::SelectionSnapshot;
+
+/// The durable health collaborators one generation owns.
+///
+/// The repositories are constructed once per generation against the
+/// generation's database handle and are never constructed per request. They
+/// mirror the in-memory health and quarantine state so a restart observes the
+/// backoffs and quarantines the previous process decided.
+#[derive(Clone, Debug)]
+pub struct DurableHealth {
+    backoffs: AccountBackoffRepository,
+    quarantine: ModelQuarantineRepository,
+}
+
+impl DurableHealth {
+    pub fn new(backoffs: AccountBackoffRepository, quarantine: ModelQuarantineRepository) -> Self {
+        Self {
+            backoffs,
+            quarantine,
+        }
+    }
+}
 
 #[derive(Clone)]
 struct RoutingState {
@@ -42,6 +94,7 @@ struct RoutingState {
     estimator: QuotaEstimator,
     health: Option<HealthManager>,
     quarantine: Option<ModelQuarantine>,
+    durable: Option<DurableHealth>,
     policy: EligibilityPolicy,
     claims: Arc<Mutex<claim::ClaimBook>>,
     rotor: FairnessRotor,
@@ -101,6 +154,7 @@ impl RoutingRouter {
                 estimator,
                 health,
                 quarantine: None,
+                durable: None,
                 policy,
                 claims: claim::book(),
                 rotor: FairnessRotor::new(),
@@ -124,17 +178,46 @@ impl RoutingRouter {
         self
     }
 
+    /// Attach the generation's durable health collaborators.
+    ///
+    /// The repositories are the single writer for the durable backoff and
+    /// quarantine tables. Attaching them is what makes the failure path's
+    /// effects survive a restart; without them the router keeps its effects
+    /// in memory only.
+    pub fn with_durable_health(mut self, durable: DurableHealth) -> Self {
+        Arc::make_mut(&mut self.state).durable = Some(durable);
+        self
+    }
+
     pub fn with_missing_account_recovery(
         mut self,
         min_interval_s: f64,
         callback: RecoveryCallback,
     ) -> Self {
-        Arc::make_mut(&mut self.state).recovery_min_interval_s = min_interval_s.max(0.0);
+        // Reject a non-finite or non-positive interval instead of coercing
+        // it. `f64::max` ignores NaN, so `f64::NAN.max(0.0)` is `0.0` and a
+        // NaN interval silently became "no interval at all": every request
+        // could re-probe a missing account immediately. An infinite interval
+        // was accepted unchanged. A rejected value leaves the previously
+        // configured interval in place, so the router is never left
+        // partially applied.
+        if min_interval_s.is_finite() && min_interval_s > 0.0 {
+            Arc::make_mut(&mut self.state).recovery_min_interval_s = min_interval_s;
+        }
         // The callback is stored in the type-erased recovery slot below. This
         // is installed as a wrapper so the lock-free selection code remains
         // independent of CatalogService's concrete type.
         Arc::make_mut(&mut self.state).recovery_callback = Some(callback);
         self
+    }
+
+    /// The effective minimum interval between missing-account recovery
+    /// attempts. Both recovery readers call this, so they cannot disagree
+    /// about the same configured value.
+    fn recovery_min_interval_s(&self) -> f64 {
+        self.state
+            .recovery_min_interval_s
+            .max(RECOVERY_MIN_INTERVAL_FLOOR_S)
     }
 
     pub fn with_recovery_clock(mut self, clock: Arc<dyn Fn() -> f64 + Send + Sync>) -> Self {
@@ -521,8 +604,25 @@ impl RoutingRouter {
 
     /// Apply the bounded, typed portion of C005 effects available at the M5
     /// boundary. Model-scoped failures never advance the account circuit.
+    ///
+    /// The backoff duration is the policy's, not the caller's: the duration
+    /// comes from the reason's own policy, escalated by the consecutive
+    /// failure rung the health manager already tracks for the account or the
+    /// model. `backoff_until` is the policy's retry-after hint input, so for
+    /// the reasons whose policy consumes a provider hint it is the upstream
+    /// hint and for every other reason the policy ignores it.
+    ///
+    /// The in-memory application happens first and is unchanged. The durable
+    /// mirror follows, outside the selection lock: this runs on the failure
+    /// path after the claim has already been published, so no selection
+    /// critical section is held across the write. A durable write failure is
+    /// reported and does not change the in-memory decision.
+    // Each parameter is one bounded, typed effect decision. Grouping them
+    // into a bag type would hide the invariant that each one is independently
+    // owned by the failure engine, and the call sites read as a decision list
+    // rather than a struct literal.
     #[allow(clippy::too_many_arguments)]
-    pub fn apply_failure_effects(
+    pub async fn apply_failure_effects(
         &self,
         claim: &SelectionClaim,
         apply_account_penalty: bool,
@@ -535,32 +635,227 @@ impl RoutingRouter {
         let Some(health) = self.state.health.as_ref() else {
             return;
         };
+        let reason = Self::resolve_backoff_reason(backoff_reason);
+        // The policy owns the duration. `backoff_until` is the policy's
+        // retry-after hint input: for the reasons whose policy consumes a
+        // provider hint it is the upstream hint, and for every other reason
+        // the policy ignores it and derives the duration from its own base
+        // delay and the escalation rung.
+        let policy = self.policy_backoff(health, claim, reason, backoff_until, quarantine_model);
         if quarantine_model {
-            let delay = backoff_until.map(|value| value.as_secs_f64());
             health.disable_model(
                 claim.account_name(),
                 claim.canonical_model_id(),
-                delay,
+                policy.delay.map(|value| value.as_secs_f64()),
                 model_effect == "terminal_withdrawal",
             );
+            self.persist_model_quarantine(claim, reason, policy.delay, policy.model_rung)
+                .await;
         }
         if !apply_account_penalty {
             return;
         }
-        let reason = backoff_reason
-            .and_then(|value| BackoffReason::try_from(value).ok())
-            .unwrap_or_else(|| {
-                // Corrupt stored reasons stay `Unknown` for availability, but
-                // say so: silent normalization would hide data corruption.
-                if backoff_reason.is_some() {
-                    tracing::debug!("unknown stored backoff reason normalized to Unknown");
-                }
-                BackoffReason::Unknown
-            });
-        if let Some(delay) = backoff_until {
+        if let Some(delay) = policy.delay {
             health.record_cooldown(claim.account_name(), reason, delay.as_secs_f64());
         } else if circuit_penalty {
             health.record_failure(claim.account_name(), reason);
+        }
+        self.persist_account_backoff(claim, reason, policy.delay, policy.account_rung)
+            .await;
+    }
+
+    /// Resolve the health reason a failure effect carries.
+    ///
+    /// The durable writer serializes a reason with
+    /// [`BackoffReason::as_str`] and the durable reader parses it back with
+    /// [`BackoffReason::try_from`], so the accepted vocabulary is exactly
+    /// the written one. A value the reader cannot parse is corrupt state
+    /// rather than a new vocabulary, so it is normalized to
+    /// [`BackoffReason::Unknown`] and reported at a level an operator can
+    /// observe instead of being silently dropped.
+    fn resolve_backoff_reason(backoff_reason: Option<&str>) -> BackoffReason {
+        match backoff_reason {
+            None => BackoffReason::Unknown,
+            Some(value) => BackoffReason::try_from(value).unwrap_or_else(|()| {
+                // The value is deliberately not logged: the column is free
+                // text in a corrupt row and is not part of the vocabulary.
+                tracing::warn!("unrecognized stored backoff reason normalized to Unknown");
+                BackoffReason::Unknown
+            }),
+        }
+    }
+
+    /// Derive the backoff a failure effect applies from the policy.
+    ///
+    /// The escalation rung is the health manager's own consecutive-failure
+    /// counter: per model for the reasons whose policy scopes them to a
+    /// model, per account for every other reason. The state that decides the
+    /// duration is therefore the state the effect updates, and a repeated
+    /// failure escalates without any second counter.
+    ///
+    /// The model-scoped rung is advanced only for the reasons whose policy
+    /// scopes them to a model. For every other reason the model's own
+    /// counter is read and never advanced, so a model quarantine caused by an
+    /// account-scoped failure cannot inflate the model ladder.
+    ///
+    /// The duration never exceeds the cap the reason's policy declares.
+    fn policy_backoff(
+        &self,
+        health: &HealthManager,
+        claim: &SelectionClaim,
+        reason: BackoffReason,
+        retry_after: Option<Duration>,
+        model_effect_applies: bool,
+    ) -> PolicyBackoff {
+        let Some(policy) = get_backoff_policy(reason) else {
+            return PolicyBackoff::none();
+        };
+        let model_scoped = policy.account_model_scope && model_effect_applies;
+        let model_rung = if model_scoped {
+            health.record_model_failure(claim.account_name(), claim.canonical_model_id())
+        } else {
+            health.model_failure_count(claim.account_name(), claim.canonical_model_id())
+        };
+        let account_rung = health
+            .snapshot(claim.account_name())
+            .map(|state| {
+                state
+                    .consecutive_failures
+                    .max(state.consecutive_cooldowns)
+                    .saturating_add(1)
+            })
+            .unwrap_or(1);
+        let rung = if model_scoped {
+            model_rung
+        } else {
+            account_rung
+        };
+        let delay = compute_backoff_seconds(
+            reason,
+            rung,
+            retry_after.map(|value| value.as_secs_f64()),
+            true,
+        )
+        .filter(|seconds| seconds.is_finite())
+        .map(|seconds| seconds.min(policy.cap).max(0.0))
+        .and_then(|seconds| Duration::try_from_secs_f64(seconds).ok());
+        PolicyBackoff {
+            delay,
+            model_rung,
+            account_rung,
+        }
+    }
+
+    /// Mirror the model-scoped effect into the durable quarantine table and
+    /// the model-scoped durable backoff row.
+    ///
+    /// The key is the canonical-only partition the eligibility gate always
+    /// evaluates, so the gate observes the same scope the live path decided.
+    /// The expiry is the live backoff deadline rather than the quarantine
+    /// TTL, so the gate and the health manager exclude the model for the
+    /// same window.
+    ///
+    /// The row carries the live failure reason and the model's own
+    /// escalation rung, so the durable vocabulary does not collapse two
+    /// unrelated failure classes onto one reason and a restart cannot
+    /// restore an account-scoped rung as the model's ladder.
+    ///
+    /// A terminal withdrawal is deliberately mirrored as a bounded
+    /// observation. The live terminal state has no expiry, so persisting it
+    /// would let a stale withdrawal outlive the process that observed the
+    /// authoritative absence, and the in-memory success path that lifts a
+    /// terminal withdrawal could never lift the durable one.
+    async fn persist_model_quarantine(
+        &self,
+        claim: &SelectionClaim,
+        reason: BackoffReason,
+        backoff_until: Option<Duration>,
+        model_rung: u32,
+    ) {
+        let (Some(durable), Some(quarantine)) =
+            (self.state.durable.as_ref(), self.state.quarantine.as_ref())
+        else {
+            return;
+        };
+        let now = epoch_seconds() as f64;
+        // The gate partitions a missing protocol as "unknown", never as a
+        // concrete protocol, so the durable key must use the same partition.
+        let upstream_protocol = claim.protocol().unwrap_or("unknown");
+        let key = quarantine.key(
+            claim.provider_id(),
+            claim.account_name(),
+            claim.canonical_model_id(),
+            None,
+            upstream_protocol,
+        );
+        let entry = quarantine.record_observation_until(
+            key,
+            EvidenceProvenance::RuntimeHttp,
+            reason.as_str(),
+            None,
+            None,
+            now,
+            backoff_until.map(|delay| now + delay.as_secs_f64()),
+        );
+        if let Err(error) = durable.quarantine.upsert_entry(&entry).await {
+            tracing::warn!("model quarantine persistence failed: {error}");
+        }
+        // The model-scoped backoff row is what restores the model disable
+        // itself after a restart; the quarantine row restores the eligibility
+        // gate. Both are needed for the effect to survive the process.
+        let Some(delay) = backoff_until else {
+            return;
+        };
+        let record = AccountBackoffRecord {
+            id: 0,
+            account_id: claim.account_id(),
+            model_id: Some(claim.canonical_model_id().to_owned()),
+            reason,
+            status_code: None,
+            error_class: None,
+            consecutive_failures: model_rung.max(1),
+            backoff_until_epoch: Some(now + delay.as_secs_f64()),
+            last_failure_epoch: now,
+            updated_epoch: now,
+        };
+        if let Err(error) = durable.backoffs.upsert(&record).await {
+            tracing::warn!("model backoff persistence failed: {error}");
+        }
+    }
+
+    /// Mirror the account-scoped cooldown into the durable backoff table.
+    ///
+    /// Only a real cooldown is durable: a bare circuit penalty carries no
+    /// deadline to restore after a restart, and the durable backoff row
+    /// requires one.
+    async fn persist_account_backoff(
+        &self,
+        claim: &SelectionClaim,
+        reason: BackoffReason,
+        backoff_until: Option<Duration>,
+        consecutive_failures: u32,
+    ) {
+        let Some(durable) = self.state.durable.as_ref() else {
+            return;
+        };
+        let Some(delay) = backoff_until else {
+            return;
+        };
+        let now = epoch_seconds() as f64;
+        let record = AccountBackoffRecord {
+            id: 0,
+            account_id: claim.account_id(),
+            model_id: None,
+            reason,
+            status_code: None,
+            error_class: None,
+            consecutive_failures,
+            backoff_until_epoch: Some(now + delay.as_secs_f64()),
+            last_failure_epoch: now,
+            updated_epoch: now,
+        };
+        if let Err(error) = durable.backoffs.upsert(&record).await {
+            tracing::warn!("account backoff persistence failed: {error}");
         }
     }
 
@@ -756,6 +1051,9 @@ impl RoutingRouter {
         facts: &RoutingRequestFacts,
     ) -> Option<bool> {
         let Some(health) = &self.state.health else {
+            // Unreachable through the selection path: `probe_available_read_only`
+            // already drops every candidate when no health manager is present.
+            // Kept as a defensive branch that never owns a probe.
             return Some(false);
         };
         let before = health
@@ -774,9 +1072,15 @@ impl RoutingRouter {
         candidate: &RoutingCandidate,
         facts: &RoutingRequestFacts,
     ) -> bool {
-        self.state.health.as_ref().is_none_or(|health| {
-            health.is_model_healthy_read_only(&candidate.account_name, &facts.canonical_model_id)
-        })
+        let Some(health) = &self.state.health else {
+            // Fail closed. An absent manager is not the same fact as a
+            // present manager reporting a healthy account: an account whose
+            // health cannot be evaluated is not treated as healthy. The
+            // production construction path always supplies a manager, so this
+            // changes only the construction variants that omit one.
+            return false;
+        };
+        health.is_model_healthy_read_only(&candidate.account_name, &facts.canonical_model_id)
     }
 
     fn release_probe(&self, account_name: &str) {
@@ -822,12 +1126,13 @@ impl RoutingRouter {
                     .is_none_or(|provider| &identity.provider_id == provider)
             })
             .filter(|identity| {
-                self.state.health.as_ref().is_none_or(|health| {
-                    health.is_model_healthy_read_only(
-                        &identity.account_name,
-                        &facts.canonical_model_id,
-                    )
-                })
+                let Some(health) = &self.state.health else {
+                    // Fail closed for the same reason as the read-only probe
+                    // check: an account that cannot be health-evaluated is
+                    // not eligible for a recovery probe.
+                    return false;
+                };
+                health.is_model_healthy_read_only(&identity.account_name, &facts.canonical_model_id)
             })
             .filter(|identity| {
                 !catalog.account_supports_model(&identity.account_name, &facts.canonical_model_id)
@@ -835,15 +1140,14 @@ impl RoutingRouter {
             .map(|identity| identity.account_name)
             .collect();
         drop(catalog);
+        let min_interval_s = self.recovery_min_interval_s();
         for account in missing {
             let mut attempts = self
                 .state
                 .recovery_attempt_at
                 .lock()
                 .unwrap_or_else(|error| error.into_inner());
-            attempts.retain(|_, timestamp| {
-                now - *timestamp < self.state.recovery_min_interval_s.max(1.0)
-            });
+            attempts.retain(|_, timestamp| now - *timestamp < min_interval_s);
             if attempts.len() >= RECOVERY_KEY_HARD_CAP
                 && !attempts.contains_key(&account)
                 && let Some(oldest) = attempts
@@ -855,7 +1159,7 @@ impl RoutingRouter {
             }
             let allowed = attempts
                 .get(&account)
-                .is_none_or(|timestamp| now - *timestamp >= self.state.recovery_min_interval_s);
+                .is_none_or(|timestamp| now - *timestamp >= min_interval_s);
             if allowed {
                 attempts.insert(account.clone(), now);
                 drop(attempts);

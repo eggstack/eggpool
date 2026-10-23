@@ -295,7 +295,39 @@ impl ModelQuarantine {
         error_class: Option<String>,
         now: f64,
     ) -> QuarantineEntry {
+        self.record_observation_until(key, provenance, reason, status_code, error_class, now, None)
+    }
+
+    /// Record one observation against an exact scope with a caller-chosen
+    /// expiry.
+    ///
+    /// The routing path already decided the deadline it applied to a model,
+    /// and the durable mirror must gate for exactly that window. A quarantine
+    /// TTL would silently replace the live backoff with a different one, and
+    /// the eligibility gate would then exclude a model for longer than the
+    /// health manager is backing it off. `None` keeps the quarantine's own
+    /// TTL, which is the historical behavior.
+    // The parameters mirror `record_observation` one for one plus the
+    // caller's expiry. A bag type would hide which fields the caller owns
+    // and which the quarantine owns.
+    #[allow(clippy::too_many_arguments)]
+    pub fn record_observation_until(
+        &self,
+        key: QuarantineKey,
+        provenance: EvidenceProvenance,
+        reason: impl Into<String>,
+        status_code: Option<u16>,
+        error_class: Option<String>,
+        now: f64,
+        expiry: Option<f64>,
+    ) -> QuarantineEntry {
         let reason = reason.into();
+        // The cap is a duration, not an absolute deadline: the caller's
+        // expiry is an epoch timestamp, so the cap applies to the distance
+        // from `now` and the deadline is then rebuilt.
+        let explicit_expiry = expiry
+            .filter(|value| value.is_finite())
+            .map(|value| now + (value - now).clamp(0.0, MAX_NONTERMINAL_BACKOFF_SECONDS));
         let mut entries = self
             .entries
             .lock()
@@ -322,12 +354,20 @@ impl ModelQuarantine {
             entry.evidence_provenance = provenance;
             entry.last_status_code = status_code;
             entry.last_error_class = error_class;
+            // An explicit expiry is the caller's deadline and outranks the
+            // quarantine TTL on every write, so the gate and the live backoff
+            // cannot drift apart.
+            if let Some(expiry) = explicit_expiry {
+                entry.expiry = Some(expiry);
+            }
             if entry.state == QuarantineState::Suspected
                 && entry.observation_count >= self.promotion_threshold
             {
                 entry.state = QuarantineState::Quarantined;
-                entry.expiry =
-                    Some(now + self.quarantined_ttl.min(MAX_NONTERMINAL_BACKOFF_SECONDS));
+                if explicit_expiry.is_none() {
+                    entry.expiry =
+                        Some(now + self.quarantined_ttl.min(MAX_NONTERMINAL_BACKOFF_SECONDS));
+                }
             }
             return entry.clone();
         }
@@ -339,7 +379,10 @@ impl ModelQuarantine {
             first_observed: now,
             last_observed: now,
             observation_count: 1,
-            expiry: Some(now + self.suspected_ttl.min(MAX_NONTERMINAL_BACKOFF_SECONDS)),
+            expiry: Some(
+                explicit_expiry
+                    .unwrap_or(now + self.suspected_ttl.min(MAX_NONTERMINAL_BACKOFF_SECONDS)),
+            ),
             cleared_at: None,
             clear_reason: None,
             last_status_code: status_code,

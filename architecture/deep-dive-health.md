@@ -37,6 +37,26 @@ Authentication yields no delay (sticky disable via the zero `BackoffPolicy`); qu
 provider cannot bypass escalation; model-unavailable is account/model-scoped; unknown and
 context-limit carry no delay (`get_backoff_policy` returns `None`).
 
+The live failure path adopts this policy. The classifier
+(`coordinator/failure.rs::FailureCategory::backoff_reason`) maps every classified failure
+to a typed `BackoffReason` — a total mapping over `FailureCategory`, with the categories that
+carry no provider-attributable backoff resolving to `Unknown` rather than to an unparsable
+string — and the durable writer serializes the reason with `BackoffReason::as_str`. The
+persisted reason strings are a durable on-disk contract and keep their current values:
+`authentication_failed`, `quota_exhausted`, `rate_limited`, `model_unavailable`,
+`connect_timeout`, `connection_failure`, and `upstream_server_error`. The reader parses a
+stored reason back with `BackoffReason::try_from`; the written set and the accepted set are
+the same set, and `rust/tests/backoff_policy_adoption.rs` guards that equality at the source
+level so the two cannot drift again.
+
+The duration is the policy's, never an inline constant. `compute_backoff_seconds` takes the
+reason's own policy (base delay, doubling multiplier, cap, jitter fraction, consecutive
+failure ceiling, account-versus-model scope) and the consecutive-failure rung, so the first
+failure takes the base delay and every consecutive failure doubles it up to the cap. The
+escalation state is the health manager's existing counters: the per-account
+`consecutive_failures`/`consecutive_cooldowns` pair, and the per-model rung advanced by
+`record_model_failure`. No second counter and no new map exists.
+
 `circuit_breaker.rs` implements a synchronous three-state breaker (`CircuitState::Closed`,
 `Open`, `HalfOpen`) with one half-open probe. `can_request` is the gating view,
 `allow_request` acquires the probe, `record_success` / `record_failure` consume it, and
@@ -58,6 +78,22 @@ failing model reaches the later policy rungs; `ContextLimitExceeded` and `Unknow
 `backoff_seconds`, and `terminal_withdrawal`. Optional repositories persist the same
 bounded facts; no credentials, prompts, bodies, or cache keys cross this boundary.
 
+The production failure path does not run through this applier. It applies the same
+narrowest-safe mutations directly in `routing/router.rs::apply_failure_effects` and
+mirrors the applied effect into the durable repositories, so the live decision and the
+persisted row cannot disagree about the delay that was applied. The applier remains the
+deterministic boundary the repository tests exercise.
+
+The router derives the duration from the policy rather than accepting one from the caller:
+`apply_failure_effects` resolves the typed reason, reads the escalation rung the health
+manager already tracks for that account or model, and asks `compute_backoff_seconds` for the
+bounded delay. The duration it receives from the classifier is the policy's retry-after hint
+input — for the reasons whose policy consumes a provider hint it is the upstream hint, and
+for every other reason the policy ignores it. The result never exceeds the cap the reason's
+policy declares. A stored reason the reader cannot parse is corrupt state rather than a new
+vocabulary: it normalizes to `Unknown` and is reported at warn level rather than silently
+dropped.
+
 ## Quarantine
 
 `quarantine.rs::ModelQuarantine` keys exact partitions (`QuarantineKey`: provider, account,
@@ -65,7 +101,9 @@ canonical model, optional upstream model, upstream protocol, SHA-256 digest).
 `is_model_quarantined` / `is_model_quarantined_for` gate routing; missing protocol uses the
 `unknown` partition so unclassifiable candidates cannot bypass an exact quarantine.
 `record_observation` moves `Suspected` to `Quarantined` at the promotion threshold with
-bounded TTLs; `set_terminal_withdrawn` requires authoritative provenance
+bounded TTLs; `record_observation_until` takes the caller's expiry instead, which is what
+the routing path uses so the gate and the health manager exclude a model for the same
+window; `set_terminal_withdrawn` requires authoritative provenance
 (`ProviderCatalog`, `ManualOverride`, `OperatorAction`) and never expires.
 `clear_exact_key`, `clear_authoritative_reappearance`, `manual_clear`, `hydrate_entry`,
 `prune_expired`, and `list_entries` keep clearing exact-key and never silently disable
@@ -74,14 +112,42 @@ unrelated models. Entries are LRU-capped at 4,096 with terminal rows evicted las
 
 ## Restart-safety persistence
 
-`repository.rs` persists only restart hints in the schema-54 `account_backoffs` and
+`repository.rs` persists only restart hints in the `account_backoffs` and
 `model_quarantine` tables: `AccountBackoffRepository` (`list_all`, `hydrate_into`,
 `list_active`, `upsert`, `clear_success`, `clear_authentication`, `expire_old`) and
 `ModelQuarantineRepository` (`list_all`, `hydrate_into`, `list_active`, `upsert_entry`,
 `mark_cleared`, `expire_old`). Reads truncate at 5,000 rows with a warning instead of
 failing open or closed; writes validate identity, reason, counts, and finite timestamps.
-Readiness reuses this state through `operations/status.rs::evaluate_readiness` with cached
-snapshots only: no outbound provider probes and no writes.
+
+Both repositories are constructed once per generation in the generation build path
+(`coordinator/endpoints.rs`), never per request. The build path hydrates the generation's
+`HealthManager` from `account_backoffs` and its `ModelQuarantine` from `model_quarantine`
+before the generation is published, and attaches the quarantine to the router with
+`with_quarantine` so the eligibility gate is live. A row naming an account the generation
+does not know is skipped with a warning and never fails the build; a repository failure
+that cannot be bounded fails generation publication closed, because a generation must not
+become reachable with partially hydrated health.
+
+The routing path's failure effects are mirrored into the same tables after the in-memory
+application, outside the selection lock. The mirror records the live decision rather than
+a recomputed one: the account backoff carries the applied delay, and the model-scoped
+quarantine uses the canonical-only partition the eligibility gate always evaluates with
+the live backoff deadline as its expiry. A terminal withdrawal is mirrored as a bounded
+observation on purpose: the live terminal state has no expiry, so persisting it would let
+a stale withdrawal outlive the process that observed the authoritative absence and the
+in-memory success path that lifts it could never lift the durable row. Expired rows are
+retired by the `retention_cleanup` task on the bounded database maintenance schedule.
+
+The durable write clamps a persisted deadline to the cap the reason's own policy declares
+(`get_backoff_policy(reason).cap`, never a literal), so a policy-derived deadline within the
+cap is never silently shortened by the write and the durable ceiling cannot drift away from
+the policy.
+
+Readiness observes the in-memory health state only. `operations/status.rs::evaluate_readiness`
+reads cached snapshots with no outbound provider probes and no writes; it does not query
+the durable tables. A restart therefore observes the persisted backoff and quarantine
+because generation build hydrated them into the in-memory state, not because readiness
+reads them.
 
 ## Invariants
 
@@ -89,13 +155,20 @@ snapshots only: no outbound provider probes and no writes.
   quarantine unrelated models.
 - Gating is read-only until `try_acquire_request`; probes are always released.
 - Non-terminal suppression is bounded by `MAX_NONTERMINAL_BACKOFF_SECONDS`.
+- The live backoff duration is the policy's, and the escalation rung is the health
+  manager's existing per-account and per-model counter.
+- The written reason values and the accepted reason values are the same set; a reason the
+  reader cannot parse is reported, not silently normalized.
 - Only authoritative provenance creates terminal withdrawal; only exact keys clear.
 - Persistence holds restart hints only, validated on read, with secret-free diagnostics.
+- A durable mirror never widens the live window: the persisted expiry is the deadline the
+  live path applied, and a terminal withdrawal is never persisted as a terminal row.
 
 ## Verification
 
 ```bash
 cargo test --manifest-path rust/Cargo.toml --test health -- --test-threads=1
 cargo test --manifest-path rust/Cargo.toml --test routing_domain -- --test-threads=1
+cargo test --manifest-path rust/Cargo.toml --test backoff_policy_adoption -- --test-threads=1
 cargo test --manifest-path rust/Cargo.toml --test quota -- --test-threads=1
 ```

@@ -525,6 +525,7 @@ async fn current_database_can_be_opened_read_only_without_writes() {
 // migrations 1..54 themselves — only the production 55..63 upgrade path.
 // ---------------------------------------------------------------------------
 
+use eggpool::health::HealthManager;
 use eggpool::{
     Config,
     accounts::{AccountRegistry, CredentialStore},
@@ -897,11 +898,17 @@ async fn upgraded_schema54_database_recovers_identity_policy_and_budgets() {
     catalog
         .update_from_account("budget-account", "provider-a", &[model], true, true)
         .expect("catalog model");
+    // The health gate treats an account with no manager as not healthy, so the
+    // fixture registers every account the router can select.
+    let health = HealthManager::new();
+    for account in registry.all() {
+        health.register_account(account.account_id, &account.account_name);
+    }
     let router = RoutingRouter::new(
         registry,
         catalog,
         QuotaEstimator::new([AccountQuota::new("budget-account")]),
-        None,
+        Some(health),
         EligibilityPolicy::default(),
     );
     let mut facts = RoutingRequestFacts::new("model-a");

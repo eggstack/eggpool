@@ -12,12 +12,20 @@ windowed quota state and fair-share scoring. Authority files are `rust/src/routi
 `state.rs`, `estimator.rs`, `scorer.rs`.
 
 `RoutingRouter` (`router.rs`) holds one generation of in-memory routing state: `AccountRegistry`,
-shared `ModelCatalogCache`, `QuotaEstimator`, optional `HealthManager` and `ModelQuarantine`,
-`EligibilityPolicy`, the claim book, `FairnessRotor`, and one async selection lock.
-Construction is `new` or `with_shared_catalog`; the catalog lock is shared with
-`CatalogService` so refreshes become visible to routing atomically. `with_quarantine`,
-`with_random_source`, `with_missing_account_recovery`, and `with_recovery_clock` attach
-optional collaborators without changing the selection contract.
+shared `ModelCatalogCache`, `QuotaEstimator`, `HealthManager`, `ModelQuarantine`,
+`DurableHealth`, `EligibilityPolicy`, the claim book, `FairnessRotor`, and one async
+selection lock. Construction is `new` or `with_shared_catalog`; the catalog lock is shared
+with `CatalogService` so refreshes become visible to routing atomically. `with_quarantine`,
+`with_durable_health`, `with_random_source`, `with_missing_account_recovery`, and
+`with_recovery_clock` attach optional collaborators without changing the selection
+contract.
+
+The health manager is not optional in the production generation: the build path always
+supplies one, and the router treats an absent manager as fail-closed rather than as
+"nothing to check". An account whose health cannot be evaluated is not treated as healthy,
+so a router built without a manager selects nothing. The quarantine and the durable health
+repositories are attached by the generation build path, which hydrates them from the
+persisted rows before the generation is published.
 
 Semantic model choice happens before this module: the neutral `eggpool-model-routing` crate
 validates/compiles policy and `rust/src/model_router.rs` owns the Tokio affinity cache. A
@@ -60,6 +68,17 @@ snapshot reports `quota_exhausted`, distinct from the `HardCap` estimator gate b
 `router.rs::select_and_claim_with_preference` adds it after eligibility when
 `try_acquire_request` loses the half-open probe race. Request-provided capability policy
 overrides configured policy only when non-empty; scoring collections stay `BTreeMap`-ordered.
+
+Two gates fail closed rather than open. The `LocalQuotaMode::HardCap` gate requires a
+quota record: an account with no record cannot be shown to be within its limits, so it is
+excluded with the same `quota_exhausted` reason code as a record that is over its limits.
+`LocalQuotaMode::ScoreOnly` does not admit on quota grounds and is unaffected. The
+read-only health probe requires a health manager for the same reason: an absent manager is
+not the same fact as a manager reporting a healthy account.
+
+A quota observation with a non-finite timestamp is rejected before any counter moves.
+Such a timestamp cannot be ordered against the window's other observations and could never
+be pruned, so admitting it would inflate the window permanently.
 
 ## Scoring (load-based, never cost-based)
 
@@ -129,7 +148,28 @@ so a refused publication compensates both before returning. The active-count dec
 checked before the estimator is mutated under the same book lock, so a claim can never be
 left `Pending` after a failed release. `record_success` and `apply_failure_effects` apply only the narrow typed
 health transitions owned at that boundary; model-scoped failures never advance the account
-circuit.
+circuit. `apply_failure_effects` runs on the failure path, after the claim has been
+published, so the durable mirror it writes never happens inside the selection critical
+section. It records the decision the live path applied rather than a recomputed one.
+
+The backoff duration that effect applies is policy-derived, never an inline constant.
+`apply_failure_effects` resolves the typed `BackoffReason` the classifier produced, reads
+the escalation rung the health manager already tracks for that account (or, for a
+model-scoped reason, for that model), and asks `health::compute_backoff_seconds` for the
+bounded delay. The classifier's duration is the policy's retry-after hint input: for the
+reasons whose policy consumes a provider hint it is the upstream hint, and for every other
+reason the policy ignores it and derives the duration from its own base delay and rung. The
+result never exceeds the cap the reason's policy declares, and a reason whose policy has no
+timed backoff produces none. The escalation state is therefore the health manager's
+existing counters, never a second map inside this module, and no await is added to the
+selection lock.
+
+`with_missing_account_recovery` rejects a non-finite or non-positive interval instead of
+coercing it: `f64::max` ignores NaN, so a NaN interval silently became "no interval at
+all" and let every request re-probe a missing account immediately. A rejected value leaves
+the previously configured interval in place. Both recovery readers take the effective
+interval from one helper, so the attempt-retention window and the attempt-allowance
+check cannot disagree about the same configured value.
 
 User budgets are enforced later at the durable publication boundary, after the
 principal and concrete model are bound. `coordinator/publication.rs` checks
@@ -151,12 +191,18 @@ fallback. They are not exact output-token or invoice caps.
 - Read-only plan/readiness paths never advance the fairness rotor or acquire probes.
 - Failures fail closed (poisoned locks, unknown accounts, underflow) without silently
   clamping ownership counters.
+- The live backoff duration is the reason's policy, bounded by that policy's cap, and the
+  escalation rung is the health manager's existing per-account and per-model counter.
+- A durable health mirror never widens the live window: the persisted expiry is the
+  deadline the live path applied, and a terminal withdrawal is never persisted as a
+  terminal row.
 
 ## Verification
 
 ```bash
 cargo test --manifest-path rust/Cargo.toml --test routing_domain -- --test-threads=1
 cargo test --manifest-path rust/Cargo.toml --test routing_claims -- --test-threads=1
+cargo test --manifest-path rust/Cargo.toml --test backoff_policy_adoption -- --test-threads=1
 cargo test --manifest-path rust/Cargo.toml --test quota -- --test-threads=1
 cargo test --manifest-path rust/Cargo.toml --test model_router -- --test-threads=1
 ```

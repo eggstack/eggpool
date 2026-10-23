@@ -386,6 +386,23 @@ impl HealthManager {
         *failures
     }
 
+    /// The model's own consecutive-failure count, without advancing it.
+    ///
+    /// The durable model-scoped row carries this count so a restart restores
+    /// the model's own escalation rung.  Reading it must never advance it:
+    /// an account-scoped failure that quarantines a model must not inflate
+    /// the model ladder the model-scoped reasons escalate along.
+    pub fn model_failure_count(&self, account_name: &str, model_id: &str) -> u32 {
+        let accounts = self
+            .accounts
+            .lock()
+            .unwrap_or_else(|error| error.into_inner());
+        accounts
+            .get(account_name)
+            .and_then(|account| account.model_failures.get(model_id).copied())
+            .unwrap_or(0)
+    }
+
     pub fn record_cooldown(&self, account_name: &str, reason: BackoffReason, delay: f64) {
         let now = self.now();
         let mut accounts = self
@@ -535,7 +552,7 @@ impl HealthManager {
             let Some(account_name) = account_names.get(&record.account_id) else {
                 // Skip-and-warn on stale rows so one unknown account does not
                 // fail-closed the entire hydration batch.
-                eprintln!(
+                tracing::warn!(
                     "health hydrate: skipping backoff for unknown account {}",
                     record.account_id
                 );
@@ -555,19 +572,34 @@ impl HealthManager {
                 continue;
             }
             let remaining = remaining.min(MAX_NONTERMINAL_BACKOFF_SECONDS);
-            if reason == BackoffReason::ModelUnavailable {
-                let Some(model_id) = record.model_id.as_deref() else {
-                    return Err(HealthManagerError::MissingModel {
-                        account_id: record.account_id,
-                        reason,
-                    });
-                };
-                self.disable_model(account_name, model_id, Some(remaining), false);
-                // The durable rung restores the escalation the process-local
-                // counter would otherwise forget across a restart.
-                self.seed_model_failure(account_name, model_id, record.consecutive_failures.max(1));
-            } else {
-                self.record_cooldown(account_name, reason, remaining);
+            if reason == BackoffReason::ModelUnavailable && record.model_id.is_none() {
+                // The durable contract pairs a model-unavailable reason with
+                // the model it applies to.  A row that breaks that pairing is
+                // malformed, so the batch fails closed instead of restoring
+                // an effect the row does not describe.
+                return Err(HealthManagerError::MissingModel {
+                    account_id: record.account_id,
+                    reason,
+                });
+            }
+            // The scope of the row decides which effect is restored, not the
+            // reason value: a model-scoped row restores the model disable and
+            // the model's own escalation rung, and an account-scoped row
+            // restores the account cooldown.
+            match record.model_id.as_deref() {
+                Some(model_id) => {
+                    self.disable_model(account_name, model_id, Some(remaining), false);
+                    // The durable rung restores the escalation the process-local
+                    // counter would otherwise forget across a restart.
+                    self.seed_model_failure(
+                        account_name,
+                        model_id,
+                        record.consecutive_failures.max(1),
+                    );
+                }
+                None => {
+                    self.record_cooldown(account_name, reason, remaining);
+                }
             }
             applied += 1;
         }

@@ -7,6 +7,7 @@ use std::{
     time::Duration,
 };
 
+use eggpool::health::HealthManager;
 use eggpool::{
     Config,
     accounts::{AccountRegistry, CredentialStore},
@@ -93,11 +94,17 @@ async fn fixture() -> Fixture {
         .update_from_account("account-a", "provider-a", &[model], true, true)
         .expect("catalog model");
     let estimator = QuotaEstimator::new([AccountQuota::new("account-a")]);
+    // The health gate treats an account with no manager as not healthy, so the
+    // fixture registers every account the router can select.
+    let health = HealthManager::new();
+    for account in registry.all() {
+        health.register_account(account.account_id, &account.account_name);
+    }
     let router = RoutingRouter::new(
         registry,
         catalog,
         estimator.clone(),
-        None,
+        Some(health),
         EligibilityPolicy::default(),
     );
     Fixture {
@@ -746,11 +753,17 @@ async fn exclusion_fixture() -> ExclusionFixture {
         AccountQuota::new("account-b"),
         AccountQuota::new("account-c"),
     ]);
+    // The health gate treats an account with no manager as not healthy, so the
+    // fixture registers every account the router can select.
+    let health = HealthManager::new();
+    for account in registry.all() {
+        health.register_account(account.account_id, &account.account_name);
+    }
     let router = RoutingRouter::new(
         registry,
         catalog,
         estimator,
-        None,
+        Some(health),
         EligibilityPolicy::default(),
     );
     ExclusionFixture { database, router }

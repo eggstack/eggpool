@@ -14,4 +14,4 @@ pub use fairness::{
     DeterministicFairnessRandom, FAIRNESS_KEY_HARD_CAP, FairnessDecision, FairnessKey,
     FairnessRandom, FairnessRotor,
 };
-pub use router::{RoutingDecisionTrace, RoutingRouter};
+pub use router::{DurableHealth, RoutingDecisionTrace, RoutingRouter};

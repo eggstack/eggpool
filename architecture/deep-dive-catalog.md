@@ -45,7 +45,7 @@ transport pings. `refresh_one_account` refreshes a single eligible account and r
 `None` for unknown/disabled/uncredentialed names.
 
 Refresh-result diffing captures only ordered model IDs and provider/model keys. Persistence
-projects owned schema-54 rows directly from the cache while holding its mutex, then drops
+projects owned rows directly from the cache while holding its mutex, then drops
 that guard before SQLite reads/writes. Pending refresh/ping facts are copied under the
 service-state mutex and that guard is also dropped before database awaits; successful
 persistence clears them, while failure retains them for retry. Startup hydration clones the

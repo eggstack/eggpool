@@ -1,6 +1,7 @@
 use std::collections::BTreeSet;
 use std::time::Instant;
 
+use eggpool::health::HealthManager;
 use eggpool::{
     Config,
     accounts::{AccountRegistry, CredentialStore},
@@ -110,11 +111,17 @@ async fn fixture_on(config: &DatabaseConfig) -> Fixture {
     catalog
         .update_from_account("budget-account", "provider-a", &models, true, true)
         .expect("catalog models");
+    // The health gate treats an account with no manager as not healthy, so the
+    // fixture registers every account the router can select.
+    let health = HealthManager::new();
+    for account in registry.all() {
+        health.register_account(account.account_id, &account.account_name);
+    }
     let router = RoutingRouter::new(
         registry,
         catalog,
         QuotaEstimator::new([AccountQuota::new("budget-account")]),
-        None,
+        Some(health),
         EligibilityPolicy::default(),
     );
     Fixture { database, router }

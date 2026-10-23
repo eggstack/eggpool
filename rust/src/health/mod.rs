@@ -25,5 +25,6 @@ pub use quarantine::{
 };
 pub use repository::{
     AccountBackoffRecord, AccountBackoffRepository, AccountBackoffRepositoryError,
-    ModelQuarantineRecord, ModelQuarantineRepository, ModelQuarantineRepositoryError,
+    HealthHydrationError, HealthHydrationReport, ModelQuarantineRecord, ModelQuarantineRepository,
+    ModelQuarantineRepositoryError, hydrate_generation_health,
 };

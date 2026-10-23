@@ -405,3 +405,35 @@ fn rolling_quota_window_drains_on_the_request_clock() {
         "the frozen clock must not drain the window"
     );
 }
+
+/// A non-finite observation timestamp must not advance the window.
+///
+/// A `NaN` timestamp compares false against every value, so it can never be
+/// ordered against the window's other observations and can never be pruned.
+/// Admitting it would inflate the window's usage permanently and force every
+/// later observation down the rebuild path.
+#[test]
+fn non_finite_observation_timestamp_is_rejected_without_mutating_the_window() {
+    let mut window = QuotaWindow::new(300);
+
+    window.add_observation(f64::NAN, 500, 700);
+    assert_eq!(
+        window.usage(1_000.0),
+        (0, 0),
+        "a NaN observation must not count toward the window"
+    );
+
+    window.add_observation(f64::INFINITY, 400, 600);
+    assert_eq!(
+        window.usage(1_000.0),
+        (0, 0),
+        "an infinite observation must not count toward the window"
+    );
+
+    window.add_observation(100.0, 10, 20);
+    assert_eq!(
+        window.usage(100.0),
+        (10, 20),
+        "a finite observation after a rejected one is still accepted"
+    );
+}

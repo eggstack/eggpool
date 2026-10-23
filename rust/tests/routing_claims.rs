@@ -6,6 +6,7 @@ use std::{
     },
 };
 
+use eggpool::health::HealthManager;
 use eggpool::{
     Config,
     accounts::{AccountRegistry, CredentialStore},
@@ -79,11 +80,17 @@ fn fixture_with_mode(fairness_mode: FairnessMode) -> (RoutingRouter, QuotaEstima
         AccountQuota::new("account-a"),
         AccountQuota::new("account-b"),
     ]);
+    // The health gate treats an account with no manager as not healthy, so the
+    // fixture registers every account the router can select.
+    let health = HealthManager::new();
+    for account in registry.all() {
+        health.register_account(account.account_id, &account.account_name);
+    }
     let router = RoutingRouter::new(
         registry,
         catalog,
         estimator.clone(),
-        None,
+        Some(health),
         EligibilityPolicy {
             fairness_mode,
             fairness_scope: FairnessScope::ProviderModelProtocol,
@@ -390,4 +397,53 @@ fn provider_qualified_facts_use_the_catalog_parser() {
     let facts = RoutingRequestFacts::from_model_id("model-a/provider-a", &providers);
     assert_eq!(facts.canonical_model_id, "model-a");
     assert_eq!(facts.provider_id.as_deref(), Some("provider-a"));
+}
+
+#[tokio::test]
+async fn a_policy_backed_cooldown_gates_the_account_without_touching_fairness_state() {
+    let (router, _) = fixture();
+    let empty = BTreeSet::new();
+    let claim = router
+        .select_and_claim(&facts(), &empty)
+        .await
+        .expect("claim succeeds")
+        .expect("candidate exists");
+    assert_eq!(claim.account_name(), "account-a");
+    let fairness_keys = router.fairness_key_count();
+
+    // The failure effect is applied outside the selection lock, so it must
+    // not publish a claim or advance the fairness rotor.
+    router
+        .apply_failure_effects(
+            &claim,
+            true,
+            false,
+            "none",
+            Some("quota_exhausted"),
+            None,
+            false,
+        )
+        .await;
+    assert_eq!(
+        router.fairness_key_count(),
+        fairness_keys,
+        "a health effect must not advance the fairness rotor"
+    );
+    assert_eq!(router.active_request_count("account-a"), 1);
+
+    // The claim is released, so the only thing that keeps the account out of
+    // the next claim is the policy-derived cooldown.
+    claim.rollback_claim().expect("rollback");
+    assert_eq!(router.active_request_count("account-a"), 0);
+    let next = router
+        .select_and_claim(&facts(), &empty)
+        .await
+        .expect("next claim succeeds")
+        .expect("next candidate exists");
+    assert_eq!(
+        next.account_name(),
+        "account-b",
+        "the cooled account must not be claimed again"
+    );
+    next.rollback_claim().expect("rollback");
 }

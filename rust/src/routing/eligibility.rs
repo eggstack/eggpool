@@ -465,15 +465,23 @@ fn candidate_for_account(
             return None;
         }
     }
-    if quota_mode == LocalQuotaMode::HardCap
-        && estimator
+    if quota_mode == LocalQuotaMode::HardCap {
+        // Fail closed. An account with no quota record cannot be shown to be
+        // within its limits, so `HardCap` excludes it instead of admitting it
+        // unchecked. `is_some_and` on a missing record is `false`, which is
+        // the same verdict as a record that is over its limits. The exclusion
+        // reason code is unchanged, so the routing-decision schema does not
+        // change. `LocalQuotaMode::ScoreOnly` does not admit on quota
+        // grounds and is unaffected.
+        let within_limits = estimator
             .get_account_quota(&identity.account_name)
             .is_some_and(|mut quota| {
-                !quota.is_within_limits(facts.now as f64, facts.projected_tokens)
-            })
-    {
-        exclude("quota_exhausted");
-        return None;
+                quota.is_within_limits(facts.now as f64, facts.projected_tokens)
+            });
+        if !within_limits {
+            exclude("quota_exhausted");
+            return None;
+        }
     }
     let resolved_protocol = provider_model.and_then(|model| model.protocol.clone());
     // A catalog miss with a requested protocol must not masquerade as native:

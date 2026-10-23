@@ -60,6 +60,14 @@ impl QuotaWindow {
 
     pub fn add_observation(&mut self, timestamp: f64, tokens: i64, cost: i64) {
         const MAX_OBSERVATIONS: usize = 8_192;
+        // A non-finite timestamp cannot be ordered against the window's other
+        // observations (`NaN >= x` is false for every `x`) and can never be
+        // pruned, so admitting it would permanently inflate the window's
+        // usage and stall its ordering. Reject it before any state mutation:
+        // no counter moves and `last_observation_timestamp` does not advance.
+        if !timestamp.is_finite() {
+            return;
+        }
         let observation = (
             timestamp,
             clamp_non_negative(tokens),

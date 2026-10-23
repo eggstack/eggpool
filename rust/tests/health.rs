@@ -18,7 +18,7 @@ use eggpool::{
     health::{
         BackoffReason, CircuitBreaker, CircuitState, EvidenceProvenance, HealthEffect,
         HealthEffectApplier, HealthManager, ModelQuarantine, QuarantineState,
-        classify_failure_category, compute_backoff_seconds,
+        classify_failure_category, compute_backoff_seconds, get_backoff_policy,
     },
 };
 
@@ -616,5 +616,172 @@ async fn production_generation_connects_the_health_manager_to_its_router() {
     assert!(!unregistered.is_model_healthy_read_only("account-a", "model-a"));
 
     generation.close().await;
+    database.close().await.expect("database closes");
+}
+
+#[test]
+fn the_policy_applies_its_base_escalation_and_cap() {
+    // The policy is the only source of a live backoff duration: the first
+    // failure takes the base delay, every consecutive failure doubles it up
+    // to the consecutive-failure ceiling, and the result never leaves the
+    // cap the policy declares.
+    let quota = get_backoff_policy(BackoffReason::QuotaExhausted).expect("quota policy");
+    assert_eq!(quota.base_delay, 300.0);
+    assert_eq!(quota.cap, 1_800.0);
+    assert_eq!(quota.max_consecutive, 3);
+    assert_eq!(
+        compute_backoff_seconds(BackoffReason::QuotaExhausted, 1, None, true),
+        Some(300.0)
+    );
+    assert_eq!(
+        compute_backoff_seconds(BackoffReason::QuotaExhausted, 2, None, true),
+        Some(600.0)
+    );
+    assert_eq!(
+        compute_backoff_seconds(BackoffReason::QuotaExhausted, 3, None, true),
+        Some(1_200.0)
+    );
+    // The fourth consecutive failure would be 2400 seconds, so the policy
+    // cap holds it at 1800 and every further failure stays there.
+    for rung in 4..=64 {
+        assert_eq!(
+            compute_backoff_seconds(BackoffReason::QuotaExhausted, rung, None, true),
+            Some(1_800.0),
+            "rung {rung} must not exceed the policy cap"
+        );
+    }
+    // A reason whose policy declares no timed backoff has none at all.
+    assert_eq!(
+        compute_backoff_seconds(BackoffReason::AuthenticationFailed, 1, None, true),
+        None
+    );
+    assert_eq!(
+        compute_backoff_seconds(BackoffReason::Unknown, 1, None, true),
+        None
+    );
+}
+
+#[test]
+fn every_written_reason_round_trips_through_its_stored_string() {
+    // The durable writer serializes a reason with `as_str` and the durable
+    // reader parses it back. A row written before the typed mapping existed
+    // must stay readable and map to the same reason.
+    let reasons = [
+        BackoffReason::AuthenticationFailed,
+        BackoffReason::QuotaExhausted,
+        BackoffReason::RateLimited,
+        BackoffReason::ModelUnavailable,
+        BackoffReason::ConnectTimeout,
+        BackoffReason::ConnectionFailure,
+        BackoffReason::UpstreamServerError,
+        BackoffReason::ProtocolError,
+        BackoffReason::ContextLimitExceeded,
+        BackoffReason::Unknown,
+    ];
+    for reason in reasons {
+        let stored = reason.as_str();
+        assert_eq!(
+            BackoffReason::try_from(stored),
+            Ok(reason),
+            "{stored} must round-trip to the reason it was written from"
+        );
+    }
+    // A value outside the vocabulary is not a reason: it fails closed instead
+    // of being normalized into one.
+    assert!(BackoffReason::try_from("not-a-reason").is_err());
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn a_policy_derived_deadline_survives_a_durable_write() {
+    let directory = tempfile::tempdir().expect("temporary health database");
+    let database = Database::open(DatabaseConfig {
+        path: directory
+            .path()
+            .join("health.sqlite3")
+            .to_string_lossy()
+            .into_owned(),
+        ..DatabaseConfig::default()
+    })
+    .await
+    .expect("database opens");
+    MigrationRunner::new(&database)
+        .run()
+        .await
+        .expect("migrations run");
+    database
+        .call(|connection| {
+            connection.execute(
+                "INSERT INTO accounts (id,name,api_key_env,enabled,weight,provider_id) \
+                 VALUES (1,'account-a','KEY',1,1.0,'provider-a')",
+                [],
+            )
+        })
+        .await
+        .expect("account row");
+    let wall_now = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .expect("clock")
+        .as_secs_f64();
+    // The deadline the policy derives for the first quota failure.
+    let delay = compute_backoff_seconds(BackoffReason::QuotaExhausted, 1, None, true)
+        .expect("a quota failure has a policy delay");
+    let deadline = wall_now + delay;
+    let backoffs = AccountBackoffRepository::new(&database);
+    backoffs
+        .upsert(&eggpool::health::AccountBackoffRecord {
+            id: 0,
+            account_id: 1,
+            model_id: None,
+            reason: BackoffReason::QuotaExhausted,
+            status_code: Some(402),
+            error_class: Some("quota_exhausted".into()),
+            consecutive_failures: 1,
+            backoff_until_epoch: Some(deadline),
+            last_failure_epoch: wall_now,
+            updated_epoch: wall_now,
+        })
+        .await
+        .expect("backoff write");
+    let rows = backoffs.list_all(10).await.expect("backoff rows");
+    assert_eq!(rows.len(), 1);
+    assert_eq!(rows[0].reason, BackoffReason::QuotaExhausted);
+    let stored = rows[0]
+        .backoff_until_epoch
+        .expect("a timed reason keeps its deadline");
+    assert!(
+        stored >= deadline - 0.001,
+        "a policy-derived deadline within the cap must not be shortened by the write: {stored} < {deadline}"
+    );
+    // The durable ceiling is the policy's own cap, so a deadline beyond it is
+    // bounded rather than persisted as an unbounded suppression.
+    let beyond = wall_now + delay + 10_000.0;
+    backoffs
+        .upsert(&eggpool::health::AccountBackoffRecord {
+            id: 0,
+            account_id: 1,
+            model_id: None,
+            reason: BackoffReason::QuotaExhausted,
+            status_code: Some(402),
+            error_class: Some("quota_exhausted".into()),
+            consecutive_failures: 1,
+            backoff_until_epoch: Some(beyond),
+            last_failure_epoch: wall_now,
+            updated_epoch: wall_now,
+        })
+        .await
+        .expect("backoff write");
+    let rows = backoffs.list_all(10).await.expect("backoff rows");
+    let stored = rows[0]
+        .backoff_until_epoch
+        .expect("a timed reason keeps its deadline");
+    assert!(
+        stored
+            <= wall_now
+                + get_backoff_policy(BackoffReason::QuotaExhausted)
+                    .expect("quota policy")
+                    .cap
+                + 1.0,
+        "the durable deadline must stay inside the policy cap: {stored}"
+    );
     database.close().await.expect("database closes");
 }

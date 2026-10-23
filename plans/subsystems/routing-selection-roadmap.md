@@ -1,6 +1,6 @@
 # Routing Selection Roadmap
 
-Status: closed
+Status: active
 
 Long-term references:
 
@@ -43,7 +43,11 @@ The current goal is to remove transient allocations and candidate cloning inside
 
 ### Capabilities
 
-No user-visible routing capability change is planned.
+- M005 makes durable account backoff and model quarantine operator-visible:
+  a provider that goes bad or a model that must be withdrawn stays excluded
+  across a process restart. This is a user-visible routing capability, not
+  infrastructure, because the consumer path exists once M005 lands.
+- M001–M003 and M004 planned no user-visible routing capability change.
 
 ### Infrastructure
 
@@ -94,6 +98,8 @@ The public scorer API is useful to tests/consumers and is not itself the defect.
 
 A separate current finding exists in rust/src/model_router.rs: exact affinity hits use VecDeque::retain while holding the affinity Mutex, making LRU touch O(cache size) at the 4096-entry cap. That has not yet been shown to dominate a realistic workload and requires a more invasive exact-LRU data-structure decision, so it is deferred behind evidence rather than bundled into M001.
 
+The roadmap reopened on repository evidence gathered at baseline `e6822d8f78`. Four selection-path defects were found that decide the permissive outcome on unknown or malformed input, and the durable half of the health subsystem was found to be implemented, documented, and inert in production. The durable health repositories and the effect applier under `rust/src/health/` have no production constructor, the quarantine store is never attached to a router, the quarantine gate in `rust/src/routing/eligibility.rs` is therefore skipped, the backoff escalation policy has no production caller, and the live backoff durations are inline constants. M004–M006 address this. The historical M001–M003 records remain closed and immutable.
+
 ## 5. Target architecture
 
 Routing selection keeps the same ownership and locks but uses an ordered internal score-input path:
@@ -116,6 +122,10 @@ Public score_accounts/rank_accounts/near_ties remain available and delegate to t
 - M001 has no external hard dependency.
 - M002 affinity LRU qualification is closed; the representative Pi 5 workload justifies the exact bounded M003 follow-up.
 - Persistence work is independent; no cross-subsystem dependency.
+- M004 had no hard dependency; it was a local fail-closed correction set and is now closed.
+- M005 had no hard dependency; the durable tables already existed and only a consumer path was missing. It is now closed, and the durable path persists the same policy the live path applies.
+- M006 had a hard dependency on M005: the policy and vocabulary it adopts must be the ones the durable path persists. The M005 closure satisfied it, and M006 is now closed.
+- No plan in the dashboard, request admission and wire, operations CLI, deployment and packaging, or planning governance subsystems depends on this roadmap's milestones.
 
 ## 7. Milestones
 
@@ -189,6 +199,200 @@ Deliverable: slot-bearing cache entries and a reusable slot-indexed doubly linke
 
 Exit conditions: exact eviction/TTL/stats/cancellation behavior, bounded node/free-slot storage, default/no-default workspace and strict Clippy/fmt gates, and the Pi 5 p95 thresholds all pass. **Closed** with implementation `dc6ea713`; 4,096-entry p95 improved about 90× and 64-entry p95 improved about 3.2×.
 
+### Milestone 004 — Quota, recovery-interval, and health-absence fail-closed corrections
+
+Class: invariant
+
+Objective:
+
+Close the selection-path defects that decide the permissive outcome when the
+inputs are unknown or malformed: the hard-cap quota admission for an account
+with no quota record, the absent-health predicate, the non-finite recovery
+interval, and the non-finite quota observation timestamp.
+
+Dependencies:
+
+- None. Each defect is local, deterministic, and needs no schema, dependency,
+  or physical target.
+
+Deliverable boundary:
+
+- `LocalQuotaMode::HardCap` excludes an account with no quota record, using
+  the existing quota exclusion reason code.
+- An absent `HealthManager` is not evaluated as healthy, while a present
+  manager with a registered healthy account selects that account exactly as
+  before.
+- A non-finite or non-positive recovery interval is rejected, and both
+  readers of that interval apply the same floor.
+- A non-finite quota observation timestamp does not advance the quota window.
+- The stale health comment in `rust/src/coordinator/endpoints.rs` is corrected.
+
+User or operator value:
+
+An installation with an unknown quota record, an unreadable health state, or
+a misconfigured recovery interval stops admitting traffic it should not
+admit, instead of failing open.
+
+Exit conditions:
+
+- Each correction has a regression test that fails against the pre-change
+  behavior.
+- The routing-decision schema, exclusion reason codes, public scorer API, and
+  config classification are unchanged.
+- Default and no-default workspace qualification passes.
+
+Deferred work:
+
+- Durable health persistence and quarantine gating (M005).
+- Backoff policy adoption and reason vocabulary unification (M006).
+
+### Milestone 005 — Durable health effect application and quarantine gating
+
+Class: capability
+
+Objective:
+
+Make the durable health subsystem a live part of production routing: hydrate
+the persisted account backoffs and model quarantine entries into the running
+generation, persist the effects the routing path applies, and let the
+existing quarantine gate actually execute.
+
+Dependencies:
+
+- None. The durable tables and repository surfaces already exist under the
+  current migration chain; only the production consumer path is missing.
+
+Deliverable boundary:
+
+- The durable health repositories are constructed in the generation build
+  path, not per request.
+- Active backoff records and quarantine entries are hydrated before the
+  generation is published.
+- The quarantine is attached to the router so the eligibility gate executes,
+  with no change to the gate's fail-closed partition logic.
+- The account backoff and model quarantine effects are persisted outside the
+  selection lock.
+- Stale durable rows are expired on the bounded maintenance schedule.
+- `architecture/overview.md` and `architecture/deep-dive-health.md` describe
+  the shipped behavior rather than the intended one.
+
+User or operator value:
+
+A provider that goes bad stays bad across a restart, and a model that must be
+withdrawn is not routed to again after the process comes back.
+
+Exit conditions:
+
+- A generation built against a database with an active backoff and an active
+  quarantine serves requests with both effects applied.
+- An exactly quarantined model is excluded, and an unclassifiable candidate
+  does not bypass an exact persisted quarantine.
+- A provider failure leaves a durable row that survives a process restart.
+- No routing-decision schema, exclusion reason code, or config classification
+  changes.
+- Default and no-default workspace qualification passes.
+
+Deferred work:
+
+- Backoff policy adoption and reason vocabulary unification (M006).
+- Any new durable health table or column; the current schema is sufficient.
+
+### Milestone 006 — Backoff policy adoption and health-reason vocabulary unification
+
+Class: invariant
+
+Objective:
+
+Make the live path use the bounded reason-specific backoff policy that
+already exists, and replace the hand-written failure-to-reason string
+vocabulary with one typed mapping, so live durations and durable reason
+values cannot diverge from the policy that defines them.
+
+Dependencies:
+
+- Hard: M005 closed. The durable path is what makes the policy and the
+  vocabulary observable; landing them out of order produces a live path and a
+  durable path that disagree.
+- Interface: the persisted reason strings in the durable health tables are a
+  stable contract and keep their current values.
+
+Deliverable boundary:
+
+- The live backoff duration comes from the existing policy rather than from
+  an inline constant.
+- One typed mapping replaces the hand-written reason strings, and the
+  persisted string values stay byte-identical.
+- The reader reconstructs every reason the writer can produce.
+- The durable deadline clamp agrees with the policy cap.
+- A guard keeps the writer's and reader's reason value sets equal.
+
+User or operator value:
+
+Backoff behaves the way the operator-facing policy describes — escalating,
+bounded, and jittered — instead of applying a fixed first-step delay, and a
+stored reason never degrades silently into an unknown reason.
+
+Exit conditions:
+
+- Every classifiable failure derives its duration from the policy, and the
+  result never exceeds the policy cap.
+- A repeated failure escalates under the policy.
+- The persisted reason strings are unchanged.
+- Default and no-default workspace qualification passes.
+
+Deferred work:
+
+- Any change to the policy table's values, which is a separate decision.
+- Any new failure category or health reason variant, which changes the
+  durable vocabulary.
+
+### Milestone 007 — Durable backoff scope and reason correction
+
+Class: invariant
+
+Objective:
+
+Make a durable backoff row describe the failure it actually records — the
+live reason and the escalation rung of the scope it belongs to — so a restart
+restores exactly the effect the live path applied.
+
+Dependencies:
+
+- Hard: M005 and M006 closed. The defect lives in the interaction between the
+  durable writers M005 added and the policy-derived rung M006 introduced.
+- Interface: the durable backoff table's schema and its unique key
+  `(account_id, model_id, reason)` are unchanged.
+
+Deliverable boundary:
+
+- The model-scoped durable row records the reason the live path classified,
+  not a fixed reason.
+- The model-scoped row carries the model's own escalation rung and the
+  account-scoped row carries the account's.
+- The hydration restores a row by its scope rather than by its reason value.
+- The backoff policy table is unchanged.
+
+User or operator value:
+
+A model that failed for an upstream reason no longer inherits an inflated
+model-absence escalation after a restart, and the durable rows distinguish a
+model absence from an upstream failure.
+
+Exit conditions:
+
+- A durable-effects test asserts the model-scoped row's reason and the two
+  rows' rungs.
+- A durable-effects test asserts that a hydrated model-scoped row disables the
+  model without cooling the account down.
+- Default and no-default workspace suites pass.
+
+Deferred work:
+
+- Whether a provider hint should escalate along the policy ladder. That is a
+  policy change on the dominant rate-limit path and needs its own milestone.
+- The parallel `HealthEffectApplier` in `rust/src/health/effects.rs`, which
+  has no production caller.
+
 ## 8. Cross-cutting requirements
 
 Storage/migration: none.
@@ -230,7 +434,9 @@ Run strict Clippy and the full serial default/no-default workspace before closur
 
 ## 11. Completion definition
 
-This roadmap closes when M001 and M003 are closed with semantic and performance evidence. No routing architecture or public compatibility surface may regress.
+This roadmap closes when M001 and M003 are closed with semantic and performance
+evidence, and when M004–M006 are closed with correctness and durable-health
+evidence. No routing architecture or public compatibility surface may regress.
 
 ## 12. Milestone status
 
@@ -239,3 +445,7 @@ This roadmap closes when M001 and M003 are closed with semantic and performance 
 | 001 — ordered quota-scoring and candidate-allocation cleanup | closed | plans/implementation/routing-selection/001-ordered-quota-scoring-and-candidate-allocation-cleanup.md | plans/closure/routing-selection/001-status.md | none |
 | 002 — semantic-affinity exact-LRU cost qualification | closed | — | plans/closure/routing-selection/002-affinity-lru-qualification.md | Pi 5 workload justified M003, now closed |
 | 003 — bounded exact affinity LRU | closed | plans/implementation/routing-selection/003-bounded-affinity-exact-lru.md | plans/closure/routing-selection/003-status.md | Exact bounded LRU passed semantic tests and Pi 5 performance gates |
+| 004 — quota, recovery-interval, and health-absence fail-closed corrections | closed | plans/implementation/routing-selection/004-quota-health-recovery-fail-closed-corrections.md | plans/closure/routing-selection/004-status.md | none |
+| 005 — durable health effect application and quarantine gating | closed | plans/implementation/routing-selection/005-durable-health-effect-application-and-quarantine-gating.md | plans/closure/routing-selection/005-status.md | none; closed through M007 |
+| 006 — backoff policy adoption and health-reason vocabulary unification | closed | plans/implementation/routing-selection/006-backoff-policy-adoption-and-health-reason-vocabulary.md | plans/closure/routing-selection/006-status.md | none; closed through M007 |
+| 007 — durable backoff scope and reason correction | closed | plans/implementation/routing-selection/007-durable-backoff-scope-and-reason-correction.md | plans/closure/routing-selection/007-status.md | none |

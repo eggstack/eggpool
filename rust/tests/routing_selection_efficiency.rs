@@ -13,6 +13,7 @@
 
 use std::collections::BTreeSet;
 
+use eggpool::health::HealthManager;
 use eggpool::{
     Config,
     accounts::{AccountRegistry, CredentialStore},
@@ -363,11 +364,20 @@ async fn selection_stays_deterministic_across_modes_and_pressure() {
                             let cell_facts = facts(pinned_provider, 250);
                             let mut snapshots = Vec::new();
                             for _ in 0..2 {
+                                // The health gate treats an account with no manager as not healthy, so the
+                                // fixture registers every account the router can select.
+                                let health = HealthManager::new();
+                                for account in shared.registry.clone().all() {
+                                    health.register_account(
+                                        account.account_id,
+                                        &account.account_name,
+                                    );
+                                }
                                 let router = RoutingRouter::new(
                                     shared.registry.clone(),
                                     shared.catalog.clone(),
                                     fresh_estimator(account_count),
-                                    None,
+                                    Some(health),
                                     cell_policy.clone(),
                                 );
                                 // Two warm-up selections populate active
@@ -495,11 +505,17 @@ fn missing_estimator_entries_stay_excluded_as_malformed() {
     catalog
         .update_from_account("lonely-a", "provider-a", &[model], true, true)
         .expect("catalog model");
+    // The health gate treats an account with no manager as not healthy, so the
+    // fixture registers every account the router can select.
+    let health = HealthManager::new();
+    for account in registry.all() {
+        health.register_account(account.account_id, &account.account_name);
+    }
     let router = RoutingRouter::new(
         registry,
         catalog,
         QuotaEstimator::default(),
-        None,
+        Some(health),
         EligibilityPolicy::default(),
     );
     let trace = router.trace_for(&facts(false, 10), None);

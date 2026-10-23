@@ -9,6 +9,8 @@ use http::{HeaderMap, StatusCode};
 use serde::{Deserialize, Serialize};
 use thiserror::Error;
 
+use crate::health::{BackoffReason, compute_backoff_seconds};
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 pub enum FailureSource {
     Transport,
@@ -32,6 +34,49 @@ pub enum FailureCategory {
     WireRejected,
     Cancelled,
     Fatal,
+}
+
+impl FailureCategory {
+    /// The health reason a classified failure maps to.
+    ///
+    /// The mapping is total: every category that can reach the backoff
+    /// assignment resolves to a reason, and the categories that carry no
+    /// provider-attributable backoff resolve to [`BackoffReason::Unknown`]
+    /// rather than to a string that would fail to parse on the way back.
+    ///
+    /// `status` is the upstream status that classified the failure. It
+    /// separates the two failures the vocabulary carries under one category:
+    /// a request timeout and an upstream server error share the category
+    /// `Temporary` but not their reason.
+    pub fn backoff_reason(self, status: Option<u16>) -> BackoffReason {
+        match self {
+            Self::Authentication => BackoffReason::AuthenticationFailed,
+            Self::Quota => BackoffReason::QuotaExhausted,
+            Self::RateLimit => BackoffReason::RateLimited,
+            Self::ModelUnavailable => BackoffReason::ModelUnavailable,
+            Self::TransientTransport => BackoffReason::ConnectionFailure,
+            Self::Temporary => match status {
+                Some(408) => BackoffReason::ConnectTimeout,
+                _ => BackoffReason::UpstreamServerError,
+            },
+            Self::BadRequest | Self::WireRejected | Self::Cancelled | Self::Fatal => {
+                BackoffReason::Unknown
+            }
+        }
+    }
+}
+
+/// The relative backoff the policy selects for a reason at its first
+/// failure.
+///
+/// The live path takes the duration from the policy rather than from an
+/// inline constant, so the escalation the policy defines has a base to
+/// escalate from. A reason whose policy has no timed backoff (an
+/// authentication failure, or a reason the policy does not define) has no
+/// duration at all.
+fn policy_backoff_duration(reason: BackoffReason) -> Option<Duration> {
+    compute_backoff_seconds(reason, 1, None, true)
+        .and_then(|seconds| Duration::try_from_secs_f64(seconds).ok())
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -377,7 +422,7 @@ pub fn classify(observation: &FailureObservation, policy: RetryPolicy) -> Failur
         "upstream_error"
     };
     let mut persist_backoff = false;
-    let mut backoff_reason = None;
+    let mut backoff_reason: Option<BackoffReason> = None;
     let mut backoff_until = None;
     let mut provider_attributable = false;
     let mut evidence_class = match observation.source {
@@ -405,11 +450,16 @@ pub fn classify(observation: &FailureObservation, policy: RetryPolicy) -> Failur
             action = NextAction::RetryWire;
         }
     } else if observation.source == FailureSource::Transport {
+        // A transport failure is a transient transport failure. The category
+        // hint never reclassifies it, so the reason mapping below always
+        // sees the same category for this branch.
+        category = FailureCategory::TransientTransport;
         account_effect = "failure";
         circuit_effect = "failure";
         persist_backoff = true;
-        backoff_reason = Some("connection_failure");
-        backoff_until = Some(Duration::from_secs(30));
+        let reason = category.backoff_reason(None);
+        backoff_reason = Some(reason);
+        backoff_until = policy_backoff_duration(reason);
         provider_attributable = true;
         if retryable {
             retry_scope = RetryScope::Account;
@@ -423,7 +473,7 @@ pub fn classify(observation: &FailureObservation, policy: RetryPolicy) -> Failur
                 account_effect = "disable_auth";
                 circuit_effect = "failure";
                 persist_backoff = true;
-                backoff_reason = Some("authentication_failed");
+                backoff_reason = Some(category.backoff_reason(None));
                 evidence_class = "explicit_credential_invalid".into();
                 provider_attributable = true;
                 if retryable {
@@ -455,8 +505,9 @@ pub fn classify(observation: &FailureObservation, policy: RetryPolicy) -> Failur
                 category = FailureCategory::ModelUnavailable;
                 model_effect = "quarantine";
                 persist_backoff = true;
-                backoff_reason = Some("model_unavailable");
-                backoff_until = Some(Duration::from_secs(300));
+                let reason = category.backoff_reason(observation.status);
+                backoff_reason = Some(reason);
+                backoff_until = policy_backoff_duration(reason);
                 evidence_class = "runtime_model_absent_404".into();
                 provider_attributable = true;
                 if retryable {
@@ -469,7 +520,7 @@ pub fn classify(observation: &FailureObservation, policy: RetryPolicy) -> Failur
                 account_effect = "failure";
                 circuit_effect = "failure";
                 persist_backoff = true;
-                backoff_reason = Some("authentication_failed");
+                backoff_reason = Some(category.backoff_reason(None));
                 evidence_class = "http_401_ambiguous".into();
                 provider_attributable = true;
                 if retryable {
@@ -483,7 +534,7 @@ pub fn classify(observation: &FailureObservation, policy: RetryPolicy) -> Failur
                 category = FailureCategory::Quota;
                 account_effect = "quota";
                 persist_backoff = true;
-                backoff_reason = Some("quota_exhausted");
+                backoff_reason = Some(category.backoff_reason(observation.status));
                 evidence_class = "quota_exhausted".into();
                 provider_attributable = true;
                 if retryable {
@@ -505,8 +556,9 @@ pub fn classify(observation: &FailureObservation, policy: RetryPolicy) -> Failur
                     "quarantine"
                 };
                 persist_backoff = true;
-                backoff_reason = Some("model_unavailable");
-                backoff_until = Some(Duration::from_secs(300));
+                let reason = category.backoff_reason(observation.status);
+                backoff_reason = Some(reason);
+                backoff_until = policy_backoff_duration(reason);
                 evidence_class = "runtime_model_absent_404".into();
                 provider_attributable = true;
                 if retryable {
@@ -532,8 +584,9 @@ pub fn classify(observation: &FailureObservation, policy: RetryPolicy) -> Failur
                 model_effect = "quarantine";
                 circuit_effect = "failure";
                 persist_backoff = true;
-                backoff_reason = Some("connect_timeout");
-                backoff_until = Some(Duration::from_secs(30));
+                let reason = category.backoff_reason(observation.status);
+                backoff_reason = Some(reason);
+                backoff_until = policy_backoff_duration(reason);
                 evidence_class = "http_408_timeout".into();
                 provider_attributable = true;
                 if retryable {
@@ -546,7 +599,11 @@ pub fn classify(observation: &FailureObservation, policy: RetryPolicy) -> Failur
                 category = FailureCategory::RateLimit;
                 account_effect = "rate_limit";
                 persist_backoff = true;
-                backoff_reason = Some("rate_limited");
+                backoff_reason = Some(category.backoff_reason(observation.status));
+                // The upstream retry-after hint stays the policy's hint
+                // input. It is already clamped against the configured
+                // maximum, and the policy applies it at the boundary where
+                // the escalation rung is known.
                 backoff_until = retry_after;
                 evidence_class = "http_429_rate_limited".into();
                 provider_attributable = true;
@@ -565,8 +622,9 @@ pub fn classify(observation: &FailureObservation, policy: RetryPolicy) -> Failur
                 model_effect = "quarantine";
                 circuit_effect = "failure";
                 persist_backoff = true;
-                backoff_reason = Some("upstream_server_error");
-                backoff_until = Some(Duration::from_secs(20));
+                let reason = category.backoff_reason(observation.status);
+                backoff_reason = Some(reason);
+                backoff_until = policy_backoff_duration(reason);
                 debug_assert!(observation.status.is_some());
                 evidence_class = format!("http_{}_server_error", observation.status.unwrap_or(500));
                 provider_attributable = true;
@@ -641,7 +699,7 @@ pub fn classify(observation: &FailureObservation, policy: RetryPolicy) -> Failur
         model_effect: model_effect.into(),
         circuit_effect: circuit_effect.into(),
         wire_effect: wire_effect.into(),
-        backoff_reason: backoff_reason.map(str::to_owned),
+        backoff_reason: backoff_reason.map(|reason| reason.as_str().to_owned()),
         backoff_until,
         retry_action: retry_action.into(),
         retry_scope_label: retry_scope_label.into(),

@@ -11,8 +11,8 @@ use tokio_rusqlite::rusqlite::{OptionalExtension, params};
 use crate::db::{Database, DatabaseError};
 
 use super::{
-    BackoffReason, EvidenceProvenance, ModelQuarantine, QuarantineEntry, QuarantineState,
-    entry_from_row,
+    BackoffReason, EvidenceProvenance, HealthManager, MAX_NONTERMINAL_BACKOFF_SECONDS,
+    ModelQuarantine, QuarantineEntry, QuarantineState, entry_from_row, get_backoff_policy,
 };
 
 #[derive(Debug, Error)]
@@ -29,6 +29,52 @@ pub enum ModelQuarantineRepositoryError {
     Database(#[from] DatabaseError),
     #[error("invalid model quarantine row: {0}")]
     Invalid(String),
+}
+
+/// The durable health state one generation starts from.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub struct HealthHydrationReport {
+    /// Backoff rows that became an in-memory cooldown or model disable.
+    pub backoffs: usize,
+    /// Quarantine rows that became an in-memory quarantine entry.
+    pub quarantines: usize,
+}
+
+/// The durable health hydration failed as a whole.
+#[derive(Debug, Error)]
+pub enum HealthHydrationError {
+    #[error("account backoff hydration failed: {0}")]
+    Backoff(#[from] AccountBackoffRepositoryError),
+    #[error("model quarantine hydration failed: {0}")]
+    Quarantine(#[from] ModelQuarantineRepositoryError),
+}
+
+/// Hydrate one generation's health state from the durable tables.
+///
+/// The backoff rows become the generation's in-memory cooldowns and model
+/// disables; the quarantine rows become the generation's model quarantine
+/// gate. A row that names an account the generation does not know is skipped
+/// with a warning, so one stale row never fails a generation, but a
+/// repository failure that cannot be bounded does: a generation must not
+/// become reachable with partially hydrated health.
+pub async fn hydrate_generation_health(
+    backoffs: &AccountBackoffRepository,
+    quarantine_repository: &ModelQuarantineRepository,
+    health: &HealthManager,
+    quarantine: &ModelQuarantine,
+    account_names: &BTreeMap<i64, String>,
+    wall_now: f64,
+) -> Result<HealthHydrationReport, HealthHydrationError> {
+    let hydrated_backoffs = backoffs
+        .hydrate_into(health, account_names, wall_now)
+        .await?;
+    let hydrated_quarantines = quarantine_repository
+        .hydrate_into(quarantine, wall_now)
+        .await?;
+    Ok(HealthHydrationReport {
+        backoffs: hydrated_backoffs,
+        quarantines: hydrated_quarantines,
+    })
 }
 
 #[derive(Debug, Clone)]
@@ -179,9 +225,16 @@ impl AccountBackoffRepository {
         validate_backoff_record(record)?;
         let record = record.clone();
         let now = wall_now();
-        let deadline = record
-            .backoff_until_epoch
-            .map(|value| value.min(now + 1_800.0));
+        let deadline = record.backoff_until_epoch.map(|value| {
+            // The durable ceiling is the cap the reason's own policy
+            // declares, so a policy-derived deadline is never silently
+            // shortened by the write and the two caps cannot drift apart.
+            let ceiling = get_backoff_policy(record.reason)
+                .map(|policy| policy.cap)
+                .unwrap_or(MAX_NONTERMINAL_BACKOFF_SECONDS)
+                .max(0.0);
+            value.min(now + ceiling)
+        });
         let reason = record.reason.as_str().to_owned();
         self.database.with_transaction(move |connection| {
             let existing: Option<i64> = connection.query_row("SELECT id FROM account_backoffs WHERE account_id=?1 AND model_id IS ?2 AND reason=?3", params![record.account_id, record.model_id, reason], |row| row.get(0)).optional()?;

@@ -1,7 +1,8 @@
 use std::{
+    collections::BTreeSet,
     fs,
     path::PathBuf,
-    time::{SystemTime, UNIX_EPOCH},
+    time::{Duration, SystemTime, UNIX_EPOCH},
 };
 
 use eggpool::{
@@ -9,6 +10,12 @@ use eggpool::{
     accounts::{AccountIdentity, AccountRegistry, CredentialStore, QuotaOffsets, RequestSurface},
     catalog::{CatalogCacheError, ModelCatalogCache, ModelInput, ProtocolResolutionStatus},
     db::{Account, AccountRepository, Database, DatabaseConfig, MigrationRunner},
+    health::{BackoffReason, HealthManager, get_backoff_policy},
+    quota::{AccountQuota, QuotaEstimator},
+    routing::{
+        EligibilityPolicy, FairnessMode, FairnessScope, LocalQuotaMode, RoutingRequestFacts,
+        RoutingRouter,
+    },
 };
 
 fn temporary_database_path(label: &str) -> PathBuf {
@@ -461,3 +468,126 @@ async fn account_repository_returns_stable_ids_and_config_sync_keeps_schema_54()
 
 #[allow(dead_code)]
 fn _identity_type_is_explicitly_non_secret(_: AccountIdentity) {}
+
+/// A router whose only health state is the health manager the live failure
+/// path updates.
+fn health_router() -> (RoutingRouter, HealthManager) {
+    let registry = AccountRegistry::from_config(
+        &config(),
+        &[
+            durable_account(1, "account-a", "provider-a", true),
+            durable_account(2, "disabled-a", "provider-a", false),
+        ],
+        &CredentialStore::default(),
+    )
+    .expect("registry builds");
+    let mut catalog = ModelCatalogCache::default();
+    catalog.set_account_provider("account-a", "provider-a");
+    let mut model = ModelInput::new("model-a");
+    model.protocol = Some("openai".into());
+    model.protocol_source = Some("fixture".into());
+    model.resolution_status = ProtocolResolutionStatus::Resolved;
+    catalog
+        .update_from_account("account-a", "provider-a", &[model], true, true)
+        .expect("catalog account");
+    let estimator = QuotaEstimator::new([AccountQuota::new("account-a")]);
+    // The health gate treats an account with no manager as not healthy, so the
+    // fixture registers every account the router can select.
+    let health = HealthManager::new();
+    for identity in registry.all() {
+        health.register_account(identity.account_id, &identity.account_name);
+    }
+    let router = RoutingRouter::new(
+        registry,
+        catalog,
+        estimator,
+        Some(health.clone()),
+        EligibilityPolicy {
+            fairness_mode: FairnessMode::RoundRobin,
+            fairness_scope: FairnessScope::ProviderModelProtocol,
+            local_quota_mode: LocalQuotaMode::ScoreOnly,
+            ..Default::default()
+        },
+    );
+    (router, health)
+}
+
+fn routing_facts(model: &str) -> RoutingRequestFacts {
+    let mut facts = RoutingRequestFacts::new(model);
+    facts.requested_protocol = Some("openai".into());
+    facts.projected_tokens = 128;
+    facts.now = 1_700_000_000;
+    facts
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn a_rate_limited_failure_still_backs_the_account_off() {
+    let (router, health) = health_router();
+    let claim = router
+        .select_and_claim(&routing_facts("model-a"), &BTreeSet::new())
+        .await
+        .expect("claim operation")
+        .expect("a claim is published");
+    // The rate limit the live classifier produces, with the provider's own
+    // retry-after hint.
+    router
+        .apply_failure_effects(
+            &claim,
+            true,
+            false,
+            "none",
+            Some("rate_limited"),
+            Some(Duration::from_secs(30)),
+            false,
+        )
+        .await;
+    let snapshot = health
+        .snapshot(claim.account_name())
+        .expect("the account has health state");
+    assert!(
+        snapshot.cooldown_until > health.now(),
+        "a rate-limited failure must still back the account off"
+    );
+    assert_eq!(snapshot.health_state, "rate_limited");
+    assert_eq!(
+        snapshot.last_failure_category,
+        Some(BackoffReason::RateLimited)
+    );
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn an_authentication_failure_still_produces_no_timed_backoff() {
+    let (router, health) = health_router();
+    let claim = router
+        .select_and_claim(&routing_facts("model-a"), &BTreeSet::new())
+        .await
+        .expect("claim operation")
+        .expect("a claim is published");
+    router
+        .apply_failure_effects(
+            &claim,
+            true,
+            false,
+            "none",
+            Some("authentication_failed"),
+            None,
+            true,
+        )
+        .await;
+    let snapshot = health
+        .snapshot(claim.account_name())
+        .expect("the account has health state");
+    assert_eq!(
+        snapshot.cooldown_until, 0.0,
+        "an authentication failure must still produce no timed backoff"
+    );
+    assert_eq!(snapshot.health_state, "authentication_failed");
+    assert_eq!(
+        snapshot.last_failure_category,
+        Some(BackoffReason::AuthenticationFailed)
+    );
+    let policy =
+        get_backoff_policy(BackoffReason::AuthenticationFailed).expect("the reason has a policy");
+    assert_eq!(policy.base_delay, 0.0);
+    assert_eq!(policy.cap, 0.0);
+}

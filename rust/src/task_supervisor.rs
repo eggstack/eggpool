@@ -560,8 +560,21 @@ impl TaskCallbackRegistry {
                     database
                         .cleanup_retention(policy)
                         .await
-                        .map(|_| ())
-                        .map_err(|error| TaskCallbackError::FailedWithDetail(error.to_string()))
+                        .map_err(|error| TaskCallbackError::FailedWithDetail(error.to_string()))?;
+                    // Expired durable health rows are retired on the same
+                    // bounded maintenance schedule as the rest of the
+                    // database, so a stale backoff or quarantine cannot
+                    // suppress routing indefinitely.
+                    let now = crate::routing::epoch_seconds() as f64;
+                    crate::health::AccountBackoffRepository::new(&database)
+                        .expire_old(now)
+                        .await
+                        .map_err(|error| TaskCallbackError::FailedWithDetail(error.to_string()))?;
+                    crate::health::ModelQuarantineRepository::new(&database)
+                        .expire_old(now)
+                        .await
+                        .map_err(|error| TaskCallbackError::FailedWithDetail(error.to_string()))?;
+                    Ok(())
                 }
             }),
         );
@@ -1238,9 +1251,13 @@ impl RuntimeTaskSupervisor {
             std::mem::take(&mut *map).into_values().collect::<Vec<_>>()
         };
         let started = tasks.len();
-        let deadline = tokio::time::Instant::now() + timeout;
+        // A shutdown deadline that is not representable fails closed into the
+        // existing timed-out outcome instead of panicking on the instant
+        // arithmetic.
+        let deadline_result = crate::operations::process::checked_deadline(timeout);
+        let mut timed_out = deadline_result.is_err();
+        let deadline = deadline_result.unwrap_or_else(|_| tokio::time::Instant::now());
         let mut joined = 0;
-        let mut timed_out = false;
         for task in tasks {
             cancel_task(&task);
             let join = task.join.lock().unwrap_or_else(|e| e.into_inner()).take();
