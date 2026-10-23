@@ -1,6 +1,6 @@
 # On-Prem User Access Roadmap
 
-Status: closed
+Status: active
 
 Long-term references:
 
@@ -13,6 +13,7 @@ Long-term references:
 Related ADRs:
 
 - `plans/adrs/ADR-0002-on-prem-user-identity-and-policy-boundaries.md` (accepted)
+- `plans/adrs/ADR-0004-browser-session-csrf-delivery-and-account-scoped-sign-in-throttling.md` (proposed; M024 is blocked on its acceptance)
 
 ## 1. Purpose and ownership boundary
 
@@ -356,6 +357,25 @@ synthetic; it establishes no universal capacity or latency guarantee.
 Source: `plans/implementation/on-prem-user-access/023-short-window-fairness-controls.md`.
 Final performance evidence: `plans/closure/on-prem-user-access/023-performance-qualification.md`.
 
+#### M024 — Browser session CSRF delivery and member account surface corrective (blocked)
+
+Class: invariant. Blocked on the acceptance of
+`plans/adrs/ADR-0004-browser-session-csrf-delivery-and-account-scoped-sign-in-throttling.md`.
+The CSRF cookie is currently delivered on a strictly narrower set of requests
+than the session cookie, so an operator who reaches an administrative page by
+a cross-site top-level navigation is authenticated but cannot act: the page
+renders and every mutation is refused. The server cannot repair this for an
+already-signed-in browser, because only the CSRF digest is persisted. The
+sign-in throttle bounds an account-and-address pair rather than an account,
+and a successful sign-in does not clear the counter. The sign-in, account, and
+member surfaces carry no stylesheet, a member has no landing page and no way
+to reach the member surface without knowing a URL, and the sign-in responses
+are cacheable. The milestone corrects the delivery, the throttle, the
+presentation, and the navigation without weakening the server-side origin
+check, the double-submit token requirement, the transport gate, or the
+disjointness of the member and administrator surfaces.
+Source: `plans/implementation/on-prem-user-access/024-browser-session-csrf-delivery-and-member-account-surface-corrective.md`.
+
 ### Post-merge dependency and hardware policy
 
 - M017–M023 are closed. M022 did not depend on a Pi/Le Potato run; it became
@@ -374,6 +394,9 @@ Final performance evidence: `plans/closure/on-prem-user-access/023-performance-q
   secondary administrators (requires admin uniqueness migration and security
   review), notifications and SSO; take them as separate bounded plans only
   after core operability closure.
+- M024 has no hard dependency on any earlier milestone. It depends on the
+  acceptance of ADR-0004 and on nothing else, and it is independent of the
+  dashboard corrective milestone M014, whose file ownership is disjoint.
 
 ## 8. Cross-cutting requirements
 
@@ -436,6 +459,15 @@ Physical MMC tail attribution is separately nonblocking; no
 unsupported concurrency/service capacity claim is authorized.
 A ready plan is not an implemented capability.
 
+The roadmap was reopened on evidence gathered at baseline
+`d04ad6831c6e030b7f5fc8a56501fdfecab982bd`. M024 is a corrective pass over a
+closed milestone family: it does not reopen M001–M023 and does not revisit the
+transport posture, the managed transition, the budget semantics, or the
+credential model that those milestones settled. It closes only when ADR-0004
+is accepted, the CSRF delivery and the sign-in throttle are corrected, and
+the member and sign-in surfaces are usable. It may close **again** on that
+evidence.
+
 ## 12. Milestone status
 
 | Milestone | Status | Implementation plan | Closure record | Blockers |
@@ -463,3 +495,4 @@ A ready plan is not an implemented capability.
 | M021 | closed | `plans/implementation/on-prem-user-access/021-default-member-policy-provisioning.md` | `plans/closure/on-prem-user-access/021-status.md` | Transactional future-only profile default; CLI/browser and no-profile journeys, migration, policy and budget boundaries verified. |
 | M022 | closed | `plans/implementation/on-prem-user-access/022-hard-budget-agent-compatibility.md` | `plans/closure/on-prem-user-access/022-status.md` | Captured Codex/OpenCode output-cap behavior; preserved hard proof-or-reject semantics and added actionable error codes. |
 | M023 | closed | `plans/implementation/on-prem-user-access/023-short-window-fairness-controls.md` | `plans/closure/on-prem-user-access/023-performance-qualification.md` | Modified-binary no-rule matrix and active-throttle measurements pass on ordinary Linux/NVMe. No successor is registered; no universal capacity claim. |
+| M024 | blocked | `plans/implementation/on-prem-user-access/024-browser-session-csrf-delivery-and-member-account-surface-corrective.md` | — | Blocked on the acceptance of `plans/adrs/ADR-0004-browser-session-csrf-delivery-and-account-scoped-sign-in-throttling.md`. No hard dependency on any earlier milestone. |

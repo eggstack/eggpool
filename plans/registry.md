@@ -95,7 +95,7 @@ No new runtime, schema or performance claim lands with these plans.
 | Persistence | active | `plans/subsystems/persistence-roadmap.md` | M011 closed — post-M010 roadmap/documentation reconciliation | M009/M010 closures accepted. Documentation/tooling-only corrective; production remains WAL/NORMAL. No technical persistence successor is registered. |
 | Deployment and packaging | active | `plans/subsystems/deployment-packaging-roadmap.md` | M007 closed — release action-pin enforcement and guard correction | Reopened on evidence at baseline `e6822d8f78`: M001–M005 remain closed. M006 is closed through M007; no successor is registered in this subsystem. |
 | Dashboard | active | `plans/subsystems/dashboard-roadmap.md` | M014 ready — operator surface presentation and accessibility corrective | Reopened on evidence at baseline `e6822d8f78`: M001–M013 remain closed. M014 is registered as the intentional frontend change the asset-stability invariant requires; it has no hard dependency, and no successor is registered after it. |
-| On-prem user access | closed | `plans/subsystems/on-prem-user-access-roadmap.md` | M023 closed — short-window fairness controls | M017–M023 complete. Modified-binary ordinary-Linux/NVMe no-rule and active-throttle qualification is recorded; no successor is registered. The subsystem's documentation coverage gap is tracked by Planning Governance M002, not here. |
+| On-prem user access | active | `plans/subsystems/on-prem-user-access-roadmap.md` | M024 blocked — browser session CSRF delivery and member account surface corrective | Reopened on evidence at baseline `d04ad6831c6e030b7f5fc8a56501fdfecab982bd`: M001–M023 remain closed. M024 is blocked only on the acceptance of `plans/adrs/ADR-0004-browser-session-csrf-delivery-and-account-scoped-sign-in-throttling.md`. |
 | On-prem concurrency performance | active | `plans/subsystems/on-prem-concurrency-performance-roadmap.md` | M002 closed — ordinary-server synthetic baseline recorded | M001's Pi/microSD solo tail attribution stays conditionally closed; M002 authorizes no WAL/SQLite topology change. |
 | Operations CLI | active | `plans/subsystems/operations-cli-roadmap.md` | M003 closed — watchdog start-guard ownership correction | New subsystem roadmap opened at baseline `e6822d8f78` for `rust/src/operations/` and `rust/src/runtime.rs`, which no other roadmap claims as a primary owner. M001 is closed and M002 is closed through M003; no successor is registered in this subsystem. |
 | Request admission and wire | active | `plans/subsystems/request-admission-wire-roadmap.md` | M008 closed — remote compaction capability contract | ADR-0003 accepted; M001–M007 and M009 remain closed; M008 is closed; no successor is registered in this subsystem. |
@@ -142,6 +142,25 @@ oracle divergence record accurate with a reason per divergence. No published
 dashboard field name or shape changes, and no other registered milestone
 depends on it.
 
+`plans/implementation/on-prem-user-access/024-browser-session-csrf-delivery-and-member-account-surface-corrective.md`
+is registered as On-prem user access M024 at baseline
+`d04ad6831c6e030b7f5fc8a56501fdfecab982bd`, and the subsystem roadmap is
+reopened on that evidence. The CSRF cookie is delivered on a strictly narrower
+set of requests than the session cookie, so an operator who reaches an
+administrative page by a cross-site top-level navigation is authenticated but
+cannot act: the page renders and every mutation is refused. The server cannot
+repair this for an already-signed-in browser, because only the CSRF digest is
+persisted. The sign-in throttle bounds an account-and-address pair rather than
+an account, and a successful sign-in does not clear the counter. The sign-in,
+account, and member surfaces carry no stylesheet, a member has no landing page
+and no way to reach the member surface without knowing a URL, and the sign-in
+responses are cacheable. The milestone changes auth semantics, so it is
+blocked on the acceptance of
+`plans/adrs/ADR-0004-browser-session-csrf-delivery-and-account-scoped-sign-in-throttling.md`
+and on nothing else. Accepting that ADR is a one-line status change on the
+ADR plus its acceptance note. The milestone is independent of Dashboard M014,
+whose file ownership is disjoint.
+
 ## Dependency-ready implementation plans
 
 | Subsystem | Milestone | Status | Implementation plan | Dependencies / handoff note |
@@ -158,6 +177,7 @@ depends on it.
 
 | Subsystem | Milestone | Blocker |
 |---|---|---|
+| On-prem user access | M024 | Acceptance of `plans/adrs/ADR-0004-browser-session-csrf-delivery-and-account-scoped-sign-in-throttling.md`. The plan is `plans/implementation/on-prem-user-access/024-browser-session-csrf-delivery-and-member-account-surface-corrective.md`. No other dependency. |
 
 Unblock audit (on-prem user access reopening after M012 closure, baseline
 `3c7def1e`): M001–M013 closure records remain immutable; no
