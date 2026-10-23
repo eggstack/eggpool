@@ -177,8 +177,14 @@ M003 and M004 both require the shared M002 shell contract. They may proceed in p
 
 M013 has no hard dependency on any dashboard milestone: it reconciles the
 duplicated dashboard and CLI derivations against each other and is now
-closed. No dashboard milestone depends on M013, and no successor is
-registered in this subsystem.
+closed.
+
+M014 has no hard dependency on any dashboard milestone. It corrects the
+operator-facing presentation of the dashboard's own pages and assets, and it
+is the intentional, separately reviewed frontend change that the asset
+stability invariant above requires before an embedded asset may move. No
+dashboard milestone depends on M014, and no successor is registered in this
+subsystem after it.
 
 No external product dependency is currently known. Browser tooling is qualification-only and must not enter the Rust production graph.
 
@@ -434,6 +440,46 @@ the telemetry renderer cannot index out of bounds.
 Deferred work: the parity harness's recorded baselines remain the reference;
 no new dashboard route or field is in scope.
 
+### Milestone 014 — Operator surface presentation and accessibility corrective
+
+Class: capability
+
+Objective: make the operator-facing surfaces render the way the product
+intends, and remove the parts of the frontend that can never work. The theme,
+table chrome, chart loading, and status reporting are part of what the
+product presents; the on-prem pages an administrator and a member actually
+use currently resolve no theme variable at all, the administrative tables
+carry no table chrome, the status pills are painted with fixed colours that
+fail contrast in the light themes, the chart surface can strand itself on a
+slow asset load, and a cluster of retired frontend code is still carried in
+the stylesheet and the script.
+
+Dependencies: none. It is the intentional, separately reviewed frontend
+change that the asset-stability invariant requires before an embedded asset
+may move; the oracle divergence record stays accurate with a reason per
+divergence.
+
+Deliverable boundary: theme delivery on every dashboard-owned page shell, the
+navigation chrome on the shells that the navigation can reach, the table
+chrome on the administrative tables, theme-derived status pill colours with a
+cross-theme contrast guard, a chart loading path that terminates, an
+accessible name for every chart canvas with live regions for the chart state
+and the refresh indicator, a skip link, removal of the retired frontend
+surface, focus visibility and print styles, a theme picker that preserves the
+page's query, usage row-cap disclosure, and the asset manifest and oracle
+divergence bookkeeping. No published dashboard field name or shape changes.
+
+Exit conditions: every reachable page resolves a complete theme variable set;
+every emitted table carries the table chrome; every status pill reaches 4.5:1
+against its theme's card background in every bundled theme and the guard fails
+on a deliberate regression; the chart surface terminates in a chart or an
+explicit failure; every chart canvas has an accessible name and the refresh
+indicator is a live region; no retired selector or unused export remains and
+a guard fails on reintroduction; the asset manifest matches the working-tree
+bytes and an unrecorded divergence still fails the qualification; the parity
+qualification passes with reviewed browser dispositions; no published field,
+schema, configuration, or dependency change.
+
 ## 12. Milestone status
 
 | Milestone | Status | Implementation plan | Closure record | Blockers |
@@ -451,8 +497,9 @@ no new dashboard route or field is in scope.
 | 011 | closed | plans/implementation/dashboard/011-hosted-oracle-history-qualification.md | plans/closure/dashboard/011-status.md | Hosted CI run 37049147155 passed all gates, including frozen manifest blob identity. |
 | 012 | closed | plans/implementation/dashboard/012-lifecycle-closure-and-documentation-polish.md | plans/closure/dashboard/012-status.md | M001-M011 closed; terminal planning/docs cleanup only; no production or oracle change. |
 | 013 | closed | plans/implementation/dashboard/013-observation-projection-derivation-reconciliation.md | plans/closure/dashboard/013-status.md | none |
+| 014 | ready | plans/implementation/dashboard/014-operator-surface-presentation-and-accessibility-corrective.md | — | None. The intentional frontend change the asset-stability invariant requires; the oracle divergence record stays accurate with a reason per divergence. |
 
-M001-M012 are closed. M008 corrected the post-merge strict-CI failure without
+M001-M013 are closed. M008 corrected the post-merge strict-CI failure without
 reopening accepted dashboard parity dispositions.
 M009 decomposed production modules while preserving the qualification harness
 and exact accepted parity differences. M010 closed after strict oracle/report
@@ -460,7 +507,26 @@ semantics, browser/lifecycle, local gates, and hosted CI passed. M011 closed
 the hosted checkout history prerequisite for the frozen oracle blob test.
 M012 reconciled the terminal planning lifecycle and the current-document
 ownership paths without changing runtime, assets, oracle, or accepted parity
-semantics. This is the terminal dashboard milestone: no successor is
-registered, and any future dashboard work — new capability, asset/theme change,
-or comparator revision — requires a new bounded plan. Severity-tagged
-out-of-scope documentation findings are recorded in M012's closure record.
+semantics. M013 reconciled the duplicated dashboard and CLI derivations
+without changing a published field. Severity-tagged out-of-scope documentation
+findings are recorded in M012's closure record.
+
+M014 reopens the subsystem on repository evidence gathered at baseline
+`d04ad6831c6e030b7f5fc8a56501fdfecab982bd`. The dashboard stylesheet declares
+no custom properties of its own, so every page shell that does not link the
+theme stylesheet resolves no variable at all — and the theme stylesheet is
+linked from the shared layout only, leaving the administrator usage page, the
+member usage page, the administrative audit page, the my-account page, the
+my-models page, and the one-time token page unstyled. The administrative
+tables are emitted as bare tables without the class the stylesheet's table
+rules target. The status pills are painted with fixed hexadecimal colours
+that bypass the theme's own semantic tokens and fail contrast in the light
+themes. The chart loading path depends on Chart.js arriving within a fixed
+ten-second window and can strand itself on an indefinite preparing message
+afterwards. The chart surface, the refresh indicator, and the navigation
+preamble are not announced to a screen reader. A cluster of retired frontend
+code — the update-indicator feature and several stale selectors — is still
+carried with no producer in the current renderers. The milestone is the
+intentional, separately reviewed frontend change that the asset-stability
+invariant requires, and it keeps the oracle divergence record accurate with
+a reason per divergence.

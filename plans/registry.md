@@ -94,7 +94,7 @@ No new runtime, schema or performance claim lands with these plans.
 | Runtime efficiency | closed | `plans/subsystems/runtime-efficiency-roadmap.md` | M001–M003 closed — no successor registered | No M003-dependent plan was unblocked. Persistence M007 has since completed Pi 5/MMC qualification and was rejected on WAL convergence gates; production is unchanged. |
 | Persistence | active | `plans/subsystems/persistence-roadmap.md` | M011 closed — post-M010 roadmap/documentation reconciliation | M009/M010 closures accepted. Documentation/tooling-only corrective; production remains WAL/NORMAL. No technical persistence successor is registered. |
 | Deployment and packaging | active | `plans/subsystems/deployment-packaging-roadmap.md` | M007 closed — release action-pin enforcement and guard correction | Reopened on evidence at baseline `e6822d8f78`: M001–M005 remain closed. M006 is closed through M007; no successor is registered in this subsystem. |
-| Dashboard | active | `plans/subsystems/dashboard-roadmap.md` | M013 closed — observation projection derivation reconciliation | Reopened on evidence at baseline `e6822d8f78`: M001–M012 remain closed. M013 is closed; no successor is registered in this subsystem. |
+| Dashboard | active | `plans/subsystems/dashboard-roadmap.md` | M014 ready — operator surface presentation and accessibility corrective | Reopened on evidence at baseline `e6822d8f78`: M001–M013 remain closed. M014 is registered as the intentional frontend change the asset-stability invariant requires; it has no hard dependency, and no successor is registered after it. |
 | On-prem user access | closed | `plans/subsystems/on-prem-user-access-roadmap.md` | M023 closed — short-window fairness controls | M017–M023 complete. Modified-binary ordinary-Linux/NVMe no-rule and active-throttle qualification is recorded; no successor is registered. The subsystem's documentation coverage gap is tracked by Planning Governance M002, not here. |
 | On-prem concurrency performance | active | `plans/subsystems/on-prem-concurrency-performance-roadmap.md` | M002 closed — ordinary-server synthetic baseline recorded | M001's Pi/microSD solo tail attribution stays conditionally closed; M002 authorizes no WAL/SQLite topology change. |
 | Operations CLI | active | `plans/subsystems/operations-cli-roadmap.md` | M003 closed — watchdog start-guard ownership correction | New subsystem roadmap opened at baseline `e6822d8f78` for `rust/src/operations/` and `rust/src/runtime.rs`, which no other roadmap claims as a primary owner. M001 is closed and M002 is closed through M003; no successor is registered in this subsystem. |
@@ -125,10 +125,28 @@ closed; a compact request that finds no eligible provider surface now fails
 with a typed capability outcome instead of an ordinary selection failure. A
 bundled provider opt-in is explicitly not authorized by it.
 
+`plans/implementation/dashboard/014-operator-surface-presentation-and-accessibility-corrective.md`
+is registered as Dashboard M014 at baseline
+`d04ad6831c6e030b7f5fc8a56501fdfecab982bd`. The dashboard stylesheet declares
+no custom properties of its own, so every page shell that does not link the
+theme stylesheet resolves no variable at all, and the theme stylesheet is
+linked from the shared layout only. The administrative tables are emitted
+without the class the table rules target. The status pills are painted with
+fixed hexadecimal colours that bypass the theme's own semantic tokens. The
+chart loading path depends on Chart.js arriving within a fixed window. The
+chart surface and the refresh indicator are not announced to a screen reader,
+and a cluster of retired frontend code is still carried with no producer in
+the current renderers. The milestone is the intentional, separately reviewed
+frontend change the asset-stability invariant requires, and it keeps the
+oracle divergence record accurate with a reason per divergence. No published
+dashboard field name or shape changes, and no other registered milestone
+depends on it.
+
 ## Dependency-ready implementation plans
 
 | Subsystem | Milestone | Status | Implementation plan | Dependencies / handoff note |
 |---|---|---|---|---|
+| Dashboard | M014 | ready | `plans/implementation/dashboard/014-operator-surface-presentation-and-accessibility-corrective.md` | None. The intentional frontend change the dashboard asset-stability invariant requires; the oracle divergence record stays accurate with a reason per divergence. |
 
 ## Active implementation plans
 
