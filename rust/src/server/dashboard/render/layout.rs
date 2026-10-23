@@ -1,5 +1,125 @@
 use super::*;
 
+/// Every dashboard table carries this class. The stylesheet scopes its table
+/// chrome — the header fill, the row borders, the cell padding — to
+/// `table.data`, so a table without the class renders unstyled. The renderers
+/// open their tables with `DASHBOARD_TABLE_OPEN` so the next table cannot
+/// forget it.
+pub(in crate::server::dashboard) const DASHBOARD_TABLE_OPEN: &str = "<table class=\"data\">";
+pub(in crate::server::dashboard) const DASHBOARD_TABLE_OPEN_COMPACT: &str =
+    "<table class=\"data compact\">";
+
+/// The shared navigation destinations. Every dashboard surface renders them,
+/// so an operator always has a route back to the overview.
+const DASHBOARD_NAVIGATION: [(&str, &str, &str); 17] = [
+    ("overview", "/", "Overview"),
+    ("reliability", "/reliability", "Reliability"),
+    ("routing", "/routing", "Routing"),
+    ("cache", "/cache", "Cache"),
+    ("users", "/users", "Users"),
+    ("profiles", "/profiles", "Profiles"),
+    ("usage", "/usage", "Usage"),
+    ("my-account", "/my-account", "My Account"),
+    ("accounts", "/accounts", "Accounts"),
+    ("models", "/models", "Models"),
+    ("latency", "/latency", "Latency"),
+    ("pings", "/pings", "Pings"),
+    ("bandwidth", "/bandwidth", "Bandwidth"),
+    ("traces", "/traces", "Traces"),
+    ("events", "/events", "Events"),
+    ("timeseries", "/timeseries", "Timeseries"),
+    ("runtime", "/runtime", "Runtime"),
+];
+
+/// The theme picker's query parameters, rendered as hidden inputs.
+///
+/// The picker is a GET form, so submitting it sends only the form's own
+/// fields: without these, switching the theme silently dropped every filter
+/// the operator had set on the page.
+pub(in crate::server::dashboard) fn dashboard_query_inputs(pairs: &[(&str, &str)]) -> String {
+    pairs
+        .iter()
+        .filter(|(_, value)| !value.is_empty())
+        .map(|(name, value)| {
+            format!(
+                "<input type=\"hidden\" name=\"{}\" value=\"{}\">",
+                html_escape(name),
+                html_escape(value)
+            )
+        })
+        .collect::<String>()
+}
+
+/// The shared navigation chrome: the destination links plus the theme picker.
+pub(in crate::server::dashboard) fn dashboard_navigation_markup(
+    active_nav: &str,
+    period: &str,
+    theme: &str,
+    extra_query: &str,
+) -> String {
+    let query = format!(
+        "period={}&amp;theme={}",
+        query_component(period),
+        query_component(theme)
+    );
+    let navigation = DASHBOARD_NAVIGATION
+        .iter()
+        .map(|(key, href, label)| {
+            let class = if *key == active_nav { "active" } else { "" };
+            format!(
+                "<a class=\"{}\" href=\"{}?{}\">{}</a>",
+                class,
+                href,
+                query,
+                html_escape(label)
+            )
+        })
+        .collect::<String>();
+    let theme_options = THEME_NAMES
+        .iter()
+        .map(|name| {
+            let selected = if *name == theme { " selected" } else { "" };
+            format!(
+                "<option value=\"{}\"{}>{}</option>",
+                html_escape(name),
+                selected,
+                html_escape(name)
+            )
+        })
+        .collect::<String>();
+    format!(
+        "<div class=\"topnav-menu\" id=\"topnav-menu\">{}<form method=\"get\" class=\"theme-selector\" data-tooltip=\"Switch dashboard theme\" data-tooltip-pos=\"bottom\" aria-label=\"Switch dashboard theme\"><select name=\"theme\" aria-label=\"Dashboard theme\" onchange=\"this.form.submit()\">{}</select><input type=\"hidden\" name=\"period\" value=\"{}\">{}</form></div>",
+        navigation,
+        theme_options,
+        html_escape(period),
+        extra_query
+    )
+}
+
+/// The shell the on-prem administrative surfaces use when they are not
+/// rendered through the shared dashboard layout.
+///
+/// It carries the same navigation chrome, the same dashboard stylesheet and
+/// the same theme stylesheet as the rest of the dashboard, so a member or an
+/// administrator who lands on one of these pages sees a complete page rather
+/// than a bare fragment, and has a route back to the overview.
+pub(in crate::server::dashboard) fn dashboard_standalone_page(
+    title: &str,
+    active_nav: &str,
+    theme: &str,
+    body: &str,
+) -> String {
+    let theme = selected_theme(theme);
+    format!(
+        "<!doctype html><html lang=\"en\"><head><meta charset=\"utf-8\"><meta name=\"viewport\" content=\"width=device-width,initial-scale=1\"><title>{}</title><link rel=\"stylesheet\" href=\"/static/dashboard.css\"><link rel=\"stylesheet\" href=\"/static/theme.css?theme={}\"></head><body><header class=\"topbar\"><h1><a href=\"/?period=24h&amp;theme={}\">EggPool</a></h1><nav class=\"topnav\">{}</nav></header><main id=\"dashboard-content\">{}</main></body></html>",
+        html_escape(title),
+        query_component(theme),
+        query_component(theme),
+        dashboard_navigation_markup(active_nav, "24h", theme, ""),
+        body
+    )
+}
+
 pub(in crate::server::dashboard) fn dashboard_header(
     title: &str,
     period: &str,
@@ -38,6 +158,7 @@ pub(in crate::server::dashboard) fn dashboard_page_with_body(
     theme: Option<String>,
     refresh_interval_s: u64,
     body: String,
+    extra_query: &str,
 ) -> Response {
     let period = period.as_deref().unwrap_or("24h");
     let period = match normalize_period(Some(period)) {
@@ -55,6 +176,7 @@ pub(in crate::server::dashboard) fn dashboard_page_with_body(
         refresh_interval_s,
         body,
         include_chart_js,
+        extra_query,
     ))
 }
 
@@ -69,6 +191,7 @@ pub(in crate::server::dashboard) fn body_requires_chart_runtime(body: &str) -> b
     .any(|hook| body.contains(hook))
 }
 
+#[allow(clippy::too_many_arguments)]
 pub(in crate::server::dashboard) fn render_dashboard_layout(
     title: &str,
     active_nav: &str,
@@ -77,55 +200,13 @@ pub(in crate::server::dashboard) fn render_dashboard_layout(
     refresh_interval_s: u64,
     body: String,
     include_chart_js: bool,
+    extra_query: &str,
 ) -> String {
     let query = format!(
         "period={}&amp;theme={}",
         query_component(period),
         query_component(theme)
     );
-    let navigation = [
-        ("overview", "/", "Overview"),
-        ("reliability", "/reliability", "Reliability"),
-        ("routing", "/routing", "Routing"),
-        ("cache", "/cache", "Cache"),
-        ("users", "/users", "Users"),
-        ("profiles", "/profiles", "Profiles"),
-        ("usage", "/usage", "Usage"),
-        ("my-account", "/my-account", "My Account"),
-        ("accounts", "/accounts", "Accounts"),
-        ("models", "/models", "Models"),
-        ("latency", "/latency", "Latency"),
-        ("pings", "/pings", "Pings"),
-        ("bandwidth", "/bandwidth", "Bandwidth"),
-        ("traces", "/traces", "Traces"),
-        ("events", "/events", "Events"),
-        ("timeseries", "/timeseries", "Timeseries"),
-        ("runtime", "/runtime", "Runtime"),
-    ]
-    .iter()
-    .map(|(key, href, label)| {
-        let class = if *key == active_nav { "active" } else { "" };
-        format!(
-            "<a class=\"{}\" href=\"{}?{}\">{}</a>",
-            class,
-            href,
-            query,
-            html_escape(label)
-        )
-    })
-    .collect::<String>();
-    let theme_options = THEME_NAMES
-        .iter()
-        .map(|name| {
-            let selected = if *name == theme { " selected" } else { "" };
-            format!(
-                "<option value=\"{}\"{}>{}</option>",
-                html_escape(name),
-                selected,
-                html_escape(name)
-            )
-        })
-        .collect::<String>();
     let chart_preload = if include_chart_js {
         "<link rel=\"preload\" href=\"/static/chart.js\" as=\"script\">"
     } else {
@@ -141,12 +222,7 @@ pub(in crate::server::dashboard) fn render_dashboard_layout(
     } else {
         String::new()
     };
-    let navigation_markup = format!(
-        "<div class=\"topnav-menu\" id=\"topnav-menu\">{}<form method=\"get\" class=\"theme-selector\" data-tooltip=\"Switch dashboard theme\" data-tooltip-pos=\"bottom\" aria-label=\"Switch dashboard theme\"><select name=\"theme\" aria-label=\"Dashboard theme\" onchange=\"this.form.submit()\">{}</select><input type=\"hidden\" name=\"period\" value=\"{}\"></form></div>",
-        navigation,
-        theme_options,
-        html_escape(period)
-    );
+    let navigation_markup = dashboard_navigation_markup(active_nav, period, theme, extra_query);
     // Only advertise auto-refresh on the pages that actually get the polling
     // script. Claiming it everywhere told operators to expect live data on
     // pages that render once and never update.
@@ -155,13 +231,18 @@ pub(in crate::server::dashboard) fn render_dashboard_layout(
     } else {
         format!(" &middot; auto-refresh {}s", refresh_interval_s.max(1))
     };
+    // The refresh timestamp is a live region: the auto-refresh tick replaces
+    // its text, and an operator who is not looking at the footer still has to
+    // learn that the page moved on. It is tied to the refresh tick itself
+    // rather than to a timer of its own, so it never announces on a cadence
+    // no operator could use.
     let footer = format!(
-        "<footer><small>Period: <span class=\"period-label\">{}</span>{} &middot; <span id=\"dashboard-updated\">ready</span></small></footer>",
+        "<footer><small>Period: <span class=\"period-label\">{}</span>{} &middot; <span id=\"dashboard-updated\" role=\"status\" aria-live=\"polite\">ready</span></small></footer>",
         html_escape(period),
         refresh_note
     );
     format!(
-        "<!DOCTYPE html>\n<html lang=\"en\">\n<head>\n<meta charset=\"utf-8\">\n<meta name=\"viewport\" content=\"width=device-width, initial-scale=1\">\n<title>{}</title>\n<link rel=\"icon\" type=\"image/svg+xml\" href=\"/static/favicon.svg\">\n<link rel=\"preload\" href=\"/static/dashboard.css\" as=\"style\">\n<link rel=\"stylesheet\" href=\"/static/dashboard.css\">\n<link rel=\"stylesheet\" href=\"/static/theme.css?theme={}\">\n{}\n</head>\n<body>\n<svg class=\"egg-background\" viewBox=\"0 0 256 256\" preserveAspectRatio=\"xMidYMid meet\" aria-hidden=\"true\" focusable=\"false\"><path class=\"shape\" d=\"M128 30\n           C82 30 55 88 57 145\n           C59 202 89 231 128 231\n           C167 231 197 202 199 145\n           C201 88 174 30 128 30 Z\" /><path class=\"thin\" d=\"M86 132 H112 L126 111 L144 158 L159 132 H174\" /><circle class=\"shape\" cx=\"85\" cy=\"132\" r=\"5\" /><circle class=\"shape\" cx=\"174\" cy=\"132\" r=\"5\" /></svg>\n<header class=\"topbar\"><button class=\"topnav-burger\" type=\"button\" aria-label=\"Open page menu\" aria-expanded=\"false\" aria-controls=\"topnav-menu\"><svg class=\"topnav-burger-icon\" viewBox=\"0 0 24 24\" width=\"24\" height=\"24\" aria-hidden=\"true\" focusable=\"false\"><rect class=\"bar bar-1\" x=\"0\" y=\"0\" width=\"24\" height=\"2\" rx=\"1\"/><rect class=\"bar bar-2\" x=\"0\" y=\"11\" width=\"24\" height=\"2\" rx=\"1\"/><rect class=\"bar bar-3\" x=\"0\" y=\"22\" width=\"24\" height=\"2\" rx=\"1\"/></svg></button><h1><a href=\"/?{}\">EggPool</a></h1><nav class=\"topnav\">{}<button type=\"button\" class=\"topnav-refresh\" data-tooltip=\"Reload this page\" aria-label=\"Reload this page\" onclick=\"window.location.reload()\">↻</button></nav></header>\n<main id=\"dashboard-content\">\n{}\n</main>\n{footer}\n{}<script defer src=\"/static/dashboard.js\"></script>{}\n</body>\n</html>",
+        "<!DOCTYPE html>\n<html lang=\"en\">\n<head>\n<meta charset=\"utf-8\">\n<meta name=\"viewport\" content=\"width=device-width, initial-scale=1\">\n<title>{}</title>\n<link rel=\"icon\" type=\"image/svg+xml\" href=\"/static/favicon.svg\">\n<link rel=\"preload\" href=\"/static/dashboard.css\" as=\"style\">\n<link rel=\"stylesheet\" href=\"/static/dashboard.css\">\n<link rel=\"stylesheet\" href=\"/static/theme.css?theme={}\">\n{}\n</head>\n<body>\n<a class=\"skip-link\" href=\"#dashboard-content\">Skip to main content</a>\n<svg class=\"egg-background\" viewBox=\"0 0 256 256\" preserveAspectRatio=\"xMidYMid meet\" aria-hidden=\"true\" focusable=\"false\"><path class=\"shape\" d=\"M128 30\n           C82 30 55 88 57 145\n           C59 202 89 231 128 231\n           C167 231 197 202 199 145\n           C201 88 174 30 128 30 Z\" /><path class=\"thin\" d=\"M86 132 H112 L126 111 L144 158 L159 132 H174\" /><circle class=\"shape\" cx=\"85\" cy=\"132\" r=\"5\" /><circle class=\"shape\" cx=\"174\" cy=\"132\" r=\"5\" /></svg>\n<header class=\"topbar\"><button class=\"topnav-burger\" type=\"button\" aria-label=\"Open page menu\" aria-expanded=\"false\" aria-controls=\"topnav-menu\"><svg class=\"topnav-burger-icon\" viewBox=\"0 0 24 24\" width=\"24\" height=\"24\" aria-hidden=\"true\" focusable=\"false\"><rect class=\"bar bar-1\" x=\"0\" y=\"0\" width=\"24\" height=\"2\" rx=\"1\"/><rect class=\"bar bar-2\" x=\"0\" y=\"11\" width=\"24\" height=\"2\" rx=\"1\"/><rect class=\"bar bar-3\" x=\"0\" y=\"22\" width=\"24\" height=\"2\" rx=\"1\"/></svg></button><h1><a href=\"/?{}\">EggPool</a></h1><nav class=\"topnav\">{}<button type=\"button\" class=\"topnav-refresh\" data-tooltip=\"Reload this page\" aria-label=\"Reload this page\" onclick=\"window.location.reload()\">↻</button></nav></header>\n<main id=\"dashboard-content\">\n{}\n</main>\n{footer}\n{}<script defer src=\"/static/dashboard.js\"></script>{}\n</body>\n</html>",
         html_escape(title),
         query_component(theme),
         chart_preload,

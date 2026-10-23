@@ -238,7 +238,7 @@ pub(in crate::server::dashboard) fn render_models_page(
         })
         .collect::<String>();
     format!(
-        "<h2>Models</h2>{model_info_warning}{controls}<section class=\"panel\"><div class=\"table-scroll\" tabindex=\"0\" role=\"region\" aria-label=\"Scrollable data table\"><table class=\"data\"><thead><tr><th data-priority=\"1\">Model</th><th data-priority=\"1\">Provider</th><th data-priority=\"1\">Avail.</th><th data-priority=\"1\">Info</th><th data-priority=\"2\">Benchmarks</th><th data-priority=\"1\">Requests</th><th data-priority=\"1\">Cost</th><th data-priority=\"1\">Exactness</th><th data-priority=\"2\">Errors</th><th data-priority=\"2\">Input tokens</th><th data-priority=\"2\">Output tokens</th><th data-priority=\"2\">Total tokens</th><th data-priority=\"2\">Avg latency</th><th data-priority=\"2\">Avg TTFT</th><th data-priority=\"2\">TPS</th>{}</tr></thead><tbody>{rows}</tbody></table></div></section>",
+        "<h2>Models</h2>{model_info_warning}{controls}<section class=\"panel\"><div class=\"table-scroll\" tabindex=\"0\" role=\"region\" aria-label=\"Scrollable data table\">{DASHBOARD_TABLE_OPEN}<thead><tr><th data-priority=\"1\">Model</th><th data-priority=\"1\">Provider</th><th data-priority=\"1\">Avail.</th><th data-priority=\"1\">Info</th><th data-priority=\"2\">Benchmarks</th><th data-priority=\"1\">Requests</th><th data-priority=\"1\">Cost</th><th data-priority=\"1\">Exactness</th><th data-priority=\"2\">Errors</th><th data-priority=\"2\">Input tokens</th><th data-priority=\"2\">Output tokens</th><th data-priority=\"2\">Total tokens</th><th data-priority=\"2\">Avg latency</th><th data-priority=\"2\">Avg TTFT</th><th data-priority=\"2\">TPS</th>{}</tr></thead><tbody>{rows}</tbody></table></div></section>",
         "<th data-priority=\"3\">Priority</th><th data-priority=\"3\">Est. cost</th><th data-priority=\"3\">Cache R</th><th data-priority=\"3\">Cache W</th><th data-priority=\"3\">Reasoning</th><th data-priority=\"3\">Avg cost/req</th><th data-priority=\"3\">Avg cost/1k tok</th>"
     )
 }
@@ -428,7 +428,7 @@ pub(in crate::server::dashboard) fn render_model_info_detail(
         None => "—",
     };
     let callability = format!(
-        "<section class=\"panel\"><h3>Provider / Callability</h3><div class=\"table-scroll\" tabindex=\"0\" role=\"region\" aria-label=\"Scrollable data table\"><table class=\"data\"><tbody><tr><th>Providers</th><td>{}</td></tr><tr><th>Sources</th><td>{}</td></tr><tr><th>Limits</th><td>{limits_html}</td></tr><tr><th>Modalities</th><td>{}</td></tr><tr><th>Tool support</th><td>{tools_html}</td></tr></tbody></table></div></section>",
+        "<section class=\"panel\"><h3>Provider / Callability</h3><div class=\"table-scroll\" tabindex=\"0\" role=\"region\" aria-label=\"Scrollable data table\">{DASHBOARD_TABLE_OPEN}<tbody><tr><th>Providers</th><td>{}</td></tr><tr><th>Sources</th><td>{}</td></tr><tr><th>Limits</th><td>{limits_html}</td></tr><tr><th>Modalities</th><td>{}</td></tr><tr><th>Tool support</th><td>{tools_html}</td></tr></tbody></table></div></section>",
         dashboard_code_list(detail.get("providers")),
         dashboard_code_list(provenance.get("sources")),
         modalities_html
@@ -452,7 +452,7 @@ pub(in crate::server::dashboard) fn render_model_info_detail(
         .filter(|value| !value.is_empty())
         .unwrap_or_else(|| "—".to_owned());
     let metadata = format!(
-        "<section class=\"panel\"><h3>Metadata</h3><div class=\"table-scroll\" tabindex=\"0\" role=\"region\" aria-label=\"Scrollable data table\"><table class=\"data\"><tbody><tr><th>Family</th><td>{}</td></tr><tr><th>License</th><td>{}</td></tr><tr><th>Release date</th><td>{}</td></tr><tr><th>External IDs</th><td>{external_ids}</td></tr></tbody></table></div></section>",
+        "<section class=\"panel\"><h3>Metadata</h3><div class=\"table-scroll\" tabindex=\"0\" role=\"region\" aria-label=\"Scrollable data table\">{DASHBOARD_TABLE_OPEN}<tbody><tr><th>Family</th><td>{}</td></tr><tr><th>License</th><td>{}</td></tr><tr><th>Release date</th><td>{}</td></tr><tr><th>External IDs</th><td>{external_ids}</td></tr></tbody></table></div></section>",
         dashboard_optional_text(detail.get("family")),
         dashboard_optional_text(detail.get("license")),
         dashboard_optional_text(detail.get("release_date"))
@@ -467,7 +467,7 @@ pub(in crate::server::dashboard) fn render_model_info_detail(
         .map(html_escape)
         .unwrap_or_else(|| "—".to_owned());
     let provenance_panel = format!(
-        "<section class=\"panel\"><h3>Provenance</h3><div class=\"table-scroll\" tabindex=\"0\" role=\"region\" aria-label=\"Scrollable data table\"><table class=\"data\"><tbody><tr><th>Sources</th><td>{}</td></tr><tr><th>Reconciled at</th><td>{reconciled}</td></tr></tbody></table></div></section>",
+        "<section class=\"panel\"><h3>Provenance</h3><div class=\"table-scroll\" tabindex=\"0\" role=\"region\" aria-label=\"Scrollable data table\">{DASHBOARD_TABLE_OPEN}<tbody><tr><th>Sources</th><td>{}</td></tr><tr><th>Reconciled at</th><td>{reconciled}</td></tr></tbody></table></div></section>",
         dashboard_code_list(provenance.get("sources"))
     );
     format!(
@@ -705,7 +705,7 @@ pub(in crate::server::dashboard) fn dashboard_render_benchmarks(
         String::new()
     } else {
         format!(
-            "<section class=\"panel\"><h3>Benchmarks</h3><div class=\"table-scroll\" tabindex=\"0\" role=\"region\" aria-label=\"Scrollable data table\"><table class=\"data\"><thead><tr><th>Benchmark</th><th>Result</th><th>Source</th><th>Observed</th></tr></thead><tbody>{rows}</tbody></table></div></section>"
+            "<section class=\"panel\"><h3>Benchmarks</h3><div class=\"table-scroll\" tabindex=\"0\" role=\"region\" aria-label=\"Scrollable data table\">{DASHBOARD_TABLE_OPEN}<thead><tr><th>Benchmark</th><th>Result</th><th>Source</th><th>Observed</th></tr></thead><tbody>{rows}</tbody></table></div></section>"
         )
     }
 }
@@ -748,7 +748,7 @@ pub(in crate::server::dashboard) fn dashboard_render_huggingface(value: Option<&
         String::new()
     } else {
         format!(
-            "<section class=\"panel\"><h3>Hugging Face</h3><div class=\"table-scroll\" tabindex=\"0\" role=\"region\" aria-label=\"Scrollable data table\"><table class=\"data\"><tbody>{}</tbody></table></div></section>",
+            "<section class=\"panel\"><h3>Hugging Face</h3><div class=\"table-scroll\" tabindex=\"0\" role=\"region\" aria-label=\"Scrollable data table\">{DASHBOARD_TABLE_OPEN}<tbody>{}</tbody></table></div></section>",
             rows.join("")
         )
     }
@@ -803,7 +803,7 @@ pub(in crate::server::dashboard) fn dashboard_render_conflicts(value: &Value) ->
         })
         .collect::<String>();
     format!(
-        "<section class=\"panel\"><h3>Conflicts</h3><div class=\"table-scroll\" tabindex=\"0\" role=\"region\" aria-label=\"Scrollable data table\"><table class=\"data\"><thead><tr><th>Field</th><th>Source values</th><th>Selected</th><th>Reason</th></tr></thead><tbody>{rows}</tbody></table></div></section>"
+        "<section class=\"panel\"><h3>Conflicts</h3><div class=\"table-scroll\" tabindex=\"0\" role=\"region\" aria-label=\"Scrollable data table\">{DASHBOARD_TABLE_OPEN}<thead><tr><th>Field</th><th>Source values</th><th>Selected</th><th>Reason</th></tr></thead><tbody>{rows}</tbody></table></div></section>"
     )
 }
 
@@ -827,7 +827,7 @@ pub(in crate::server::dashboard) fn render_model_observations(observations: &[Va
             .unwrap_or_else(|| "—".to_owned()),
     )).collect::<String>();
     format!(
-        "<section class=\"panel\"><h3>Observations</h3><div class=\"table-scroll\" tabindex=\"0\" role=\"region\" aria-label=\"Scrollable data table\"><table class=\"data\"><thead><tr><th>Source</th><th>Source model id</th><th>Provider</th><th>Observed</th><th>Confidence</th></tr></thead><tbody>{rows}</tbody></table></div></section>"
+        "<section class=\"panel\"><h3>Observations</h3><div class=\"table-scroll\" tabindex=\"0\" role=\"region\" aria-label=\"Scrollable data table\">{DASHBOARD_TABLE_OPEN}<thead><tr><th>Source</th><th>Source model id</th><th>Provider</th><th>Observed</th><th>Confidence</th></tr></thead><tbody>{rows}</tbody></table></div></section>"
     )
 }
 

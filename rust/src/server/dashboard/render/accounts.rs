@@ -127,15 +127,24 @@ pub(in crate::server::dashboard) fn render_accounts_page(
                     "no"
                 }
             });
+            // The boolean cells carry a state class rather than the bare word
+            // they display: a green "no" (authentication did not fail) read as
+            // a green failure. The stylesheet's `td.account-*`, `td.auth-failed`
+            // and `td.operator-disabled` rules and these classes have to
+            // agree.
             let auth_class = if authentication_failed == "—" {
                 String::new()
+            } else if authentication_failed == "yes" {
+                " class=\"auth-failed\"".to_owned()
             } else {
-                format!(" class=\"{authentication_failed}\"")
+                String::new()
             };
             let disabled_class = if operator_disabled == "—" {
                 String::new()
+            } else if operator_disabled == "yes" {
+                " class=\"operator-disabled\"".to_owned()
             } else {
-                format!(" class=\"{operator_disabled}\"")
+                String::new()
             };
             let detail_cells = format!(
                 "<td data-priority=\"3\">{}</td><td data-priority=\"3\">{}</td><td data-priority=\"3\">{}</td><td data-priority=\"3\">{}</td><td data-priority=\"3\">{}</td><td data-priority=\"3\">{}</td><td data-priority=\"3\">{}</td><td data-priority=\"3\">—</td><td data-priority=\"3\">—</td><td data-priority=\"3\">—</td><td data-priority=\"3\">{}</td><td data-priority=\"3\"{}>{}</td><td data-priority=\"3\"{}>{}</td><td data-priority=\"3\">{}</td><td data-priority=\"3\">{}</td><td data-priority=\"3\">{}</td><td data-priority=\"3\">{}</td><td data-priority=\"3\">{}</td><td data-priority=\"3\">{}</td>",
@@ -166,7 +175,11 @@ pub(in crate::server::dashboard) fn render_accounts_page(
                 "<tr><td data-priority=\"1\">{}</td><td data-priority=\"1\">{}</td><td data-priority=\"1\" class=\"{}\">{}</td><td data-priority=\"1\">{}</td><td data-priority=\"1\">{}</td><td data-priority=\"2\" class=\"{}\">{}</td><td data-priority=\"2\">{}</td><td data-priority=\"2\">{}</td><td data-priority=\"2\">{}</td><td data-priority=\"2\">{}</td><td data-priority=\"2\">{}</td><td data-priority=\"2\">{}</td><td data-priority=\"2\">{}</td>{}</tr>",
                 html_escape(&row.name),
                 html_escape(&row.provider_id),
-                if row.enabled { "yes" } else { "no" },
+                if row.enabled {
+                    "account-enabled"
+                } else {
+                    "account-disabled"
+                },
                 if row.enabled { "yes" } else { "no" },
                 row.requests,
                 format_microdollars(row.cost_microdollars),
@@ -206,7 +219,7 @@ pub(in crate::server::dashboard) fn render_accounts_page(
         )
     };
     format!(
-        "<h2>Accounts</h2><form method=\"get\" class=\"period-selector account-filters\" data-period-selector aria-label=\"Account filters\"><label for=\"period\">Period: </label><select id=\"period\" name=\"period\" data-auto-submit=\"1\">{}</select><label for=\"show_disabled\">Disabled: </label><select id=\"show_disabled\" name=\"show_disabled\" data-auto-submit=\"1\"><option value=\"0\"{}>Hide disabled accounts</option><option value=\"1\"{}>Show disabled accounts</option></select><input type=\"hidden\" name=\"theme\" value=\"{}\"></form>{pricing_warning}<section class=\"panel\"><div class=\"table-scroll\" tabindex=\"0\" role=\"region\" aria-label=\"Scrollable data table\"><table class=\"data\"><thead><tr><th data-priority=\"1\">Account</th><th data-priority=\"1\">Provider</th><th data-priority=\"1\">Enabled</th><th data-priority=\"1\">Requests</th><th data-priority=\"1\">Cost</th><th data-priority=\"2\">Health</th><th data-priority=\"2\">Errors</th><th data-priority=\"2\">Input tokens</th><th data-priority=\"2\">Output tokens</th><th data-priority=\"2\">Total tokens</th><th data-priority=\"2\">Avg latency</th><th data-priority=\"2\">TPS</th><th data-priority=\"2\">Exactness</th>{}</tr></thead><tbody>{rows}</tbody></table></div></section>",
+        "<h2>Accounts</h2><form method=\"get\" class=\"period-selector account-filters\" data-period-selector aria-label=\"Account filters\"><label for=\"period\">Period: </label><select id=\"period\" name=\"period\" data-auto-submit=\"1\">{}</select><label for=\"show_disabled\">Disabled: </label><select id=\"show_disabled\" name=\"show_disabled\" data-auto-submit=\"1\"><option value=\"0\"{}>Hide disabled accounts</option><option value=\"1\"{}>Show disabled accounts</option></select><input type=\"hidden\" name=\"theme\" value=\"{}\"></form>{pricing_warning}<section class=\"panel\"><div class=\"table-scroll\" tabindex=\"0\" role=\"region\" aria-label=\"Scrollable data table\">{DASHBOARD_TABLE_OPEN}<thead><tr><th data-priority=\"1\">Account</th><th data-priority=\"1\">Provider</th><th data-priority=\"1\">Enabled</th><th data-priority=\"1\">Requests</th><th data-priority=\"1\">Cost</th><th data-priority=\"2\">Health</th><th data-priority=\"2\">Errors</th><th data-priority=\"2\">Input tokens</th><th data-priority=\"2\">Output tokens</th><th data-priority=\"2\">Total tokens</th><th data-priority=\"2\">Avg latency</th><th data-priority=\"2\">TPS</th><th data-priority=\"2\">Exactness</th>{}</tr></thead><tbody>{rows}</tbody></table></div></section>",
         period_options(period),
         if show_disabled {
             ""

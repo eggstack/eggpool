@@ -73,15 +73,53 @@ def test_asset_inventory_records_each_dashboard_asset_correction() -> None:
     assert inventory["count"] == 54
     differences = inventory["oracle_candidate_differences"]
     # Each diverging asset carries its own reason: a shared string would
-    # misdescribe the file it was not written for.
-    assert [difference["path"] for difference in differences] == [
+    # misdescribe the file it was not written for. A file can carry more than
+    # one divergence, and each of them keeps its own reason.
+    assert {difference["path"] for difference in differences} == {
         "static/dashboard.css",
         "static/dashboard.js",
+    }
+    css_reasons = [
+        difference["reason"]
+        for difference in differences
+        if difference["path"] == "static/dashboard.css"
     ]
-    reasons = {difference["path"]: difference["reason"] for difference in differences}
-    assert "table scroll wrapper" in reasons["static/dashboard.css"]
-    assert "timeseries filter form" in reasons["static/dashboard.js"]
-    assert len(set(reasons.values())) == len(reasons)
+    js_reasons = [
+        difference["reason"]
+        for difference in differences
+        if difference["path"] == "static/dashboard.js"
+    ]
+    assert any("table scroll wrapper" in reason for reason in css_reasons)
+    assert any("timeseries filter form" in reason for reason in js_reasons)
+    # No two divergences — within a file or across files — share a reason.
+    assert len({difference["reason"] for difference in differences}) == len(differences)
+    # The reasons a file carries name the correction that was made to it.
+    assert any("status pill" in reason for reason in css_reasons)
+    assert any("skip link" in reason for reason in css_reasons)
+    assert any("stated failure" in reason for reason in js_reasons)
+    assert any("update command copy" in reason for reason in js_reasons)
+
+
+def test_an_unrecorded_divergence_fails_the_inventory(monkeypatch) -> None:
+    # A divergence nobody recorded has to fail the inventory rather than pass
+    # unnoticed.
+    import scripts.dashboard_parity.browser as browser
+
+    corrections = dict(browser.ORACLE_CANDIDATE_CORRECTIONS)
+    corrections.pop("static/dashboard.js")
+    monkeypatch.setattr(browser, "ORACLE_CANDIDATE_CORRECTIONS", corrections)
+    with pytest.raises(AssertionError, match="no recorded correction reason"):
+        browser.asset_inventory()
+
+
+def test_a_duplicate_reason_for_one_file_fails_the_inventory(monkeypatch) -> None:
+    import scripts.dashboard_parity.browser as browser
+
+    corrections = dict(browser.ORACLE_CANDIDATE_CORRECTIONS)
+    corrections["static/dashboard.js"] = corrections["static/dashboard.js"][:1] * 2
+    monkeypatch.setattr(browser, "ORACLE_CANDIDATE_CORRECTIONS", corrections)
+    with pytest.raises(AssertionError, match="same correction reason twice"):
+        browser.asset_inventory()
 
 
 def test_browser_visual_dispositions_distinguish_review_from_automation() -> None:

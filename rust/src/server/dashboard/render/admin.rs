@@ -97,11 +97,11 @@ pub(in crate::server::dashboard) fn render_users_admin(
         })
         .collect::<String>();
     let instance_section = format!(
-        "<section class=\"panel\"><h2>Instance budget ceilings</h2><p>One instance-wide ceiling intersected with every per-user rule: an admitted call must satisfy all applicable instance and user limits. Absent rules mean no additional cap. Members never see other users' usage here. Hard token rules need an explicit caller output cap; hard USD rules need an operator tariff in provider configuration.</p><div class=\"table-scroll\" tabindex=\"0\" role=\"region\" aria-label=\"Instance budget rules\"><table><thead><tr><th>Model</th><th>Window</th><th>Mode</th><th>Max requests</th><th>Max tokens</th><th>Max microdollars</th><th>Max concurrent</th><th>Actions</th></tr></thead><tbody>{instance_rows}</tbody></table></div><details><summary>Set instance ceiling</summary><form method=\"post\" action=\"/admin/budget/instance\"><label>Exact model (blank for all) <input name=\"model_id\" maxlength=\"512\"></label><label>Window <select name=\"window\"><option value=\"day\">UTC day</option><option value=\"month\">UTC month</option></select></label><label>Mode <select name=\"enforcement\"><option value=\"estimated\">Estimated (approximate hold)</option><option value=\"hard\">Hard (prove worst-case bound or deny)</option></select></label><label>Max requests <input type=\"number\" min=\"1\" name=\"max_requests\"></label><label>Max tokens <input type=\"number\" min=\"1\" name=\"max_tokens\"></label><label>Max microdollars <input type=\"number\" min=\"1\" name=\"max_microdollars\"></label><label>Max concurrent <input type=\"number\" min=\"1\" name=\"max_concurrent\"></label><input type=\"hidden\" name=\"csrf\" value=\"{}\"><button type=\"submit\">Save instance ceiling</button></form></details></section>",
+        "<section class=\"panel\"><h2>Instance budget ceilings</h2><p>One instance-wide ceiling intersected with every per-user rule: an admitted call must satisfy all applicable instance and user limits. Absent rules mean no additional cap. Members never see other users' usage here. Hard token rules need an explicit caller output cap; hard USD rules need an operator tariff in provider configuration.</p><div class=\"table-scroll\" tabindex=\"0\" role=\"region\" aria-label=\"Instance budget rules\">{DASHBOARD_TABLE_OPEN}<thead><tr><th>Model</th><th>Window</th><th>Mode</th><th>Max requests</th><th>Max tokens</th><th>Max microdollars</th><th>Max concurrent</th><th>Actions</th></tr></thead><tbody>{instance_rows}</tbody></table></div><details><summary>Set instance ceiling</summary><form method=\"post\" action=\"/admin/budget/instance\"><label>Exact model (blank for all) <input name=\"model_id\" maxlength=\"512\"></label><label>Window <select name=\"window\"><option value=\"day\">UTC day</option><option value=\"month\">UTC month</option></select></label><label>Mode <select name=\"enforcement\"><option value=\"estimated\">Estimated (approximate hold)</option><option value=\"hard\">Hard (prove worst-case bound or deny)</option></select></label><label>Max requests <input type=\"number\" min=\"1\" name=\"max_requests\"></label><label>Max tokens <input type=\"number\" min=\"1\" name=\"max_tokens\"></label><label>Max microdollars <input type=\"number\" min=\"1\" name=\"max_microdollars\"></label><label>Max concurrent <input type=\"number\" min=\"1\" name=\"max_concurrent\"></label><input type=\"hidden\" name=\"csrf\" value=\"{}\"><button type=\"submit\">Save instance ceiling</button></form></details></section>",
         html_escape(csrf)
     );
     format!(
-        "{instance_section}<section class=\"panel\"><h2>Users</h2><p>Create local member accounts and assign policy profiles. The instance default applies only to new members; existing assignments are unchanged. There is no default budget template: user and instance budget rules stay independent. Temporary passwords are shown only to the administrator who enters them; users must change them at first login.</p><form method=\"post\" action=\"/admin/users/create\"><label>Username <input name=\"username\" minlength=\"1\" maxlength=\"64\" required autocomplete=\"off\"></label><label>Temporary password <input type=\"password\" name=\"password\" minlength=\"12\" maxlength=\"1024\" required autocomplete=\"new-password\"></label><label>Initial profile <select name=\"profile_id\">{initial_profile}<option value=\"__none\">No profile (deny all)</option>{options}</select></label><input type=\"hidden\" name=\"csrf\" value=\"{}\"><button type=\"submit\">Add member</button></form></section><section class=\"panel\"><h2>Local accounts</h2><div class=\"table-scroll\" tabindex=\"0\" role=\"region\" aria-label=\"Local users\"><table><thead><tr><th>Username</th><th>Role</th><th>State</th><th>Password</th><th>Actions</th></tr></thead><tbody>{rows}</tbody></table></div></section>",
+        "{instance_section}<section class=\"panel\"><h2>Users</h2><p>Create local member accounts and assign policy profiles. The instance default applies only to new members; existing assignments are unchanged. There is no default budget template: user and instance budget rules stay independent. Temporary passwords are shown only to the administrator who enters them; users must change them at first login.</p><form method=\"post\" action=\"/admin/users/create\"><label>Username <input name=\"username\" minlength=\"1\" maxlength=\"64\" required autocomplete=\"off\"></label><label>Temporary password <input type=\"password\" name=\"password\" minlength=\"12\" maxlength=\"1024\" required autocomplete=\"new-password\"></label><label>Initial profile <select name=\"profile_id\">{initial_profile}<option value=\"__none\">No profile (deny all)</option>{options}</select></label><input type=\"hidden\" name=\"csrf\" value=\"{}\"><button type=\"submit\">Add member</button></form></section><section class=\"panel\"><h2>Local accounts</h2><div class=\"table-scroll\" tabindex=\"0\" role=\"region\" aria-label=\"Local users\">{DASHBOARD_TABLE_OPEN}<thead><tr><th>Username</th><th>Role</th><th>State</th><th>Password</th><th>Actions</th></tr></thead><tbody>{rows}</tbody></table></div></section>",
         html_escape(csrf)
     )
 }
@@ -149,16 +149,19 @@ pub(in crate::server::dashboard) fn render_profiles_admin(
     )
 }
 
-/// Standalone document shell for on-prem pages that are not rendered through
-/// the shared dashboard layout. The usage pages are role-specific reads rather
-/// than dashboard panels, so without a shell they would ship a bare `<section>`
-/// fragment: no stylesheet, no viewport declaration, and tables with no way to
-/// scroll on a narrow screen.
-fn on_prem_page(title: &str, body: &str) -> String {
+/// The row cap the usage queries apply.
+///
+/// The disclosure on the page is derived from this same number, so the page
+/// cannot claim a complete table when the query truncated it.
+pub(in crate::server::dashboard) const USAGE_ROW_CAP: usize = 500;
+
+/// The disclosure a truncated usage table carries.
+pub(in crate::server::dashboard) fn usage_truncation_notice(row_count: usize) -> String {
+    if row_count < USAGE_ROW_CAP {
+        return String::new();
+    }
     format!(
-        "<!doctype html><html lang=\"en\"><meta charset=\"utf-8\"><meta name=\"viewport\" content=\"width=device-width,initial-scale=1\"><title>{}</title><link rel=\"stylesheet\" href=\"/static/dashboard.css\"><main>{}</main></html>",
-        html_escape(title),
-        body
+        "<p class=\"sub\" role=\"status\">Showing the first {USAGE_ROW_CAP} rows. The usage table is truncated: raise the limit in the query to see the rest.</p>"
     )
 }
 
@@ -173,6 +176,7 @@ fn scroll_table(label: &str, table: &str) -> String {
 pub(in crate::server::dashboard) fn render_usage_admin(
     rows: &[(String, String, i64, i64, i64)],
     csrf: &str,
+    theme: &str,
 ) -> String {
     let content = rows.iter().map(|(user, model, requests, tokens, cost)| {
         format!("<tr><td>{}</td><td>{}</td><td>{requests}</td><td>{tokens}</td><td>{cost}</td></tr>", html_escape(user), html_escape(model))
@@ -180,13 +184,16 @@ pub(in crate::server::dashboard) fn render_usage_admin(
     let limits = scroll_table(
         "Usage by user and model",
         &format!(
-            "<table><thead><tr><th>User</th><th>Model</th><th>Requests</th><th>Tokens</th><th>Estimated microdollars</th></tr></thead><tbody>{content}</tbody></table>"
+            "{DASHBOARD_TABLE_OPEN}<thead><tr><th>User</th><th>Model</th><th>Requests</th><th>Tokens</th><th>Estimated microdollars</th></tr></thead><tbody>{content}</tbody></table>"
         ),
     );
-    on_prem_page(
+    let truncation = usage_truncation_notice(rows.len());
+    dashboard_standalone_page(
         "Usage",
+        "usage",
+        theme,
         &format!(
-            "<section class=\"panel\"><h2>Usage</h2><p>Token and microdollar figures are usage estimates; estimated USD is not an invoice or a hard ceiling for unpriced models.</p>{limits}<form method=\"get\" action=\"/admin/audit\"><button type=\"submit\">View admin audit</button></form><input type=\"hidden\" value=\"{}\"></section>",
+            "<section class=\"panel\"><h2>Usage</h2><p>Token and microdollar figures are usage estimates; estimated USD is not an invoice or a hard ceiling for unpriced models.</p>{truncation}{limits}<form method=\"get\" action=\"/admin/audit\"><button type=\"submit\">View admin audit</button></form><input type=\"hidden\" value=\"{}\"></section>",
             html_escape(csrf)
         ),
     )
@@ -196,6 +203,7 @@ pub(in crate::server::dashboard) fn render_my_usage(
     user: &str,
     rules: &[crate::user_budget::UserBudgetRule],
     rows: &[crate::user_budget::UserBudgetUsage],
+    theme: &str,
 ) -> String {
     let rule_rows = rules
         .iter()
@@ -232,19 +240,22 @@ pub(in crate::server::dashboard) fn render_my_usage(
     let limit_table = scroll_table(
         "Configured usage limits",
         &format!(
-            "<table><thead><tr><th>Model</th><th>Window</th><th>Mode</th><th>Max requests</th><th>Max tokens</th><th>Max microdollars</th><th>Max concurrent</th></tr></thead><tbody>{rule_rows}</tbody></table>"
+            "{DASHBOARD_TABLE_OPEN}<thead><tr><th>Model</th><th>Window</th><th>Mode</th><th>Max requests</th><th>Max tokens</th><th>Max microdollars</th><th>Max concurrent</th></tr></thead><tbody>{rule_rows}</tbody></table>"
         ),
     );
     let usage_table = scroll_table(
         "Settled usage",
         &format!(
-            "<table><thead><tr><th>Model</th><th>Window start (UTC)</th><th>Requests</th><th>Tokens</th><th>Estimated microdollars</th></tr></thead><tbody>{usage_rows}</tbody></table>"
+            "{DASHBOARD_TABLE_OPEN}<thead><tr><th>Model</th><th>Window start (UTC)</th><th>Requests</th><th>Tokens</th><th>Estimated microdollars</th></tr></thead><tbody>{usage_rows}</tbody></table>"
         ),
     );
-    on_prem_page(
+    let truncation = usage_truncation_notice(rows.len());
+    dashboard_standalone_page(
         "My usage",
+        "usage",
+        theme,
         &format!(
-            "<section class=\"panel\"><h1>My usage</h1><p>Account: {}</p><p>Daily/monthly periods use UTC. Rules marked <code>hard</code> enforce a provable worst-case bound (token rules need an explicit caller output cap; USD rules need an operator tariff) and deny otherwise; rules marked <code>estimated</code> use approximate holds and are not a guaranteed cap. Active requests hold budget before dispatch and may reduce admission headroom.</p><h2>Configured limits</h2>{limit_table}<h2>Settled usage</h2>{usage_table}<p><a href=\"/my-account\">My account</a></p></section>",
+            "<section class=\"panel\"><h1>My usage</h1><p>Account: {}</p><p>Daily/monthly periods use UTC. Rules marked <code>hard</code> enforce a provable worst-case bound (token rules need an explicit caller output cap; USD rules need an operator tariff) and deny otherwise; rules marked <code>estimated</code> use approximate holds and are not a guaranteed cap. Active requests hold budget before dispatch and may reduce admission headroom.</p><h2>Configured limits</h2>{limit_table}<h2>Settled usage</h2>{truncation}{usage_table}<p><a href=\"/my-account\">My account</a></p></section>",
             html_escape(user)
         ),
     )

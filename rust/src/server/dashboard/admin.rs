@@ -1,6 +1,7 @@
 use super::*;
 use axum::{Extension, Form, extract::State, http::HeaderMap, response::Redirect};
 use serde::Deserialize;
+use tokio_rusqlite::rusqlite::params;
 
 #[derive(Deserialize)]
 pub(in crate::server) struct CreateUserForm {
@@ -177,9 +178,19 @@ fn mutation_error(error: impl std::fmt::Display, fallback: &'static str) -> Resp
     (StatusCode::BAD_REQUEST, fallback).into_response()
 }
 
-fn one_time_token_page(token: &str, return_path: &str, owner_message: &str) -> Response {
+fn one_time_token_page(
+    token: &str,
+    return_path: &str,
+    owner_message: &str,
+    theme: &str,
+) -> Response {
+    // The one-shot token page keeps its bare shell — no navigation chrome, no
+    // dashboard script — but it still resolves the theme, so the credential it
+    // prints is not the only thing on the page rendered in an unstyled theme.
+    let theme = selected_theme(theme);
     let mut response = html_response(format!(
-        "<!doctype html><html lang=\"en\"><meta charset=\"utf-8\"><meta name=\"viewport\" content=\"width=device-width,initial-scale=1\"><title>Save personal token</title><link rel=\"stylesheet\" href=\"/static/dashboard.css\"><main><h1>Save this credential now</h1><p>It will not be shown again. {owner_message}</p><p>Store it in the environment that launches the client as EGGPOOL_API_KEY. The return screen will never contain the credential.</p><pre>{}</pre><p><a href=\"{}\">Return</a></p></main></html>",
+        "<!doctype html><html lang=\"en\"><head><meta charset=\"utf-8\"><meta name=\"viewport\" content=\"width=device-width,initial-scale=1\"><title>Save personal token</title><link rel=\"stylesheet\" href=\"/static/dashboard.css\"><link rel=\"stylesheet\" href=\"/static/theme.css?theme={}\"></head><body><main id=\"dashboard-content\"><h1>Save this credential now</h1><p>It will not be shown again. {owner_message}</p><p>Store it in the environment that launches the client as EGGPOOL_API_KEY. The return screen will never contain the credential.</p><pre>{}</pre><p><a href=\"{}\">Return</a></p></main></body></html>",
+        query_component(theme),
         html_escape(token),
         html_escape(return_path)
     ));
@@ -232,6 +243,7 @@ pub(in crate::server) async fn users_page(
         None,
         state.server.dashboard_refresh_interval_s,
         body,
+        "",
     )
 }
 
@@ -266,6 +278,7 @@ pub(in crate::server) async fn profiles_page(
         None,
         state.server.dashboard_refresh_interval_s,
         body,
+        "",
     )
 }
 
@@ -273,7 +286,14 @@ pub(in crate::server) async fn usage_page(
     State(state): State<AppState>,
     Extension(session): Extension<crate::web_session::Principal>,
     Extension(principal): Extension<crate::identity::AuthenticatedPrincipal>,
+    Query(query): Query<ThemeQuery>,
 ) -> Response {
+    let theme = selected_theme(
+        query
+            .theme
+            .as_deref()
+            .unwrap_or(&state.server.dashboard_theme),
+    );
     let Some(user_id) = principal.user_id.as_deref() else {
         return (StatusCode::FORBIDDEN, "User account required.").into_response();
     };
@@ -286,13 +306,13 @@ pub(in crate::server) async fn usage_page(
             Err(_) => return degraded("usage unavailable"),
         };
         let rows = match crate::user_budget::UserBudgetService::new(state.database.clone())
-            .usage(user_id, "0000-01-01", 500)
+            .usage(user_id, "0000-01-01", USAGE_ROW_CAP as u16)
             .await
         {
             Ok(rows) => rows,
             Err(_) => return degraded("usage unavailable"),
         };
-        return html_response(render_my_usage(&session.username, &rules, &rows));
+        return html_response(render_my_usage(&session.username, &rules, &rows, theme));
     }
     let rows = match state
         .database
@@ -301,11 +321,17 @@ pub(in crate::server) async fn usage_page(
                 "SELECT u.username, COALESCE(b.model_id, '(all models)'), \
                         SUM(b.request_count), SUM(b.token_count), SUM(b.cost_microdollars) \
                  FROM user_budget_usage b JOIN users u ON u.id = b.user_id \
-                 GROUP BY u.id, b.model_id ORDER BY u.username COLLATE NOCASE, b.model_id LIMIT 500",
+                 GROUP BY u.id, b.model_id ORDER BY u.username COLLATE NOCASE, b.model_id LIMIT ?1",
             )?;
             statement
-                .query_map([], |row| {
-                    Ok((row.get(0)?, row.get(1)?, row.get(2)?, row.get(3)?, row.get(4)?))
+                .query_map(params![USAGE_ROW_CAP as i64], |row| {
+                    Ok((
+                        row.get(0)?,
+                        row.get(1)?,
+                        row.get(2)?,
+                        row.get(3)?,
+                        row.get(4)?,
+                    ))
                 })?
                 .collect::<Result<Vec<(String, String, i64, i64, i64)>, _>>()
         })
@@ -314,10 +340,13 @@ pub(in crate::server) async fn usage_page(
         Ok(rows) => rows,
         Err(_) => return degraded("usage unavailable"),
     };
-    html_response(render_usage_admin(&rows, ""))
+    html_response(render_usage_admin(&rows, "", theme))
 }
 
-pub(in crate::server) async fn audit_page(State(state): State<AppState>) -> Response {
+pub(in crate::server) async fn audit_page(
+    State(state): State<AppState>,
+    Query(query): Query<ThemeQuery>,
+) -> Response {
     let entries = match crate::identity::admin_audit(&state.database, 200).await {
         Ok(entries) => entries,
         Err(_) => return degraded("audit history unavailable"),
@@ -335,8 +364,19 @@ pub(in crate::server) async fn audit_page(State(state): State<AppState>) -> Resp
             )
         })
         .collect::<String>();
-    html_response(format!(
-        "<!doctype html><html lang=\"en\"><meta charset=\"utf-8\"><meta name=\"viewport\" content=\"width=device-width,initial-scale=1\"><title>Admin audit</title><link rel=\"stylesheet\" href=\"/static/dashboard.css\"><main><h1>Administrative audit</h1><div class=\"table-scroll\" tabindex=\"0\" role=\"region\" aria-label=\"Administrative audit\"><table><thead><tr><th>UTC time</th><th>Actor ID</th><th>Action</th><th>Target type</th><th>Target ID</th></tr></thead><tbody>{rows}</tbody></table></div><p><a href=\"/users\">Users</a></p></main></html>"
+    let theme = selected_theme(
+        query
+            .theme
+            .as_deref()
+            .unwrap_or(&state.server.dashboard_theme),
+    );
+    html_response(dashboard_standalone_page(
+        "Admin audit",
+        "usage",
+        theme,
+        &format!(
+            "<section class=\"panel\"><h1>Administrative audit</h1><div class=\"table-scroll\" tabindex=\"0\" role=\"region\" aria-label=\"Administrative audit\">{DASHBOARD_TABLE_OPEN}<thead><tr><th>UTC time</th><th>Actor ID</th><th>Action</th><th>Target type</th><th>Target ID</th></tr></thead><tbody>{rows}</tbody></table></div><p><a href=\"/users\">Users</a></p></section>"
+        ),
     ))
 }
 
@@ -344,6 +384,7 @@ pub(in crate::server) async fn my_account_page(
     State(state): State<AppState>,
     Extension(session): Extension<crate::web_session::Principal>,
     headers: HeaderMap,
+    Query(query): Query<ThemeQuery>,
 ) -> Response {
     let csrf = crate::web_session::csrf_cookie_value(&headers)
         .filter(|token| crate::web_session::verify_csrf(&session, token))
@@ -361,17 +402,29 @@ pub(in crate::server) async fn my_account_page(
     let token_flash = crate::web_session::csrf_cookie_value(&headers)
         .map(|_| "<p>New credentials are displayed only once when created. Store them in your client environment as EGGPOOL_API_KEY.</p>")
         .unwrap_or_default();
-    html_response(format!(
-        "<!doctype html><html lang=\"en\"><meta charset=\"utf-8\"><meta name=\"viewport\" content=\"width=device-width,initial-scale=1\"><title>My account</title><link rel=\"stylesheet\" href=\"/static/dashboard.css\"><main><h1>My account</h1><p>Signed in as {}</p><p><a href=\"/usage\">My usage</a> · <a href=\"/my-account/models\">My accessible models</a> · <a href=\"/account\">Change password</a></p><section><h2>Personal client credentials</h2>{token_flash}<form method=\"post\" action=\"/account/tokens\"><label>Credential label <input name=\"label\" minlength=\"1\" maxlength=\"80\" required></label><input type=\"hidden\" name=\"csrf\" value=\"{}\"><button type=\"submit\">Create credential</button></form><div class=\"table-scroll\" tabindex=\"0\" role=\"region\" aria-label=\"Personal client credentials\"><table><thead><tr><th>Label</th><th>Created</th><th>Last used</th><th>Action</th></tr></thead><tbody>{rows}</tbody></table></div></section><form method=\"post\" action=\"/logout\"><input type=\"hidden\" name=\"csrf\" value=\"{}\"><button type=\"submit\">Log out</button></form></main></html>",
-        html_escape(&session.username),
-        html_escape(&csrf),
-        html_escape(&csrf)
+    let theme = selected_theme(
+        query
+            .theme
+            .as_deref()
+            .unwrap_or(&state.server.dashboard_theme),
+    );
+    html_response(dashboard_standalone_page(
+        "My account",
+        "my-account",
+        theme,
+        &format!(
+            "<section class=\"panel\"><h1>My account</h1><p>Signed in as {}</p><p><a href=\"/usage\">My usage</a> · <a href=\"/my-account/models\">My accessible models</a> · <a href=\"/account\">Change password</a></p><section><h2>Personal client credentials</h2>{token_flash}<form method=\"post\" action=\"/account/tokens\"><label>Credential label <input name=\"label\" minlength=\"1\" maxlength=\"80\" required></label><input type=\"hidden\" name=\"csrf\" value=\"{}\"><button type=\"submit\">Create credential</button></form><div class=\"table-scroll\" tabindex=\"0\" role=\"region\" aria-label=\"Personal client credentials\">{DASHBOARD_TABLE_OPEN}<thead><tr><th>Label</th><th>Created</th><th>Last used</th><th>Action</th></tr></thead><tbody>{rows}</tbody></table></div></section><form method=\"post\" action=\"/logout\"><input type=\"hidden\" name=\"csrf\" value=\"{}\"><button type=\"submit\">Log out</button></form></section>",
+            html_escape(&session.username),
+            html_escape(&csrf),
+            html_escape(&csrf)
+        ),
     ))
 }
 
 pub(in crate::server) async fn my_models_page(
     State(state): State<AppState>,
     Extension(session): Extension<crate::web_session::Principal>,
+    Query(query): Query<ThemeQuery>,
 ) -> Response {
     let lease = match state.runtime.acquire().await {
         Ok(lease) => lease,
@@ -401,8 +454,19 @@ pub(in crate::server) async fn my_models_page(
         .into_iter()
         .map(|model| format!("<li><code>{}</code></li>", html_escape(&model)))
         .collect::<String>();
-    html_response(format!(
-        "<!doctype html><html lang=\"en\"><meta charset=\"utf-8\"><meta name=\"viewport\" content=\"width=device-width,initial-scale=1\"><title>My models</title><link rel=\"stylesheet\" href=\"/static/dashboard.css\"><main><h1>My accessible models</h1><p>{explanation}</p><ul>{models}</ul><p><a href=\"/my-account\">My account</a></p></main></html>"
+    let theme = selected_theme(
+        query
+            .theme
+            .as_deref()
+            .unwrap_or(&state.server.dashboard_theme),
+    );
+    html_response(dashboard_standalone_page(
+        "My models",
+        "my-account",
+        theme,
+        &format!(
+            "<section class=\"panel\"><h1>My accessible models</h1><p>{explanation}</p><ul>{models}</ul><p><a href=\"/my-account\">My account</a></p></section>"
+        ),
     ))
 }
 
@@ -937,6 +1001,7 @@ pub(in crate::server) async fn create_personal_token(
             &credential.token,
             "/my-account",
             "This is your personal credential.",
+            &state.server.dashboard_theme,
         ),
         Err(error) => mutation_error(error, "Could not create credential."),
     }
@@ -988,6 +1053,7 @@ pub(in crate::server) async fn issue_admin_token(
             &credential.token,
             "/users",
             "The administrator issued this for the selected user.",
+            &state.server.dashboard_theme,
         ),
         Err(error) => mutation_error(error, "Could not create credential."),
     }

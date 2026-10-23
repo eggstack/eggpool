@@ -167,6 +167,51 @@ nav.topnav a.active {
   border-color: var(--nav-active-text);
 }
 
+/* Focus indicators.
+
+   The navigation links, the refresh control and the two selectors are the
+   controls an operator reaches for first, and none of them carried a themed
+   focus ring: they fell back to the browser default, which varies between
+   browsers and can be invisible against the dashboard's own chrome. These
+   rules use the same treatment the stylesheet already applies to the table
+   links — an outline in the theme's accent colour — so the indicator is the
+   same everywhere and survives both a light and a dark theme. */
+nav.topnav a:focus-visible,
+.topnav-refresh:focus-visible,
+.theme-selector select:focus-visible,
+.period-selector select:focus-visible,
+.filter-form select:focus-visible,
+.filter-form input:focus-visible,
+.filter-form button:focus-visible {
+  outline: 2px solid var(--accent-color);
+  outline-offset: 2px;
+  border-radius: 3px;
+}
+
+/* The skip link is the first focusable element on the page. It stays out of
+   the way until it takes focus, then pins itself to the top-left corner so a
+   keyboard operator can jump past the sixteen-entry navigation. */
+.skip-link {
+  position: absolute;
+  left: -9999px;
+  top: 0;
+  z-index: 10;
+  padding: 0.5rem 0.9rem;
+  background: var(--card-bg);
+  color: var(--page-text);
+  border: 2px solid var(--accent-color);
+  border-radius: 0 0 3px 0;
+  text-decoration: none;
+  font-weight: 600;
+}
+
+.skip-link:focus-visible,
+.skip-link:focus {
+  left: 0;
+  outline: 2px solid var(--accent-color);
+  outline-offset: 2px;
+}
+
 main {
   max-width: 1440px;
   margin: 0 auto;
@@ -190,81 +235,11 @@ footer .period-label {
   color: var(--page-text);
 }
 
-/* Footer update indicator — only rendered when a newer eggpool
-   release is available.  Hidden entirely (no markup) when there is
-   nothing to advertise, so the dashboard never shows a stale or
-   "no update" pill. */
-footer .footer-update-indicator {
-  display: flex;
-  justify-content: center;
-  align-items: center;
-  flex-wrap: wrap;
-  width: 100%;
-  margin-top: 0.4rem;
-}
-
-footer .update-indicator {
-  display: inline-flex;
-  flex-wrap: wrap;
-  align-items: center;
-  gap: 0.35rem 0.5rem;
-  margin-left: 0.5rem;
-  padding: 0.15rem 0.55rem;
-  border: 1px solid color-mix(in srgb, var(--nav-active-text) 60%, transparent);
-  border-radius: 3px;
-  background: color-mix(
-    in srgb,
-    var(--nav-active-bg) 70%,
-    var(--card-bg) 30%
-  );
-  color: var(--page-text);
-  font-size: 0.85rem;
-}
-
-footer .update-indicator .update-versions {
-  font-family: ui-monospace, SFMono-Regular, monospace;
-  font-size: 0.8rem;
-  color: var(--text-muted);
-}
-
-footer .update-indicator .update-command {
-  font-family: ui-monospace, SFMono-Regular, monospace;
-  font-size: 0.8rem;
-  padding: 0.05rem 0.4rem;
-  border-radius: 3px;
-  border: 1px solid var(--topbar-border);
-  background: var(--page-bg);
-  color: var(--page-text);
-  cursor: pointer;
-  user-select: all;
-  -webkit-user-select: all;
-}
-
-footer .update-indicator .update-command:hover,
-footer .update-indicator .update-command:focus-visible {
-  border-color: var(--nav-active-text);
-  outline: none;
-}
-
-footer .update-indicator .update-command:focus-visible {
-  box-shadow: 0 0 0 2px color-mix(
-    in srgb,
-    var(--nav-active-text) 40%,
-    transparent
-  );
-}
-
-footer .update-indicator .update-copied {
-  font-size: 0.75rem;
-  color: color-mix(in srgb, var(--nav-active-text) 80%, var(--page-text) 20%);
-  min-width: 0;
-  opacity: 0;
-  transition: opacity 120ms ease;
-}
-
-footer .update-indicator .update-copied.is-visible {
-  opacity: 1;
-}
+/* The footer update indicator — the "a newer eggpool release is available"
+   chip with its version list, its copyable upgrade command and its "copied!"
+   flash — has no producer in the current Rust renderers. The rules and the
+   `initUpdateCommandCopy` handler that drove them were retired together; the
+   footer now carries only the period and the refresh timestamp. */
 
 h2 {
   margin: 0 0 1rem;
@@ -450,9 +425,8 @@ h3 {
   margin: 0;
 }
 
-.panel-header form.account-breakdown-filter {
-  margin: 0;
-}
+/* The `account-breakdown-filter` form used to live in a panel header. The
+   breakdown is rendered as its own panel now, so the rule had no producer. */
 
 .panel-header-chip {
   display: inline-block;
@@ -592,8 +566,30 @@ table.data td a.model-link:focus-visible {
   text-underline-offset: 3px;
 }
 
-td.yes { color: var(--color-success); font-weight: 600; }
-td.no { color: var(--color-error); font-weight: 600; }
+/* The account table's boolean cells carry a state class rather than the bare
+   word they display: "yes" and "no" said nothing about *which* state they
+   answered, so a green "no" (authentication did not fail) read as a green
+   failure. The renderers emit these classes; the rule and the renderer have to
+   agree. */
+td.account-enabled {
+  color: var(--color-success);
+  font-weight: 600;
+}
+
+td.account-disabled {
+  color: var(--color-error);
+  font-weight: 600;
+}
+
+td.auth-failed {
+  color: var(--color-error);
+  font-weight: 600;
+}
+
+td.operator-disabled {
+  color: var(--color-warning);
+  font-weight: 600;
+}
 
 .period-selector,
 .filter-form {
@@ -626,12 +622,9 @@ td.no { color: var(--color-error); font-weight: 600; }
   max-width: 100%;
 }
 
-.chart-container-compact {
-  position: relative;
-  height: 280px;
-  width: 100%;
-  max-width: 100%;
-}
+/* `.chart-container-compact` had no producer: the compact chart variant was
+   replaced by the shared `.chart-container` with a per-chart height, and the
+   JavaScript that still asked for it was retired with it. */
 
 /* Used by _render_chart_canvas / _render_timeseries_chart as a
    width-constrained wrapper around a Chart.js canvas. Inline-styled
@@ -838,6 +831,31 @@ label.trace-limit {
 .empty {
   color: var(--text-muted);
   font-style: italic;
+}
+
+/* `.empty-state` is the runtime and cache pages' empty placeholder. It had
+   no rule of its own, so it inherited the table's primary text and read as a
+   value rather than as an absence of one. */
+.empty-state {
+  color: var(--text-muted);
+  font-style: italic;
+  padding: 0.75rem 0;
+}
+
+/* `.num` marks a numeric cell. Tabular figures keep the digits aligned down a
+   column instead of jittering with the value's width. */
+.num {
+  font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
+  font-variant-numeric: tabular-nums;
+  text-align: right;
+}
+
+/* `.compact` marks a dense table. The renderers emit it next to the `data`
+   class, so the table keeps the shared chrome and only drops its row
+   padding. */
+table.data.compact th,
+table.data.compact td {
+  padding: 0.3rem 0.45rem;
 }
 
 .event-tag {
@@ -1057,7 +1075,6 @@ label.trace-limit {
   }
 
   .chart-container { height: 280px; }
-  .chart-container-compact { height: 220px; }
   .timeseries-controls label { flex: 1 1 calc(50% - 0.5rem); }
 
   main {
@@ -1669,8 +1686,10 @@ nav.topnav [data-tooltip]::before {
   }
 
   /* The chart spinner is an infinite rotation and the burger morphs its
-     bars into an X; both are decorative and have a static equivalent. */
-  .chart-spin {
+     bars into an X; both are decorative and have a static equivalent. The
+     rule named `.chart-spin`, which is the animation's *name* rather than a
+     class, so it never matched the spinner it was meant to stop. */
+  .chart-loading-spinner {
     animation: none;
   }
 
@@ -1710,7 +1729,20 @@ nav.topnav [data-tooltip]::before {
   border-color: var(--color-warning);
 }
 
-/* Model-info status pills */
+/* Model-info status pills.
+
+   The pill foreground is the theme's own semantic token, moved to a lightness
+   that clears WCAG AA (4.5:1) against the card background. The colours are
+   published by the theme as `--pill-*`; they are derived from the theme's
+   `--color-success` / `--color-warning` / `--color-error` / `--color-info`
+   tokens and from `--text-muted`, so a theme change cannot leave a pill
+   unreadable. `theme.rs` carries the guard that measures the values the
+   server actually serves.
+
+   The pill text sits on the card background rather than on a tint of its own
+   colour, so the contrast the guard measures is the contrast an operator
+   reads. The ring repeats the colour, so the state stays separable when the
+   text is quoted out of context. */
 .pill {
   display: inline-block;
   padding: 1px 6px;
@@ -1725,47 +1757,56 @@ nav.topnav [data-tooltip]::before {
   line-height: 1.4;
   white-space: nowrap;
   vertical-align: middle;
+  background: var(--card-bg);
 }
 
 .pill-fresh {
-  background: color-mix(in srgb, #22c55e 20%, transparent);
-  color: #22c55e;
+  color: var(--pill-success);
+  box-shadow: inset 0 0 0 1px
+    color-mix(in srgb, var(--pill-success) 55%, transparent);
 }
 
 .pill-partial {
-  background: color-mix(in srgb, #eab308 20%, transparent);
-  color: #eab308;
+  color: var(--pill-warning);
+  box-shadow: inset 0 0 0 1px
+    color-mix(in srgb, var(--pill-warning) 55%, transparent);
 }
 
 .pill-sparse {
-  background: color-mix(in srgb, #f97316 20%, transparent);
-  color: #f97316;
+  color: var(--pill-sparse);
+  box-shadow: inset 0 0 0 1px
+    color-mix(in srgb, var(--pill-sparse) 55%, transparent);
 }
 
 .pill-stale {
-  background: color-mix(in srgb, #ef4444 20%, transparent);
-  color: #ef4444;
+  color: var(--pill-error);
+  box-shadow: inset 0 0 0 1px
+    color-mix(in srgb, var(--pill-error) 55%, transparent);
 }
 
 .pill-conflict {
-  background: color-mix(in srgb, #ef4444 25%, transparent);
-  color: #ef4444;
+  color: var(--pill-error);
+  box-shadow: inset 0 0 0 2px
+    color-mix(in srgb, var(--pill-error) 75%, transparent);
   font-weight: bold;
 }
 
 .pill-unmatched {
-  background: color-mix(in srgb, var(--text-muted) 20%, transparent);
-  color: var(--text-muted);
+  color: var(--pill-neutral);
+  box-shadow: inset 0 0 0 1px
+    color-mix(in srgb, var(--pill-neutral) 55%, transparent);
 }
 
 .pill-source-unavailable {
-  background: color-mix(in srgb, #a855f7 20%, transparent);
-  color: #a855f7;
+  color: var(--pill-info);
+  box-shadow: inset 0 0 0 1px
+    color-mix(in srgb, var(--pill-info) 55%, transparent);
 }
 
 .pill-unknown {
-  background: color-mix(in srgb, var(--text-muted) 15%, transparent);
-  color: var(--text-muted);
+  color: var(--pill-neutral);
+  box-shadow: inset 0 0 0 1px
+    color-mix(in srgb, var(--pill-neutral) 40%, transparent);
 }
 
 /* A "no data" placeholder inside a table cell. `muted` is emitted by the
@@ -1795,4 +1836,80 @@ nav.topnav [data-tooltip]::before {
    rather than a value. The Benchmarks column renders the identical em-dash. */
 .muted {
   color: var(--page-text);
+}
+
+/* Print.
+
+   The dashboard is read on screen, but an operator does print the usage and
+   account tables. The page chrome — the sticky topbar, the decorative
+   watermark and the themed surfaces — costs ink and pushes the tables onto a
+   second sheet, so the print rules drop the chrome and force the content to
+   black on white. The theme's own variables stay in the cascade, so a rule
+   that hardcodes a colour is the only thing that can fight this. */
+@media print {
+  html,
+  body {
+    background: #ffffff !important;
+    color: #000000 !important;
+  }
+
+  /* The decorative watermark and the overlay behind it. */
+  .egg-background,
+  body::before,
+  body::after {
+    display: none !important;
+  }
+
+  /* The sticky topbar and the footer chrome: the navigation is a screen
+     affordance, and a sticky element repeats on every printed sheet. */
+  header.topbar,
+  footer,
+  .skip-link,
+  .topnav-burger {
+    display: none !important;
+  }
+
+  main {
+    max-width: none !important;
+    padding: 0 !important;
+  }
+
+  .panel {
+    border: 1px solid #000000 !important;
+    background: #ffffff !important;
+    box-shadow: none !important;
+    break-inside: avoid;
+  }
+
+  table.data th,
+  table.data td {
+    color: #000000 !important;
+    background: #ffffff !important;
+    border-bottom: 1px solid #000000 !important;
+  }
+
+  table.data th {
+    background: #ffffff !important;
+  }
+
+  /* A pill is a coloured chip on screen; on paper it is a label, so it keeps
+     its text and loses its fill and its ring. */
+  .pill {
+    background: #ffffff !important;
+    box-shadow: none !important;
+    color: #000000 !important;
+  }
+
+  /* The chart surfaces cannot print; the data they plot is in the tables
+     beside them. */
+  .chart-container,
+  .chart-wrap,
+  .chart-loading-shell,
+  canvas {
+    display: none !important;
+  }
+
+  a {
+    color: #000000 !important;
+  }
 }

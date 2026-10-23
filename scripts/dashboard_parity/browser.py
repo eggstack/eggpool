@@ -5,18 +5,34 @@ from ._shared import *  # noqa: F403
 from .process import *  # noqa: F403
 
 # Recorded reason for every static asset that intentionally diverges from the
-# frozen Python oracle. One entry per file: a single shared string would
+# frozen Python oracle. One entry per divergence: a single shared string would
 # misdescribe every other divergence, and a new divergence must fail loudly
 # instead of being labelled with an unrelated correction.
+#
+# A file can carry more than one divergence, so each path maps to the tuple of
+# reasons for its divergences. The reasons of one file are distinct from one
+# another and from every other file's, so the record stays honest as the asset
+# changes.
 ORACLE_CANDIDATE_CORRECTIONS = {
     "static/dashboard.css": (
         "bound mobile panel intrinsic width within its table scroll wrapper, and "
         "let the sixteen-entry top navigation reflow inside the topbar instead of "
-        "forcing one nowrap row that overflowed a 1280px viewport"
+        "forcing one nowrap row that overflowed a 1280px viewport",
+        "derive the status pill colours from the theme's own semantic tokens so "
+        "every pill clears 4.5:1 against its card background in every bundled "
+        "theme, and give the pill text the card background as its surface",
+        "retire the update indicator, account breakdown filter and compact chart "
+        "container rules that no renderer produces, and add the skip link, focus "
+        "indicators and print rules",
     ),
     "static/dashboard.js": (
         "submit the timeseries filter form natively so the server renders the "
-        "chart, tables, and URL from one query"
+        "chart, tables, and URL from one query",
+        "end the chart loading path in a rendered chart or a stated failure "
+        "instead of an indefinite preparing state, without fetching the payload "
+        "a second time",
+        "retire the update command copy handler and the script exports that no "
+        "caller uses, and name the charts the script creates",
     ),
 }
 
@@ -44,20 +60,23 @@ def asset_inventory() -> dict[str, Any]:
             continue
         if oracle_assets.get(relative.removeprefix("static/")) == digest:
             continue
-        reason = ORACLE_CANDIDATE_CORRECTIONS.get(relative)
-        if reason is None:
+        reasons = ORACLE_CANDIDATE_CORRECTIONS.get(relative)
+        if reasons is None:
             raise AssertionError(
                 f"{relative} diverges from the frozen oracle with no recorded "
                 "correction reason"
             )
-        corrections.append(
-            {
-                "path": relative,
-                "oracle_sha256": oracle_assets[relative.removeprefix("static/")],
-                "candidate_sha256": digest,
-                "reason": reason,
-            }
-        )
+        if len(set(reasons)) != len(reasons):
+            raise AssertionError(f"{relative} records the same correction reason twice")
+        for reason in reasons:
+            corrections.append(
+                {
+                    "path": relative,
+                    "oracle_sha256": oracle_assets[relative.removeprefix("static/")],
+                    "candidate_sha256": digest,
+                    "reason": reason,
+                }
+            )
     stale = sorted(
         set(ORACLE_CANDIDATE_CORRECTIONS) - {row["path"] for row in corrections}
     )

@@ -132,6 +132,7 @@ pub(in crate::server) async fn model_detail_page(
         Some(theme.to_owned()),
         state.server.dashboard_refresh_interval_s,
         body,
+        "",
     )
 }
 
@@ -297,6 +298,70 @@ pub(in crate::server) async fn sync_accounts(
         .await
         .map(|_| ())
         .map_err(ServerError::Database)
+}
+
+/// The query parameters a dashboard page carries besides `period` and `theme`.
+///
+/// The theme picker is a GET form with no action, so submitting it sends only
+/// the form's own fields. Without these the operator's filters — the account
+/// scope, the model filters, the timeseries controls — were silently dropped
+/// the moment they switched the theme.
+fn dashboard_filter_query(show_disabled: bool, filters: &ModelFilters) -> String {
+    let mut owned: Vec<(String, String)> = Vec::new();
+    let mut push = |name: &str, value: &str| {
+        owned.push((name.to_owned(), value.to_owned()));
+    };
+    if show_disabled {
+        push("show_disabled", "1");
+    }
+    if let Some(value) = filters.account.as_deref() {
+        push("account", value);
+    }
+    if let Some(value) = filters.used.as_deref() {
+        push("used", value);
+    }
+    if let Some(value) = filters.info_status.as_deref() {
+        push("info_status", value);
+    }
+    if let Some(value) = filters.availability.as_deref() {
+        push("availability", value);
+    }
+    if let Some(value) = filters.event_type.as_deref() {
+        push("type", value);
+    }
+    if let Some(value) = filters.trace_limit {
+        push("limit", &value.to_string());
+    }
+    if let Some(timeseries) = filters.timeseries.as_ref() {
+        if let Some(value) = timeseries.bucket.as_deref() {
+            push("bucket", value);
+        }
+        if let Some(value) = timeseries.group_by.as_deref() {
+            push("group_by", value);
+        }
+        if let Some(value) = timeseries.metric.as_deref() {
+            push("metric", value);
+        }
+        if let Some(value) = timeseries.limit {
+            push("limit", &value.to_string());
+        }
+        if let Some(value) = timeseries.account.as_deref() {
+            push("account", value);
+        }
+        if let Some(value) = timeseries.model.as_deref() {
+            push("model", value);
+        }
+    }
+    if let Some(bandwidth) = filters.bandwidth.as_ref()
+        && let Some(value) = bandwidth.account.as_deref()
+    {
+        push("account", value);
+    }
+    let pairs = owned
+        .iter()
+        .map(|(name, value)| (name.as_str(), value.as_str()))
+        .collect::<Vec<_>>();
+    dashboard_query_inputs(&pairs)
 }
 
 pub(super) async fn dashboard_data_page(
@@ -531,6 +596,7 @@ pub(super) async fn dashboard_data_page_with_options(
         Some(theme.to_owned()),
         state.server.dashboard_refresh_interval_s,
         body,
+        &dashboard_filter_query(show_disabled, &model_filters),
     )
 }
 

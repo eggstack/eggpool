@@ -128,9 +128,12 @@ use api::{
 };
 use format::*;
 use render::{
-    dashboard_page_with_body, render_dashboard_page_body, render_model_detail, render_my_usage,
+    DASHBOARD_TABLE_OPEN, USAGE_ROW_CAP, dashboard_page_with_body, dashboard_query_inputs,
+    dashboard_standalone_page, render_dashboard_page_body, render_model_detail, render_my_usage,
     render_overview, render_profiles_admin, render_usage_admin, render_users_admin, summary_json,
 };
+#[cfg(test)]
+use render::{DASHBOARD_TABLE_OPEN_COMPACT, usage_truncation_notice};
 #[cfg(test)]
 use render::{
     format_runtime_age, host_platform_label, load_average_summary, render_bandwidth_heatmap,

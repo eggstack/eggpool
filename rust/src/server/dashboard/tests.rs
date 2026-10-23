@@ -83,7 +83,7 @@ fn theme_variables_match_dashboard_translation_contract() {
     ] {
         assert!(css.contains(declaration), "missing {declaration}");
     }
-    assert_eq!(css.matches("--").count(), 46);
+    assert_eq!(css.matches("--").count(), 52);
 }
 
 #[test]
@@ -129,6 +129,7 @@ fn shell_navigation_only_ever_links_real_periods() {
             15,
             "<p>body</p>".to_owned(),
             false,
+            "",
         );
         // No non-canonical period token may appear in any generated link.
         for bad in ["period=runtime", "period=recent"] {
@@ -904,5 +905,487 @@ fn dashboard_asset_manifest_is_complete_and_stable() {
             .map(|byte| format!("{byte:02x}"))
             .collect::<String>();
         assert_eq!(actual, asset.sha256, "manifest drift: {}", asset.path);
+    }
+}
+
+/// The dashboard stylesheet, read as text. The guards below are about the
+/// stylesheet and the script as shipped, so they read the same bytes the
+/// server serves.
+const DASHBOARD_CSS: &str = include_str!("../../../assets/dashboard/static/dashboard.css");
+const DASHBOARD_JS: &str = include_str!("../../../assets/dashboard/static/dashboard.js");
+
+/// The sources that emit dashboard markup. `admin.rs` is here but not in
+/// `RENDER_MODULE_SOURCES`: it is the page module, so it legitimately holds
+/// the database handles the render modules must not touch.
+const DASHBOARD_MARKUP_SOURCES: [&str; 11] = [
+    include_str!("admin.rs"),
+    include_str!("render/mod.rs"),
+    include_str!("render/layout.rs"),
+    include_str!("render/overview.rs"),
+    include_str!("render/accounts.rs"),
+    include_str!("render/models.rs"),
+    include_str!("render/telemetry.rs"),
+    include_str!("render/diagnostics.rs"),
+    include_str!("render/runtime.rs"),
+    include_str!("render/cache.rs"),
+    include_str!("render/admin.rs"),
+];
+
+/// Selectors that were retired because nothing in the renderers or the script
+/// produces them any more. Reintroducing one is a regression: it is a rule the
+/// browser applies to markup that never arrives.
+const RETIRED_CSS_SELECTORS: [&str; 9] = [
+    "footer .footer-update-indicator",
+    "footer .update-indicator",
+    ".update-versions",
+    ".update-command",
+    ".update-copied",
+    ".panel-header form.account-breakdown-filter",
+    "td.yes",
+    "td.no",
+    ".chart-container-compact",
+];
+
+/// Script exports that were retired because no caller used them.
+const RETIRED_SCRIPT_EXPORTS: [&str; 6] = [
+    "fetchStats",
+    "formatAgeSeconds",
+    "formatPercent",
+    "formatBytes",
+    "formatMicrodollars",
+    "initUpdateCommandCopy",
+];
+
+/// The class names the stylesheet uses that no literal producer can name:
+/// either the renderers build them from data, or the class is a reserved
+/// variant. Every other class in the stylesheet must have a producer.
+const DYNAMIC_CSS_CLASSES: [&str; 21] = [
+    "active",
+    "warning",
+    "pill-fresh",
+    "pill-partial",
+    "pill-sparse",
+    "pill-stale",
+    "pill-conflict",
+    "pill-unmatched",
+    "pill-source-unavailable",
+    "pill-unknown",
+    "auth_failed",
+    "cooldown_active",
+    "model_appeared",
+    "model_discovered",
+    "circuit_open",
+    "circuit_close",
+    "circuit_closed",
+    "reservation_recovered",
+    "catalog_refresh_failed",
+    "pill-configured",
+    "panel",
+];
+
+/// The stylesheet with its comments removed. A comment may name a retired
+/// selector to explain why it went; only a rule brings one back.
+fn dashboard_css_rules() -> String {
+    let mut rules = String::new();
+    let mut in_comment = false;
+    for line in DASHBOARD_CSS.lines() {
+        let mut remainder = line;
+        let mut kept = String::new();
+        loop {
+            if in_comment {
+                match remainder.find("*/") {
+                    Some(end) => {
+                        in_comment = false;
+                        remainder = &remainder[end + 2..];
+                    }
+                    None => break,
+                }
+            } else {
+                match remainder.find("/*") {
+                    Some(start) => {
+                        kept.push_str(&remainder[..start]);
+                        in_comment = true;
+                        remainder = &remainder[start + 2..];
+                    }
+                    None => {
+                        kept.push_str(remainder);
+                        break;
+                    }
+                }
+            }
+        }
+        rules.push_str(&kept);
+        rules.push('\n');
+    }
+    rules
+}
+
+#[test]
+fn retired_stylesheet_selectors_stay_retired() {
+    let rules = dashboard_css_rules();
+    for selector in RETIRED_CSS_SELECTORS {
+        assert!(
+            !rules.contains(selector),
+            "retired selector {selector} is back in the stylesheet"
+        );
+        // The script must not keep querying a retired class either: a query
+        // for markup no renderer produces is a dead branch that reads like a
+        // live one.
+        assert!(
+            !DASHBOARD_JS.contains(selector),
+            "retired selector {selector} is still queried by the script"
+        );
+    }
+}
+
+#[test]
+fn retired_script_exports_stay_retired() {
+    for export in RETIRED_SCRIPT_EXPORTS {
+        assert!(
+            !DASHBOARD_JS.contains(&format!("namespace.{export} =")),
+            "retired export {export} is back in the script"
+        );
+    }
+}
+
+#[test]
+fn every_script_export_has_a_caller() {
+    // An export nobody calls is dead weight that looks like an API. The
+    // internal state holders are namespaced with a double underscore and are
+    // not exports.
+    for line in DASHBOARD_JS.lines() {
+        let trimmed = line.trim();
+        if !trimmed.starts_with("namespace.") || !trimmed.contains('=') {
+            continue;
+        }
+        let rest = &trimmed["namespace.".len()..];
+        let Some(equals) = rest.find('=') else {
+            continue;
+        };
+        let name = rest[..equals].trim();
+        if name.is_empty()
+            || name.starts_with("__")
+            || !name
+                .chars()
+                .all(|character| character.is_ascii_alphanumeric() || character == '_')
+        {
+            continue;
+        }
+        let uses = DASHBOARD_JS.matches(name).count()
+            + DASHBOARD_MARKUP_SOURCES
+                .iter()
+                .map(|source| source.matches(name).count())
+                .sum::<usize>();
+        assert!(uses >= 2, "script export {name} has no caller");
+    }
+}
+
+#[test]
+fn every_stylesheet_class_has_a_producer() {
+    let markup = DASHBOARD_MARKUP_SOURCES.join("\n");
+    let rules = dashboard_css_rules();
+    let mut classes: Vec<String> = Vec::new();
+    for (index, character) in rules.char_indices() {
+        if character != '.' {
+            continue;
+        }
+        // A class name starts a selector, so the dot cannot follow a digit or
+        // a word character: `0.025` is a length, not a class.
+        if index > 0 {
+            let previous = rules[..index].chars().next_back().unwrap_or(' ');
+            if previous.is_ascii_alphanumeric() || previous == '-' || previous == '_' {
+                continue;
+            }
+        }
+        let name: String = rules[index + 1..]
+            .chars()
+            .take_while(|character| {
+                character.is_ascii_alphanumeric() || *character == '-' || *character == '_'
+            })
+            .collect();
+        if name.is_empty() || classes.contains(&name) {
+            continue;
+        }
+        classes.push(name);
+    }
+    for class in classes {
+        if DYNAMIC_CSS_CLASSES.contains(&class.as_str()) {
+            continue;
+        }
+        assert!(
+            markup.contains(&class) || DASHBOARD_JS.contains(&class),
+            "stylesheet class .{class} has no producer"
+        );
+    }
+}
+
+#[test]
+fn every_emitted_table_carries_the_table_class() {
+    // The stylesheet scopes its table chrome to `table.data`, so a table
+    // without the class renders unstyled. The renderers open their tables
+    // through the shared constant, so the next table cannot forget it.
+    for source in DASHBOARD_MARKUP_SOURCES {
+        let mut rest = source;
+        while let Some(index) = rest.find("<table") {
+            rest = &rest[index..];
+            let end = rest.find('>').map(|end| end + 1).unwrap_or(rest.len());
+            let tag = &rest[..end];
+            // The two shared constants spell the opening tag out; they are the
+            // source of the tag every renderer uses, not a table of their own.
+            let unescaped = tag.replace("\\\"", "\"");
+            assert!(
+                [
+                    super::DASHBOARD_TABLE_OPEN,
+                    super::DASHBOARD_TABLE_OPEN_COMPACT
+                ]
+                .contains(&unescaped.as_str()),
+                "a table is opened without the shared class: {tag}"
+            );
+            rest = &rest[end..];
+        }
+    }
+}
+
+#[test]
+fn the_theme_variable_count_is_pinned() {
+    // The pill colours add six derived variables to the set the server
+    // publishes. The count is asserted so a variable cannot be added or
+    // dropped without the guard noticing.
+    let css = super::theme_variables("Catppuccin Latte");
+    assert_eq!(css.matches("--").count(), 52);
+    for variable in [
+        "--pill-neutral",
+        "--pill-success",
+        "--pill-info",
+        "--pill-warning",
+        "--pill-sparse",
+        "--pill-error",
+    ] {
+        assert!(css.contains(&format!("{variable}: ")), "missing {variable}");
+    }
+}
+
+#[test]
+fn the_standalone_shells_resolve_the_theme() {
+    // The on-prem shells used to link only the dashboard stylesheet, so every
+    // `var()` they relied on was invalid and the page rendered unstyled.
+    let usage = super::render_usage_admin(&[], "", "Nord");
+    assert!(usage.contains("/static/dashboard.css"));
+    assert!(usage.contains("/static/theme.css?theme=Nord"));
+    let my_usage = super::render_my_usage("operator", &[], &[], "Catppuccin Latte");
+    assert!(my_usage.contains("/static/theme.css?theme=Catppuccin%20Latte"));
+    let standalone = super::dashboard_standalone_page("Audit", "usage", "Nord", "<p>body</p>");
+    assert!(standalone.contains("/static/theme.css?theme=Nord"));
+    // An unknown theme falls back to the default and still resolves a
+    // complete variable set.
+    let fallback = super::dashboard_standalone_page("Audit", "usage", "not-a-theme", "<p>b</p>");
+    assert!(fallback.contains("/static/theme.css?theme=Cyber%20Red"));
+    assert!(!super::theme_variables(super::selected_theme("not-a-theme")).is_empty());
+}
+
+#[test]
+fn the_standalone_shells_carry_the_navigation_chrome() {
+    for html in [
+        super::render_usage_admin(&[], "", "Nord"),
+        super::render_my_usage("operator", &[], &[], "Nord"),
+        super::dashboard_standalone_page("Audit", "usage", "Nord", "<p>body</p>"),
+    ] {
+        assert!(
+            html.contains("class=\"topnav-menu\""),
+            "the shell has no navigation chrome"
+        );
+        assert!(
+            html.contains("href=\"/?period=24h&amp;theme=Nord\">Overview</a>"),
+            "the shell has no route back to the overview"
+        );
+        assert!(html.contains("id=\"dashboard-content\""));
+    }
+}
+
+#[test]
+fn a_truncated_usage_table_says_so() {
+    // The notice is derived from the same cap the query applies, so the page
+    // cannot claim a complete table when the query truncated it.
+    let below_cap = super::usage_truncation_notice(super::USAGE_ROW_CAP - 1);
+    assert!(below_cap.is_empty());
+    let at_cap = super::usage_truncation_notice(super::USAGE_ROW_CAP);
+    assert!(at_cap.contains("truncated"));
+    assert!(at_cap.contains(&super::USAGE_ROW_CAP.to_string()));
+}
+
+#[test]
+fn the_dashboard_shell_carries_a_skip_link_and_live_regions() {
+    let html = super::render::render_dashboard_layout(
+        "Page",
+        "overview",
+        "24h",
+        "Nord",
+        15,
+        "<p>body</p>".to_owned(),
+        false,
+        "",
+    );
+    let first_focusable = html.find("<a ").expect("the first anchor");
+    assert!(
+        html[first_focusable..].starts_with("<a class=\"skip-link\""),
+        "the skip link is not the first focusable element"
+    );
+    assert!(
+        first_focusable < html.find("<header").expect("the topbar"),
+        "the skip link is not the first focusable element"
+    );
+    assert!(html.contains("href=\"#dashboard-content\""));
+    assert!(html.contains("id=\"dashboard-updated\" role=\"status\" aria-live=\"polite\""));
+}
+
+#[test]
+fn the_theme_picker_preserves_the_page_query_parameters() {
+    let html = super::render::render_dashboard_layout(
+        "Page",
+        "models",
+        "24h",
+        "Nord",
+        15,
+        "<p>body</p>".to_owned(),
+        false,
+        &super::dashboard_query_inputs(&[("account", "vendor/model"), ("used", "1")]),
+    );
+    assert!(html.contains("<input type=\"hidden\" name=\"account\" value=\"vendor/model\">"));
+    assert!(html.contains("<input type=\"hidden\" name=\"used\" value=\"1\">"));
+    assert!(html.contains("<input type=\"hidden\" name=\"period\" value=\"24h\">"));
+}
+
+#[test]
+fn every_chart_canvas_carries_an_accessible_name() {
+    let html = super::render_timeseries_page(
+        &crate::db::DashboardData::default(),
+        "24h",
+        "Nord",
+        &serde_json::json!({
+            "bucket": "hour",
+            "group_by": "provider_model",
+            "metric": "requests",
+            "limit": 12,
+            "source": "empty",
+            "degraded_reason": "rollup_empty",
+            "buckets": [],
+            "series": [],
+            "points": [],
+            "bucket_totals": [],
+        }),
+    );
+    assert!(html.contains("role=\"img\""));
+    assert!(html.contains("aria-label=\"Usage breakdown grouped by"));
+    // The chart loading shell is a live region: the operator has to learn
+    // that the chart is loading, and that it failed.
+    let overview = super::render_overview(
+        &crate::db::DashboardSummary {
+            total_requests: 0,
+            successful_requests: 0,
+            error_requests: 0,
+            total_input_tokens: 0,
+            total_output_tokens: 0,
+            total_cost_microdollars: 0,
+            avg_latency_ms: 0.0,
+            total_cache_read_tokens: 0,
+            total_cache_write_tokens: 0,
+            total_reasoning_tokens: 0,
+            streamed_requests: 0,
+            non_streamed_requests: 0,
+            exact_count: 0,
+            derived_count: 0,
+            partial_count: 0,
+            estimated_count: 0,
+            unknown_count: 0,
+            provider_reported_count: 0,
+            provider_reported_cost_microdollars: 0,
+            estimated_cost_sum_microdollars: 0,
+            reservation_fallback_rows: 0,
+            reservation_fallback_excess_microdollars: 0,
+            total_bytes_received: 0,
+            total_bytes_emitted: 0,
+            total_providers: 0,
+            avg_ttft_ms: 0.0,
+            tokens_per_second: 0.0,
+            p50_ttft_ms: 0.0,
+            p99_ttft_ms: 0.0,
+        },
+        super::OverviewPage {
+            accounts: &[],
+            page_data: &crate::db::DashboardData::default(),
+            period: "24h",
+            theme: "Nord",
+            refresh_interval_s: 60,
+            show_disabled: false,
+            health_snapshots: &[],
+        },
+    );
+    assert!(
+        overview.contains("class=\"chart-loading-shell\" role=\"status\" aria-live=\"polite\"")
+    );
+    assert!(overview.contains("aria-label=\"Requests and errors over the selected period\""));
+}
+
+#[test]
+fn every_stylesheet_variable_resolves_in_every_bundled_theme() {
+    // The stylesheet declares no custom properties of its own, so every
+    // `var()` it reads has to come from the theme. A variable the theme does
+    // not publish leaves the declaration invalid, and the browser drops it.
+    let rules = dashboard_css_rules();
+    let mut required: Vec<String> = Vec::new();
+    let mut rest = rules.as_str();
+    while let Some(index) = rest.find("var(") {
+        rest = &rest[index + 4..];
+        let Some(close) = rest.find(')') else {
+            break;
+        };
+        let argument = &rest[..close];
+        // A fallback makes the declaration valid on its own.
+        if argument.contains(',') {
+            continue;
+        }
+        let name = argument.trim().to_owned();
+        if !name.starts_with("--") {
+            continue;
+        }
+        if !required.contains(&name) {
+            required.push(name);
+        }
+        rest = &rest[close..];
+    }
+    assert!(!required.is_empty(), "no stylesheet variable was found");
+    for theme in super::THEME_NAMES {
+        let css = super::theme_variables(theme);
+        for name in &required {
+            assert!(
+                css.contains(&format!("{name}: ")),
+                "theme {theme:?} does not publish {name}, which the stylesheet reads"
+            );
+        }
+    }
+}
+
+#[test]
+fn the_stylesheet_declares_no_custom_property_of_its_own() {
+    // A property the stylesheet declares would have to be published by every
+    // theme as well; the themes are the only owner of the variable set.
+    let rules = dashboard_css_rules();
+    let mut rest = rules.as_str();
+    while let Some(index) = rest.find("--") {
+        rest = &rest[index..];
+        let name: String = rest
+            .chars()
+            .take_while(|character| {
+                character.is_ascii_alphanumeric() || *character == '-' || *character == '_'
+            })
+            .collect();
+        let after = &rest[name.len()..];
+        if let Some(tail) = after.strip_prefix(':') {
+            assert!(
+                tail.trim_start().starts_with("var("),
+                "the stylesheet declares {name}, which the themes do not publish"
+            );
+        }
+        rest = after;
     }
 }

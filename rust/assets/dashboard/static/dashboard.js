@@ -3,19 +3,6 @@
 
   const namespace = window.EggPoolDashboard || (window.EggPoolDashboard = {});
 
-  namespace.fetchStats = async function fetchStats(path) {
-    const response = await fetch(path, {
-      cache: "no-store",
-      headers: { "x-dashboard-refresh": "1" },
-    });
-    if (!response.ok) {
-      throw new Error(
-        "stats request failed: " + response.status + " " + response.statusText
-      );
-    }
-    return await response.json();
-  };
-
   namespace.formatDurationMs = function formatDurationMs(ms) {
     if (ms === null || ms === undefined || Number.isNaN(Number(ms))) {
       return "—";
@@ -46,54 +33,6 @@
     return days + "d" + hrs + "h";
   };
 
-  namespace.formatAgeSeconds = function formatAgeSeconds(seconds) {
-    if (
-      seconds === null ||
-      seconds === undefined ||
-      Number.isNaN(Number(seconds))
-    ) {
-      return "—";
-    }
-    const value = Number(seconds);
-    if (value < 0) {
-      return "—";
-    }
-    if (value < 1) {
-      return "<1s";
-    }
-    if (value < 60) {
-      return value.toFixed(0) + "s";
-    }
-    const minutesTotal = Math.floor(value / 60);
-    const secs = Math.floor(value - minutesTotal * 60);
-    if (minutesTotal < 60) {
-      return minutesTotal + "m" + secs + "s";
-    }
-    const hoursTotal = Math.floor(minutesTotal / 60);
-    const mins = minutesTotal - hoursTotal * 60;
-    if (hoursTotal < 24) {
-      return hoursTotal + "h" + mins + "m";
-    }
-    const days = Math.floor(hoursTotal / 24);
-    const hrs = hoursTotal - days * 24;
-    return days + "d" + hrs + "h";
-  };
-
-  namespace.formatPercent = function formatPercent(value, fraction) {
-    if (
-      value === null ||
-      value === undefined ||
-      Number.isNaN(Number(value))
-    ) {
-      return "—";
-    }
-    const number = Number(value);
-    if (fraction === false) {
-      return number.toFixed(1) + "%";
-    }
-    return (number * 100).toFixed(1) + "%";
-  };
-
   namespace.formatCount = function formatCount(n) {
     if (n === null || n === undefined || Number.isNaN(Number(n))) {
       return "—";
@@ -110,32 +49,6 @@
       return (value / 1_000_000).toFixed(1) + "M";
     }
     return (value / 1_000_000_000).toFixed(1) + "B";
-  };
-
-  namespace.formatBytes = function formatBytes(value) {
-    if (value === null || value === undefined || Number.isNaN(Number(value))) {
-      return "—";
-    }
-    const bytes = Number(value);
-    const units = ["B", "KB", "MB", "GB", "TB"];
-    let val = bytes;
-    for (let i = 0; i < units.length; i++) {
-      if (Math.abs(val) < 1000 || i === units.length - 1) {
-        if (units[i] === "B") {
-          return val.toFixed(0) + " B";
-        }
-        return val.toFixed(1) + " " + units[i];
-      }
-      val /= 1000;
-    }
-    return val.toFixed(1) + " PB";
-  };
-
-  namespace.formatMicrodollars = function formatMicrodollars(value) {
-    if (value === null || value === undefined || Number.isNaN(Number(value))) {
-      return "—";
-    }
-    return "$" + (Number(value) / 1_000_000).toFixed(2);
   };
 
   namespace.formatTokens = function formatTokens(tokens) {
@@ -234,13 +147,18 @@
     );
   }
 
-  function whenChartReady(callback) {
+  // The chart runtime (Chart.js) is a separate deferred asset. dashboard.js is
+  // intentionally ordered before chart.js so the data request can start while
+  // chart.js downloads, and the wait below gives that deferred asset a
+  // generous window to arrive on low-bandwidth SBC deployments. The wait is
+  // bounded so the surface always terminates, and a wait that runs out calls
+  // `onTimeout` so the page states the failure instead of leaving an
+  // indefinite "Preparing chart…".
+  const CHART_RUNTIME_POLL_MS = 50;
+  const CHART_RUNTIME_MAX_POLLS = 200;
+
+  function whenChartReady(callback, onTimeout) {
     if (!hasChartWork()) return;
-    // dashboard.js is intentionally ordered before chart.js so the data
-    // request can start while Chart.js downloads. Give that deferred asset a
-    // generous window to arrive on low-bandwidth SBC deployments.
-    const maxAttempts = 200;
-    const delayMs = 50;
     let attempts = 0;
     const run = function () {
       if (typeof window.Chart !== "undefined") {
@@ -248,13 +166,33 @@
         return;
       }
       attempts += 1;
-      if (attempts >= maxAttempts) {
+      if (attempts >= CHART_RUNTIME_MAX_POLLS) {
         console.warn("EggPoolDashboard: Chart.js not loaded");
+        if (onTimeout) {
+          onTimeout();
+        }
         return;
       }
-      window.setTimeout(run, delayMs);
+      window.setTimeout(run, CHART_RUNTIME_POLL_MS);
     };
     run();
+  }
+
+  // States the chart runtime never arrived. Every surface that is still
+  // waiting for it says so, so the operator reads a failure rather than a
+  // message that never resolves.
+  function markChartRuntimeUnavailable() {
+    var shells = document.querySelectorAll("[data-chart-endpoint]");
+    for (var i = 0; i < shells.length; i++) {
+      var shell = shells[i];
+      var state = shell.getAttribute("data-chart-state");
+      if (state === "loaded" || state === "empty" || state === "error") continue;
+      shell.setAttribute("data-chart-state", "error");
+      var textEl = shell.querySelector("span:last-child");
+      if (textEl) {
+        textEl.textContent = "Chart runtime unavailable — reload the page to draw it";
+      }
+    }
   }
 
   namespace.initGroupedTimeseriesCharts = function initGroupedTimeseriesCharts() {
@@ -632,11 +570,46 @@
     if (!namespace.__chartHydrationData) {
       namespace.__chartHydrationData = {};
     }
+    if (!namespace.__chartRuntimeWaits) {
+      namespace.__chartRuntimeWaits = {};
+    }
 
     function showState(shell, state, message) {
       shell.setAttribute("data-chart-state", state);
       var textEl = shell.querySelector("span:last-child");
       if (textEl && message) textEl.textContent = message;
+    }
+
+    // Waits for the chart runtime to arrive and then draws the payload that
+    // was already fetched. The payload is never fetched again: the wait only
+    // draws what is in hand. The wait is bounded, and a wait that runs out
+    // states the failure rather than leaving an indefinite "Preparing chart…".
+    // The handle is cleared as soon as it resolves, fails, or is superseded,
+    // so no timer outlives the canvas it updates.
+    function waitForChartRuntime(shell, canvasId, data) {
+      if (namespace.__chartRuntimeWaits[canvasId]) {
+        return;
+      }
+      var polls = 0;
+      var handle = window.setInterval(function () {
+        if (typeof window.Chart !== "undefined") {
+          window.clearInterval(handle);
+          namespace.__chartRuntimeWaits[canvasId] = null;
+          renderIntoShell(shell, canvasId, data);
+          return;
+        }
+        polls += 1;
+        if (polls >= CHART_RUNTIME_MAX_POLLS) {
+          window.clearInterval(handle);
+          namespace.__chartRuntimeWaits[canvasId] = null;
+          showState(
+            shell,
+            "error",
+            "Chart runtime unavailable — reload the page to draw it"
+          );
+        }
+      }, CHART_RUNTIME_POLL_MS);
+      namespace.__chartRuntimeWaits[canvasId] = handle;
     }
 
     function renderIntoShell(shell, canvasId, data) {
@@ -651,10 +624,12 @@
 
       // Start the data request independently of Chart.js. The latter is the
       // largest dashboard asset, and waiting for it here makes the chart API
-      // request pay the full script-load latency before it even starts.
+      // request pay the full script-load latency before it even starts. The
+      // payload is kept, and drawn as soon as the runtime arrives.
       if (typeof window.Chart === "undefined") {
         namespace.__chartHydrationData[canvasId] = data;
         showState(shell, "ready", "Preparing chart…");
+        waitForChartRuntime(shell, canvasId, data);
         return;
       }
 
@@ -667,6 +642,13 @@
       wrap.style.height = shell.style.height || "300px";
       var canvas = document.createElement("canvas");
       canvas.id = canvasId;
+      // The canvas carries no text of its own, so it needs an accessible name
+      // that says what it plots.
+      canvas.setAttribute("role", "img");
+      canvas.setAttribute(
+        "aria-label",
+        "Requests and errors over the selected period"
+      );
       var periodFromShell = "";
       var ds = shell.getAttribute("data-chart-endpoint") || "";
       var pm = ds.match(/period=([^&]+)/);
@@ -703,6 +685,14 @@
       }
       namespace.__chartHydrationHandles[canvasId] = window.setInterval(function () {
         var p = period;
+        // The auto-refresh tick replaces the page content. A canvas that is
+        // no longer in the document has nothing left to update, and the timer
+        // that outlived it would keep it alive.
+        if (!canvas.isConnected) {
+          window.clearInterval(namespace.__chartHydrationHandles[canvasId]);
+          namespace.__chartHydrationHandles[canvasId] = null;
+          return;
+        }
         fetch("/api/timeseries?period=" + encodeURIComponent(p), {
           cache: "no-store",
           headers: { "x-dashboard-refresh": "1" },
@@ -730,6 +720,10 @@
         if (namespace.__chartHydrationHandles[canvasId]) {
           window.clearInterval(namespace.__chartHydrationHandles[canvasId]);
           namespace.__chartHydrationHandles[canvasId] = null;
+        }
+        if (namespace.__chartRuntimeWaits[canvasId]) {
+          window.clearInterval(namespace.__chartRuntimeWaits[canvasId]);
+          namespace.__chartRuntimeWaits[canvasId] = null;
         }
         showState(shell, "loading", "Loading chart data\u2026");
         var decoded = endpoint.replace(/&amp;/g, "&");
@@ -819,7 +813,7 @@
       } catch (err) {
         console.error("EggPoolDashboard: initChartLoadingShells failed", err);
       }
-    });
+    }, markChartRuntimeUnavailable);
     try {
       namespace.initTimeseriesControls();
     } catch (err) {
@@ -832,11 +826,6 @@
       namespace.initNavToggle();
     } catch (err) {
       console.error("EggPoolDashboard: initNavToggle failed", err);
-    }
-    try {
-      namespace.initUpdateCommandCopy();
-    } catch (err) {
-      console.error("EggPoolDashboard: initUpdateCommandCopy failed", err);
     }
     try {
       namespace.initNumberSteppers();
@@ -917,9 +906,7 @@
       script.textContent = JSON.stringify(payload);
     }
     const panel = script ? script.closest(".timeseries-chart-panel") : null;
-    const container = panel
-      ? panel.querySelector(".chart-container, .chart-container-compact")
-      : null;
+    const container = panel ? panel.querySelector(".chart-container") : null;
     const empty = panel ? panel.querySelector(".grouped-timeseries-empty") : null;
     const points = payload && Array.isArray(payload.points) ? payload.points : [];
     const buckets = payload && Array.isArray(payload.buckets) ? payload.buckets : [];
@@ -1095,7 +1082,7 @@
   // bounds.  Falls through silently when the surrounding input is
   // missing ``min``/``max`` (treated as unbounded); clamps otherwise.
   // Re-init is idempotent via the `__eggpoolStepperWired` flag, matching
-  // the pattern used by `initUpdateCommandCopy` and the timeseries
+  // the pattern used by the timeseries
   // controls so the auto-refresh loop does not stack handlers.
   namespace.initNumberSteppers = function initNumberSteppers() {
     const steppers = document.querySelectorAll(".number-stepper");
@@ -1157,7 +1144,7 @@
   // - click anywhere outside both the nav and the burger to close
   //
   // Re-init is idempotent via the `__eggpoolNavWired` flag, matching
-  // the pattern used by `initUpdateCommandCopy` and the timeseries
+  // the pattern used by the timeseries
   // controls so the auto-refresh loop does not stack handlers.
   namespace.initNavToggle = function initNavToggle() {
     const burger = document.querySelector("header.topbar .topnav-burger");
@@ -1266,83 +1253,6 @@
       if (nav.contains(target) || burger.contains(target)) return;
       setOpen(false);
     });
-  };
-
-  // Wire click-to-copy on every element marked with
-  // ``data-update-command``.  Each click selects the text and copies
-  // it via the async Clipboard API; falls back to the legacy
-  // ``document.execCommand("copy")`` path when the modern API is
-  // unavailable (older browsers, insecure contexts).  A short
-  // "copied!" affordance fades in next to the command for ~1.6s and
-  // also announces the success to assistive tech via the role=status
-  // sibling.
-  namespace.initUpdateCommandCopy = function initUpdateCommandCopy() {
-    const commands = document.querySelectorAll("[data-update-command]");
-    for (let i = 0; i < commands.length; i++) {
-      const el = commands[i];
-      if (el.__eggpoolCopyWired) continue;
-      el.__eggpoolCopyWired = true;
-      const handle = function (event) {
-        if (event) {
-          event.preventDefault();
-        }
-        const text = el.textContent || "";
-        const indicator =
-          el.parentElement &&
-          el.parentElement.querySelector("[data-update-copied]");
-        const flash = function (label) {
-          if (!indicator) return;
-          indicator.textContent = label;
-          indicator.classList.add("is-visible");
-          window.setTimeout(function () {
-            indicator.classList.remove("is-visible");
-            window.setTimeout(function () {
-              indicator.textContent = "";
-            }, 200);
-          }, 1400);
-        };
-        const fallback = function () {
-          try {
-            const range = document.createRange();
-            range.selectNodeContents(el);
-            const selection = window.getSelection();
-            if (selection) {
-              selection.removeAllRanges();
-              selection.addRange(range);
-            }
-            const ok = document.execCommand && document.execCommand("copy");
-            if (selection) {
-              selection.removeAllRanges();
-            }
-            flash(ok ? "copied!" : "press Ctrl+C");
-          } catch (_err) {
-            flash("press Ctrl+C");
-          }
-        };
-        if (
-          typeof navigator !== "undefined" &&
-          navigator.clipboard &&
-          typeof navigator.clipboard.writeText === "function"
-        ) {
-          navigator.clipboard.writeText(text).then(
-            function () {
-              flash("copied!");
-            },
-            function () {
-              fallback();
-            }
-          );
-        } else {
-          fallback();
-        }
-      };
-      el.addEventListener("click", handle);
-      el.addEventListener("keydown", function (event) {
-        if (event.key === "Enter" || event.key === " ") {
-          handle(event);
-        }
-      });
-    }
   };
 
   if (document.readyState === "loading") {

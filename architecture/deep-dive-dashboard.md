@@ -141,6 +141,57 @@ profile. `eggpool dashboard public --off` retains its legacy behavior, while
 `eggpool users enable-managed` requires `dashboard.public = false` before the
 managed transition.
 
+## Presentation and accessibility contract
+
+Every dashboard surface an administrator or a member can reach is a complete
+page, not a fragment.
+
+- **Theme delivery.** Every shell links both `/static/dashboard.css` and
+  `/static/theme.css?theme=<name>`, and resolves the name through
+  `selected_theme()`. An unknown or absent `theme` parameter falls back to
+  `DEFAULT_THEME`, so the page always resolves a complete variable set and
+  never renders an invalid `var()`. The on-prem shells (`/usage`,
+  `/admin/audit`, `/my-account`, `/my-account/models`, and the one-shot
+  personal-token page) use `dashboard_standalone_page()`; the one-shot token
+  page keeps its bare shell but still resolves the theme.
+- **Navigation chrome.** The shared navigation (`DASHBOARD_NAVIGATION`) is
+  rendered by the dashboard layout and by every standalone shell, so there is
+  always a route back to the overview. Its destinations are fixed.
+- **Table chrome.** The stylesheet scopes the table chrome to `table.data`.
+  Every table the renderers emit is opened through `DASHBOARD_TABLE_OPEN` or
+  `DASHBOARD_TABLE_OPEN_COMPACT`, and a source-level guard fails if a table is
+  opened any other way.
+- **Status pills.** The pill foregrounds are theme-derived: `--pill-neutral`,
+  `--pill-success`, `--pill-info`, `--pill-warning`, `--pill-sparse` and
+  `--pill-error` are computed in `theme_variables()` from the theme's own
+  `--color-success` / `--color-warning` / `--color-error` / `--color-info` /
+  `--text-muted` tokens, moved to a lightness that clears WCAG AA (4.5:1)
+  against `--card-bg`, and placed on a lightness ladder so two roles never
+  collapse onto one colour. The guard in `theme.rs` measures the values the
+  server serves, so a theme change cannot silently invalidate it, and it
+  rejects a deliberately failing colour.
+- **Chart surface.** The chart loading path ends in a rendered chart or an
+  explicit failure. The payload is fetched once and cached; the wait for the
+  chart runtime is bounded and states its failure rather than leaving an
+  indefinite "Preparing chart…". The fallback never re-fetches the payload
+  and never arms a timer that outlives the canvas it updates.
+- **Accessibility.** Every chart canvas carries `role="img"` and an
+  `aria-label`; the chart loading shell and `#dashboard-updated` are live
+  regions; the skip link is the first focusable element and targets
+  `<main id="dashboard-content">`; the navigation links, the refresh control
+  and the selectors carry visible focus indicators; and the print stylesheet
+  drops the page background, the sticky topbar and the decorative overlay.
+- **Query parameters.** The theme picker is a GET form, so it carries the
+  page's other query parameters as hidden inputs; switching the theme no
+  longer discards the operator's filters.
+- **Usage cap.** The usage queries apply `USAGE_ROW_CAP` rows, and the page
+  derives its truncation disclosure from that same cap, so a truncated table
+  says so.
+
+The retired surface is guarded: the stylesheet selectors and the script
+exports that no renderer produces are listed in `rust/src/server/dashboard/tests.rs`
+and a test fails if one comes back.
+
 ## Safety invariants
 
 `dashboard.store_request_content` is validated `false`: request content
@@ -149,7 +200,13 @@ transcoding services, `explain_dashboard` query plans) stay
 presentation-light and secret-free. The native server owns route
 registration and static asset delivery. Changes to
 dashboard assets or API contracts must update the Rust asset manifest and the
-corresponding Rust integration tests. Dashboard handlers remain observational
+corresponding Rust integration tests. An embedded asset that changes also
+changes its divergence from the frozen Python oracle, and that divergence is
+recorded with one reason per divergence in
+`scripts/dashboard_parity/browser.py`: `ORACLE_CANDIDATE_CORRECTIONS` maps a
+path to the tuple of reasons for that path's divergences, and the asset
+inventory fails when a divergence has no reason or a path records the same
+reason twice. Dashboard handlers remain observational
 and do not become a second runtime authority.
 
 ## Overview, Accounts, and Models projections
@@ -286,7 +343,7 @@ every real browser while still admitting a bare `Referer`.
 ```bash
 cargo test --manifest-path rust/Cargo.toml --test server_transport -- --test-threads=1
 cargo test --manifest-path rust/Cargo.toml --test status_command -- --test-threads=1
-cargo test --manifest-path rust/Cargo.toml --lib server::dashboard::tests -- --test-threads=1
+cargo test --manifest-path rust/Cargo.toml --lib server::dashboard -- --test-threads=1
 cargo test --manifest-path rust/Cargo.toml --test on_prem_admin_ui -- --test-threads=1
 uv run python scripts/qualification_dashboard_parity.py --screenshots
 uv run python scripts/qualification_dashboard_parity.py --shutdown-restart
