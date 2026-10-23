@@ -4,13 +4,13 @@ on:
   workflow_dispatch:
     inputs:
       version:
-        description: Public Rust release to qualify
-        required: true
-        default: "0.8.0"
+        description: Public Rust release to qualify (defaults to the repository's current release)
+        required: false
+        default: ""
       python_version:
-        description: Public Python rollback release to qualify
-        required: true
-        default: "0.7.4"
+        description: Public Python rollback release to qualify (defaults to the repository's historical Python release)
+        required: false
+        default: ""
 
 permissions:
   contents: read
@@ -20,10 +20,38 @@ env:
   TZ: UTC
 
 jobs:
+  resolve-version:
+    name: derive release versions from the repository authority
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    outputs:
+      version: ${{ steps.identity.outputs.version }}
+      python_version: ${{ steps.identity.outputs.python_version }}
+    steps:
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5
+        with:
+          fetch-depth: 0
+          ref: ${{ github.sha }}
+      - uses: astral-sh/setup-uv@3259c6206f993105e3a61b142c2d97bf4b9ef83d
+        with:
+          python-version: "3.11"
+      - id: identity
+        name: derive the release versions from the repository version authority
+        run: |
+          result="$(uv run --no-project --python 3.11 python scripts/validate_release_identity.py --source-commit "$GITHUB_SHA")"
+          version="$(uv run --no-project --python 3.11 python -c 'import json,sys; print(json.loads(sys.argv[1])["version"])' "$result")"
+          python_version="$(uv run --no-project --python 3.11 python -c 'import json,sys; print(json.load(open(sys.argv[1]))["version_authority"]["historical_python_project_version"])' rust/assets/catalog/installable-releases.json)"
+          printf 'version=%s\n' "$version" >> "$GITHUB_OUTPUT"
+          printf 'python_version=%s\n' "$python_version" >> "$GITHUB_OUTPUT"
+
   public-index:
     name: ${{ matrix.target_class }} public install and rollback
+    needs: resolve-version
     runs-on: ${{ matrix.runner }}
     timeout-minutes: 45
+    env:
+      PUBLIC_VERSION: ${{ inputs.version || needs.resolve-version.outputs.version }}
+      PUBLIC_PYTHON_VERSION: ${{ inputs.python_version || needs.resolve-version.outputs.python_version }}
     strategy:
       fail-fast: false
       matrix:
@@ -56,38 +84,41 @@ jobs:
             --only-binary=:all: \
             --no-deps \
             --dest dist/public \
-            "eggpool==${{ inputs.python_version }}"
+            "eggpool==${PUBLIC_PYTHON_VERSION}"
           python -m pip download \
             --disable-pip-version-check \
             --only-binary=:all: \
             --no-deps \
             --dest dist/public \
-            "eggpool==${{ inputs.version }}"
+            "eggpool==${PUBLIC_VERSION}"
           python - <<'PY'
+          import os
           from pathlib import Path
 
+          version = os.environ["PUBLIC_VERSION"]
+          python_version = os.environ["PUBLIC_PYTHON_VERSION"]
           files = sorted(Path("dist/public").glob("*.whl"))
-          if not any("0.7.4" in path.name for path in files):
+          if not any(python_version in path.name for path in files):
               raise SystemExit("public Python rollback wheel was not resolved")
-          if not any("0.8.0" in path.name for path in files):
+          if not any(version in path.name for path in files):
               raise SystemExit("public Rust wheel was not resolved")
           print("resolved public wheels:", *(path.name for path in files), sep="\n")
           PY
       - name: qualify public Rust wheel runtime and dashboard
         run: |
-          rust_wheel="$(find dist/public -type f -name 'eggpool-${{ inputs.version }}-*.whl' -print -quit)"
+          rust_wheel="$(find dist/public -type f -name "eggpool-${PUBLIC_VERSION}-*.whl" -print -quit)"
           test -n "$rust_wheel"
           uv run python scripts/qualify_release_wheel.py \
             "$rust_wheel" \
             --target-class "${{ matrix.target_class }}" \
-            --version "${{ inputs.version }}"
+            --version "$PUBLIC_VERSION"
       - name: qualify public Python to Rust rollback cycle
         env:
           RELEASE_COMPATIBILITY_DIAGNOSTIC_ERRORS: "1"
         run: |
           set -eu
-          python_wheel="$(find dist/public -type f -name 'eggpool-${{ inputs.python_version }}-*.whl' -print -quit)"
-          rust_wheel="$(find dist/public -type f -name 'eggpool-${{ inputs.version }}-*.whl' -print -quit)"
+          python_wheel="$(find dist/public -type f -name "eggpool-${PUBLIC_PYTHON_VERSION}-*.whl" -print -quit)"
+          rust_wheel="$(find dist/public -type f -name "eggpool-${PUBLIC_VERSION}-*.whl" -print -quit)"
           test -n "$python_wheel"
           test -n "$rust_wheel"
           uv run python scripts/qualify_release_transitions.py \

@@ -11,8 +11,30 @@ env:
   TZ: UTC
 
 jobs:
+  resolve-version:
+    name: derive release version from the repository authority
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    outputs:
+      version: ${{ steps.identity.outputs.version }}
+    steps:
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5
+        with:
+          fetch-depth: 0
+          ref: ${{ github.sha }}
+      - uses: astral-sh/setup-uv@3259c6206f993105e3a61b142c2d97bf4b9ef83d
+        with:
+          python-version: "3.11"
+      - id: identity
+        name: derive the release version from the repository version authority
+        run: |
+          result="$(uv run --no-project --python 3.11 python scripts/validate_release_identity.py --source-commit "$GITHUB_SHA")"
+          version="$(uv run --no-project --python 3.11 python -c 'import json,sys; print(json.loads(sys.argv[1])["version"])' "$result")"
+          printf 'version=%s\n' "$version" >> "$GITHUB_OUTPUT"
+
   build-and-qualify:
     name: ${{ matrix.target_class }}
+    needs: resolve-version
     runs-on: ${{ matrix.runner }}
     timeout-minutes: 45
     strategy:
@@ -29,14 +51,15 @@ jobs:
             rust_target: aarch64-apple-darwin
             runner: macos-14
     steps:
-      - uses: actions/checkout@v4
-      - uses: astral-sh/setup-uv@v4
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5
+      - uses: astral-sh/setup-uv@3259c6206f993105e3a61b142c2d97bf4b9ef83d
         with:
           python-version: "3.11"
-      - uses: dtolnay/rust-toolchain@stable
+      - uses: dtolnay/rust-toolchain@d1031067263f94b142dd6c0ce24c5eb9d02d52a0
         with:
+          toolchain: stable
           targets: ${{ matrix.rust_target }}
-      - uses: mlugg/setup-zig@v1
+      - uses: mlugg/setup-zig@53fc45b17fe98b52f92ee5ea08ff48a85a3e7eb7
         if: startsWith(matrix.target_class, 'linux-')
         with:
           version: 0.13.0
@@ -49,39 +72,41 @@ jobs:
       - run: >-
           uv run --no-project --with maturin==1.14.1 python
           scripts/qualify_release_wheel.py
-          dist/release-artifacts/${{ matrix.target_class }}/eggpool-0.8.0-*.whl
+          dist/release-artifacts/${{ matrix.target_class }}/eggpool-${{ needs.resolve-version.outputs.version }}-*.whl
           --target-class ${{ matrix.target_class }}
-          --version 0.8.0
+          --version ${{ needs.resolve-version.outputs.version }}
       - run: >-
           uv run --no-project --with maturin==1.14.1 python
           scripts/validate_release_portability.py
-          dist/release-artifacts/${{ matrix.target_class }}/eggpool-0.8.0-${{ startsWith(matrix.target_class, 'macos-') && 'macos-aarch64' || matrix.target_class }}
+          dist/release-artifacts/${{ matrix.target_class }}/eggpool-${{ needs.resolve-version.outputs.version }}-${{ startsWith(matrix.target_class, 'macos-') && 'macos-aarch64' || matrix.target_class }}
           --target-class ${{ matrix.target_class }}
-          --version 0.8.0
-      - uses: actions/upload-artifact@v4
+          --version ${{ needs.resolve-version.outputs.version }}
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
         with:
           name: release-artifacts-${{ matrix.target_class }}
           path: dist/release-artifacts/${{ matrix.target_class }}
 
   manifest:
     name: assemble release manifest
-    needs: build-and-qualify
+    needs:
+      - resolve-version
+      - build-and-qualify
     runs-on: ubuntu-latest
     timeout-minutes: 10
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/download-artifact@v4
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093
         with:
           pattern: release-artifacts-*
           path: dist/release-artifacts
           merge-multiple: true
-      - uses: astral-sh/setup-uv@v4
+      - uses: astral-sh/setup-uv@3259c6206f993105e3a61b142c2d97bf4b9ef83d
         with:
           python-version: "3.11"
       - name: restore raw executable staging mode
         run: >-
-          find dist/release-artifacts -type f \( -name 'eggpool-0.8.0-linux-*' -o
-          -name 'eggpool-0.8.0-macos-*' \) -exec chmod 755 {} +
+          find dist/release-artifacts -type f \( -name 'eggpool-${{ needs.resolve-version.outputs.version }}-linux-*' -o
+          -name 'eggpool-${{ needs.resolve-version.outputs.version }}-macos-*' \) -exec chmod 755 {} +
       - run: >-
           uv run --no-project --with maturin==1.14.1 python
           scripts/create_release_manifest.py
@@ -98,8 +123,8 @@ jobs:
           uv venv --quiet .release-artifacts-resolver && bash -c '! uv pip install
           --python .release-artifacts-resolver/bin/python --dry-run --no-index
           --find-links dist/release-artifacts --python-platform x86_64-pc-windows-msvc
-          eggpool==0.8.0'
-      - uses: actions/upload-artifact@v4
+          eggpool==${{ needs.resolve-version.outputs.version }}'
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
         with:
           name: release-artifacts-release-manifest
           path: dist/release-manifest.json

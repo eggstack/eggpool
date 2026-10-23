@@ -67,9 +67,35 @@ Thumbs.db
 
 # Project specific
 /var/
-/artifacts/qualification/
 *.log
 bugs.md
 
+# Qualification run output is generated, not evidence, so it stays untracked.
+# The retained closure evidence under this tree IS tracked: the closure
+# records and the committed tooling tests read it. The allow-list below keeps
+# the rule and the tracked state in agreement; see docs/releasing.md.
+/artifacts/qualification/*
+!/artifacts/qualification/m003/
+!/artifacts/qualification/m004/
+!/artifacts/qualification/m007-pi5-2026-10-03/
+!/artifacts/qualification/m008-pi5-2026-10-03/
+!/artifacts/qualification/on-prem-concurrency-performance/
+!/artifacts/qualification/on-prem-user-access/
+!/artifacts/qualification/routing-affinity-m003-pi5-2026-10-03/
+!/artifacts/qualification/235-sbc-target-benchmark.json
+!/artifacts/qualification/236-sbc-target-benchmark-corrected.json
+!/artifacts/qualification/237-sbc-finite-tail-diagnostic.json
+!/artifacts/qualification/238-sbc-publication-storage-diagnostic.json
+!/artifacts/qualification/239-sbc-db-phase-checkpoint-diagnostic.json
+!/artifacts/qualification/m010-gate-observations.json
+!/artifacts/qualification/on-prem-m012-pi5-benchmark-run-1.json
+!/artifacts/qualification/on-prem-m012-pi5-benchmark-run-2.json
+!/artifacts/qualification/on-prem-m012-pi5-benchmark-run-3.json
+!/artifacts/qualification/on-prem-m012-pi5-functional.json
+!/artifacts/qualification/on-prem-user-access-m007-local.json
+
 # Rust migration build artifacts
 /rust/target/
+
+# Local agent session assets are generated output, not repository evidence.
+/.mavis/

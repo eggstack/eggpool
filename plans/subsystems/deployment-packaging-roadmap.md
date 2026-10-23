@@ -1,6 +1,6 @@
 # Deployment and Packaging Roadmap
 
-Status: closed
+Status: active
 
 Long-term references:
 
@@ -133,6 +133,17 @@ publish-race winner preservation, staged success/failure cleanup, symlink/specia
 refusal, no-clobber, signal staging cleanup, executable-rollback preservation,
 and existing-owner safe staging.
 
+
+The roadmap reopened on repository evidence gathered at baseline `e6822d8f78`.
+Two qualification workflows still pin the EggPool release version as a literal
+rather than deriving it the way `release.yml` does, so they no longer match
+the version the build produces; the release workflow validator that exists for
+this purpose runs only inside the release workflow, which means it never runs
+in ordinary CI; the repository's `/artifacts/qualification/` ignore rule is
+inert because the retained qualification artifacts are already tracked; and
+the dashboard parity tooling's default inputs live under an untracked path.
+The historical M001–M005 records remain closed and immutable.
+
 ## 5. Target architecture
 
 The distribution path has one explicit dispatch boundary:
@@ -184,6 +195,10 @@ contract under their explicit release tag.
 - Artifact attestations / immutable release enforcement -> future hardening:
   **soft**. Useful provenance strengthening, not required to remove Python from
   the fresh native path.
+- Repository version authority -> M006: **interface**. The qualification
+  workflows derive the release version from the same authority `release.yml`
+  uses; a reintroduced literal fails validation in ordinary CI.
+- M006 closed. No further milestone is registered in this subsystem.
 
 ## 7. Milestones
 
@@ -442,12 +457,81 @@ Exit conditions:
 
 Implementation plan:
 
-- `plans/implementation/deployment-packaging/005-active-path-integration-detection-corrective.md`
+- `plans/archive/implementation/deployment-packaging/005-active-path-integration-detection-corrective.md`
 
 Deferred work:
 
 - Arbitrary shell parsing or evaluating profiles.
 - Broad installer, manager, update, runtime, or Gregg changes.
+
+### Milestone 6 — Release artifact version derivation and repository artifact hygiene
+
+Class: polish
+
+Objective: derive the release artifact version in the qualification workflows
+from the repository's version authority instead of a literal, run the release
+workflow validator in ordinary CI, and reconcile the repository's ignored
+paths with the artifact and fixture files it actually tracks.
+
+Dependencies: none. Every defect is a literal-versus-derived mismatch or an
+ignore-rule-versus-tracked-state mismatch.
+
+Deliverable boundary: no release-related workflow contains a hardcoded
+EggPool version literal; `scripts/validate_release_workflow.py` runs in
+`.github/workflows/ci.yml` and covers the qualification workflows; no path in
+the repository is simultaneously ignored and tracked; the dashboard parity
+tooling's default inputs exist in a clean clone. The release artifact
+format, the publication gate, and the installed-owner detection are
+unchanged.
+
+Exit conditions: the derivation matches `rust/Cargo.toml`; a reintroduced
+literal fails validation in ordinary CI; the retained qualification artifacts
+still resolve for the closure records that cite them.
+
+Deferred work: deleting the retained qualification artifacts, which the
+closure records need as evidence.
+
+### Milestone 7 — Release action-pin enforcement and guard correction
+
+Class: invariant
+
+Objective:
+
+Hold the qualification workflows to the immutable-SHA action-pin rule the
+release workflow already follows, and make the milestone's own guards assert
+the properties its closure record claimed for them.
+
+Dependencies: none. Every defect is an unenforced rule or a guard that does
+not read the repository it claims to describe.
+
+Deliverable boundary:
+
+- Every `uses:` in a covered workflow is pinned to an immutable SHA.
+- The release workflow validator enforces the pin rule on the qualification
+  contract as well as on the release contract.
+- The version-glob guard reads the covered workflows, the release catalog, and
+  the Cargo version instead of comparing hardcoded strings.
+- The artifact-hygiene guard derives the retained evidence set from the
+  ignore rule rather than from a hardcoded list.
+
+User or operator value:
+
+A release workflow cannot be changed to pull an action by a mutable tag
+without the ordinary CI validator failing.
+
+Exit conditions:
+
+- A validator test reintroduces a tag-style pin into each covered
+  qualification workflow and asserts the validator rejects it.
+- A validator test removes the derived glob from a build job's artifact
+  selection and asserts the guard fails.
+- The tracked artifact corpus is unchanged in count and no path is
+  simultaneously tracked and ignored.
+
+Deferred work:
+
+- Making generated run output inside a retained evidence tree ignored. That
+  needs a per-tree ignore rule and is an explicit operator decision.
 
 ## 8. Cross-cutting requirements
 
@@ -526,7 +610,10 @@ The roadmap may close when the default fresh native quick installer, existing
 ownership transitions, release verification, deterministic qualification, and
 operator documentation have one coherent authority with no Python dependency
 on the normal Rust path and no medium-or-higher unresolved correctness or
-security findings.
+security findings; and when every release-related workflow derives the release
+version from the repository authority, the release workflow contract is checked
+in ordinary CI, and the repository's ignore rules and tracked state agree.
+
 
 ## 12. Milestone status
 
@@ -537,3 +624,5 @@ security findings.
 | 3 | closed | `plans/implementation/deployment-packaging/003-config-publication-ownership-corrective.md` | `plans/closure/deployment-packaging/003-status.md` | none |
 | 4 | closed | `plans/archive/implementation/deployment-packaging/004-shell-command-discovery-and-activation-corrective.md` | `plans/closure/deployment-packaging/004-status.md` | none |
 | 5 | closed | `plans/archive/implementation/deployment-packaging/005-active-path-integration-detection-corrective.md` | `plans/closure/deployment-packaging/005-status.md` | none; M004 closed |
+| 6 | closed | `plans/implementation/deployment-packaging/006-release-artifact-version-derivation-and-artifact-hygiene.md` | `plans/closure/deployment-packaging/006-status.md` | none; closed through M007 |
+| 7 | closed | `plans/implementation/deployment-packaging/007-release-action-pin-enforcement-and-guard-correction.md` | `plans/closure/deployment-packaging/007-status.md` | none |

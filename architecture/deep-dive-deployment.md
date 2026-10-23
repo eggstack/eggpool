@@ -62,9 +62,9 @@ never the default.
 
 ## Operational tooling
 
-The `scripts/` directory (26 `.py` modules besides `__init__.py`, plus
-`install.sh`/`smoke_codex_compat.sh`) and `tests/tooling/` (21 `.py` files:
-20 `test_*` modules plus `__init__.py`) contain release,
+The `scripts/` directory (28 `.py` modules besides `__init__.py`, plus
+`install.sh`/`smoke_codex_compat.sh`) and `tests/tooling/` (31 `.py` files:
+30 `test_*` modules plus `__init__.py`) contain release,
 package-boundary, installer, portability, and qualification tooling only.
 There is no Python runtime fallback; never import the retired application.
 The most relevant commands are
@@ -120,6 +120,40 @@ execute-qualify that binary, and publishing an unexecuted binary would
 violate the per-target qualification rule (Intel Mac operators build the
  helper from source with `cargo build --bin eggpool-connect --release`).
 See `docs/releasing.md` for the release/rollback operator boundary.
+
+## Release workflow validation
+
+`scripts/validate_release_workflow.py` owns the release workflow contract and
+covers three release-related workflows: `.github/workflows/release.yml`,
+`.github/workflows/qualification-release-artifacts.yml`, and
+`.github/workflows/qualification-public-release.yml`. The release workflow
+keeps the full publication contract (tag trigger, pinned actions, separated
+publish authority, exact-bundle PyPI recovery); the two qualification
+workflows keep the derived-version contract (dispatch-only, read-only, no
+repository secrets). `.github/workflows/ci.yml` invokes the validator for all
+three on every push and pull request, so a drift in the release contract is
+caught in ordinary review instead of only when a tag is about to publish. The
+single-file invocation `scripts/validate_release_workflow.py
+.github/workflows/release.yml` still works and is what `release.yml` itself
+runs.
+
+The shared rule is the derived version. A covered workflow must take its
+version from the repository's version authority
+(`scripts/validate_release_identity.py`, which resolves the release catalog
+and cross-checks `rust/Cargo.toml`), publish it as a job output, and consume
+it in the artifact globs and the version assertions. A catalogued EggPool
+version literal in any covered workflow fails validation, and a workflow that
+omits the version gate fails validation. The release identity rules, the
+publication gate, the action pins, the release artifact format, the manifest
+schema, and the installed-owner detection are unchanged.
+
+`artifacts/qualification/` is retained closure evidence, not generated
+output: the closure records cite the qualification runs and two committed
+tooling tests read them. The `.gitignore` rule is narrowed accordingly, so
+the ignored generated run output and the tracked evidence no longer overlap.
+The same reasoning applies to the dashboard parity tooling's default report
+paths under `migration-rs/closure/qualification/`, which are tracked so a
+clean clone resolves them.
 
 ## Native tests (not a runtime fallback)
 

@@ -1,0 +1,1085 @@
+{
+  "candidate_sha": "b13b8664dc782b1a6d1b15c3ab5695af2af91a16",
+  "dom_comparisons": [
+    {
+      "mismatches": [
+        "status 200/401"
+      ],
+      "route": "/reliability",
+      "state": "empty",
+      "status": "mismatch"
+    },
+    {
+      "mismatches": [
+        "status 200/401"
+      ],
+      "route": "/",
+      "state": "empty",
+      "status": "mismatch"
+    },
+    {
+      "mismatches": [
+        "status 200/401"
+      ],
+      "route": "/accounts",
+      "state": "empty",
+      "status": "mismatch"
+    },
+    {
+      "mismatches": [
+        "status 200/401"
+      ],
+      "route": "/models",
+      "state": "empty",
+      "status": "mismatch"
+    },
+    {
+      "mismatches": [
+        "status 200/401"
+      ],
+      "route": "/models/example-model",
+      "state": "empty",
+      "status": "mismatch"
+    },
+    {
+      "mismatches": [
+        "status 200/401"
+      ],
+      "route": "/latency",
+      "state": "empty",
+      "status": "mismatch"
+    },
+    {
+      "mismatches": [
+        "status 200/401"
+      ],
+      "route": "/events",
+      "state": "empty",
+      "status": "mismatch"
+    },
+    {
+      "mismatches": [
+        "status 200/401"
+      ],
+      "route": "/timeseries",
+      "state": "empty",
+      "status": "mismatch"
+    },
+    {
+      "mismatches": [
+        "status 200/401"
+      ],
+      "route": "/bandwidth",
+      "state": "empty",
+      "status": "mismatch"
+    },
+    {
+      "mismatches": [
+        "status 200/401"
+      ],
+      "route": "/pings",
+      "state": "empty",
+      "status": "mismatch"
+    },
+    {
+      "mismatches": [
+        "status 200/401"
+      ],
+      "route": "/routing",
+      "state": "empty",
+      "status": "mismatch"
+    },
+    {
+      "mismatches": [
+        "status 200/401"
+      ],
+      "route": "/traces",
+      "state": "empty",
+      "status": "mismatch"
+    },
+    {
+      "mismatches": [
+        "status 200/401"
+      ],
+      "route": "/runtime",
+      "state": "empty",
+      "status": "mismatch"
+    },
+    {
+      "mismatches": [
+        "status 200/401"
+      ],
+      "route": "/cache",
+      "state": "empty",
+      "status": "mismatch"
+    },
+    {
+      "kind": "api",
+      "mismatches": [
+        "dashboard API status differs for /api/timeseries: 200/401"
+      ],
+      "route": "/api/timeseries",
+      "state": "empty",
+      "status": "mismatch"
+    },
+    {
+      "kind": "api",
+      "mismatches": [
+        "dashboard API status differs for /api/timeseries/grouped: 200/401"
+      ],
+      "route": "/api/timeseries/grouped",
+      "state": "empty",
+      "status": "mismatch"
+    },
+    {
+      "kind": "api",
+      "mismatches": [
+        "dashboard API status differs for /api/stats/summary: 200/401"
+      ],
+      "route": "/api/stats/summary",
+      "state": "empty",
+      "status": "mismatch"
+    },
+    {
+      "kind": "api",
+      "mismatches": [
+        "dashboard API status differs for /api/stats/transcoding: 200/401"
+      ],
+      "route": "/api/stats/transcoding",
+      "state": "empty",
+      "status": "mismatch"
+    },
+    {
+      "kind": "api",
+      "mismatches": [
+        "dashboard API status differs for /api/stats/cache-observability: 200/401"
+      ],
+      "route": "/api/stats/cache-observability",
+      "state": "empty",
+      "status": "mismatch"
+    },
+    {
+      "kind": "api",
+      "mismatches": [
+        "dashboard API status differs for /api/stats/canonical-request-segmentation: 200/401"
+      ],
+      "route": "/api/stats/canonical-request-segmentation",
+      "state": "empty",
+      "status": "mismatch"
+    },
+    {
+      "kind": "api",
+      "mismatches": [
+        "dashboard API status differs for /api/stats/cache-stability: 200/401"
+      ],
+      "route": "/api/stats/cache-stability",
+      "state": "empty",
+      "status": "mismatch"
+    },
+    {
+      "kind": "api",
+      "mismatches": [
+        "dashboard API status differs for /api/stats/request-shaping: 200/401"
+      ],
+      "route": "/api/stats/request-shaping",
+      "state": "empty",
+      "status": "mismatch"
+    },
+    {
+      "kind": "shared-shell",
+      "mismatches": [
+        "shared shell differs for /reliability at $/#document[0]/html[1]/body[1]/header[2]/nav[0] (children: ['a', 'a', 'a', 'a', 'a', 'a', 'a', 'a', 'a', 'a', 'a', 'a', 'a', 'form'] != ['a', 'a', 'a', 'a', 'a', 'a', 'a', 'a', 'a', 'a', 'a', 'a', 'a', 'a', 'a', 'a', 'a', 'form'])"
+      ],
+      "route": "/reliability",
+      "state": "populated",
+      "status": "mismatch"
+    },
+    {
+      "mismatches": [
+        "complete DOM tree differs for /reliability at $/#document[0]/html[1]/body[1]/header[2]/nav[0] (children: ['a', 'a', 'a', 'a', 'a', 'a', 'a', 'a', 'a', 'a', 'a', 'a', 'a', 'form'] != ['a', 'a', 'a', 'a', 'a', 'a', 'a', 'a', 'a', 'a', 'a', 'a', 'a', 'a', 'a', 'a', 'a', 'form'])"
+      ],
+      "route": "/reliability",
+      "state": "populated",
+      "status": "mismatch"
+    },
+    {
+      "kind": "shared-shell",
+      "mismatches": [
+        "shared shell differs for / at $/#document[0]/html[1]/body[1]/header[2]/nav[0] (children: ['a', 'a', 'a', 'a', 'a', 'a', 'a', 'a', 'a', 'a', 'a', 'a', 'a', 'form'] != ['a', 'a', 'a', 'a', 'a', 'a', 'a', 'a', 'a', 'a', 'a', 'a', 'a', 'a', 'a', 'a', 'a', 'form'])"
+      ],
+      "route": "/",
+      "state": "populated",
+      "status": "mismatch"
+    },
+    {
+      "mismatches": [
+        "complete DOM tree differs for / at $/#document[0]/html[1]/body[1]/header[2]/nav[0] (children: ['a', 'a', 'a', 'a', 'a', 'a', 'a', 'a', 'a', 'a', 'a', 'a', 'a', 'form'] != ['a', 'a', 'a', 'a', 'a', 'a', 'a', 'a', 'a', 'a', 'a', 'a', 'a', 'a', 'a', 'a', 'a', 'form'])"
+      ],
+      "route": "/",
+      "state": "populated",
+      "status": "mismatch"
+    },
+    {
+      "kind": "shared-shell",
+      "mismatches": [
+        "shared shell differs for /accounts at $/#document[0]/html[1]/body[1]/header[2]/nav[0] (children: ['a', 'a', 'a', 'a', 'a', 'a', 'a', 'a', 'a', 'a', 'a', 'a', 'a', 'form'] != ['a', 'a', 'a', 'a', 'a', 'a', 'a', 'a', 'a', 'a', 'a', 'a', 'a', 'a', 'a', 'a', 'a', 'form'])"
+      ],
+      "route": "/accounts",
+      "state": "populated",
+      "status": "mismatch"
+    },
+    {
+      "mismatches": [
+        "complete DOM tree differs for /accounts at $/#document[0]/html[1]/body[1]/header[2]/nav[0] (children: ['a', 'a', 'a', 'a', 'a', 'a', 'a', 'a', 'a', 'a', 'a', 'a', 'a', 'form'] != ['a', 'a', 'a', 'a', 'a', 'a', 'a', 'a', 'a', 'a', 'a', 'a', 'a', 'a', 'a', 'a', 'a', 'form'])"
+      ],
+      "route": "/accounts",
+      "state": "populated",
+      "status": "mismatch"
+    },
+    {
+      "kind": "shared-shell",
+      "mismatches": [
+        "shared shell differs for /models at $/#document[0]/html[1]/body[1]/header[2]/nav[0] (children: ['a', 'a', 'a', 'a', 'a', 'a', 'a', 'a', 'a', 'a', 'a', 'a', 'a', 'form'] != ['a', 'a', 'a', 'a', 'a', 'a', 'a', 'a', 'a', 'a', 'a', 'a', 'a', 'a', 'a', 'a', 'a', 'form'])"
+      ],
+      "route": "/models",
+      "state": "populated",
+      "status": "mismatch"
+    },
+    {
+      "mismatches": [
+        "complete DOM tree differs for /models at $/#document[0]/html[1]/body[1]/header[2]/nav[0] (children: ['a', 'a', 'a', 'a', 'a', 'a', 'a', 'a', 'a', 'a', 'a', 'a', 'a', 'form'] != ['a', 'a', 'a', 'a', 'a', 'a', 'a', 'a', 'a', 'a', 'a', 'a', 'a', 'a', 'a', 'a', 'a', 'form'])"
+      ],
+      "route": "/models",
+      "state": "populated",
+      "status": "mismatch"
+    },
+    {
+      "kind": "shared-shell",
+      "mismatches": [
+        "shared shell differs for /models/example-model at $/#document[0]/html[1]/body[1]/header[2]/nav[0] (children: ['a', 'a', 'a', 'a', 'a', 'a', 'a', 'a', 'a', 'a', 'a', 'a', 'a', 'form'] != ['a', 'a', 'a', 'a', 'a', 'a', 'a', 'a', 'a', 'a', 'a', 'a', 'a', 'a', 'a', 'a', 'a', 'form'])"
+      ],
+      "route": "/models/example-model",
+      "state": "populated",
+      "status": "mismatch"
+    },
+    {
+      "mismatches": [
+        "complete DOM tree differs for /models/example-model at $/#document[0]/html[1]/body[1]/header[2]/nav[0] (children: ['a', 'a', 'a', 'a', 'a', 'a', 'a', 'a', 'a', 'a', 'a', 'a', 'a', 'form'] != ['a', 'a', 'a', 'a', 'a', 'a', 'a', 'a', 'a', 'a', 'a', 'a', 'a', 'a', 'a', 'a', 'a', 'form'])"
+      ],
+      "route": "/models/example-model",
+      "state": "populated",
+      "status": "mismatch"
+    },
+    {
+      "kind": "shared-shell",
+      "mismatches": [
+        "shared shell differs for /latency at $/#document[0]/html[1]/body[1]/header[2]/nav[0] (children: ['a', 'a', 'a', 'a', 'a', 'a', 'a', 'a', 'a', 'a', 'a', 'a', 'a', 'form'] != ['a', 'a', 'a', 'a', 'a', 'a', 'a', 'a', 'a', 'a', 'a', 'a', 'a', 'a', 'a', 'a', 'a', 'form'])"
+      ],
+      "route": "/latency",
+      "state": "populated",
+      "status": "mismatch"
+    },
+    {
+      "mismatches": [
+        "complete DOM tree differs for /latency at $/#document[0]/html[1]/body[1]/header[2]/nav[0] (children: ['a', 'a', 'a', 'a', 'a', 'a', 'a', 'a', 'a', 'a', 'a', 'a', 'a', 'form'] != ['a', 'a', 'a', 'a', 'a', 'a', 'a', 'a', 'a', 'a', 'a', 'a', 'a', 'a', 'a', 'a', 'a', 'form'])"
+      ],
+      "route": "/latency",
+      "state": "populated",
+      "status": "mismatch"
+    },
+    {
+      "kind": "shared-shell",
+      "mismatches": [
+        "shared shell differs for /events at $/#document[0]/html[1]/body[1]/header[2]/nav[0] (children: ['a', 'a', 'a', 'a', 'a', 'a', 'a', 'a', 'a', 'a', 'a', 'a', 'a', 'form'] != ['a', 'a', 'a', 'a', 'a', 'a', 'a', 'a', 'a', 'a', 'a', 'a', 'a', 'a', 'a', 'a', 'a', 'form'])"
+      ],
+      "route": "/events",
+      "state": "populated",
+      "status": "mismatch"
+    },
+    {
+      "mismatches": [
+        "complete DOM tree differs for /events at $/#document[0]/html[1]/body[1]/header[2]/nav[0] (children: ['a', 'a', 'a', 'a', 'a', 'a', 'a', 'a', 'a', 'a', 'a', 'a', 'a', 'form'] != ['a', 'a', 'a', 'a', 'a', 'a', 'a', 'a', 'a', 'a', 'a', 'a', 'a', 'a', 'a', 'a', 'a', 'form'])"
+      ],
+      "route": "/events",
+      "state": "populated",
+      "status": "mismatch"
+    },
+    {
+      "kind": "shared-shell",
+      "mismatches": [
+        "shared shell differs for /timeseries at $/#document[0]/html[1]/body[1]/header[2]/nav[0] (children: ['a', 'a', 'a', 'a', 'a', 'a', 'a', 'a', 'a', 'a', 'a', 'a', 'a', 'form'] != ['a', 'a', 'a', 'a', 'a', 'a', 'a', 'a', 'a', 'a', 'a', 'a', 'a', 'a', 'a', 'a', 'a', 'form'])"
+      ],
+      "route": "/timeseries",
+      "state": "populated",
+      "status": "mismatch"
+    },
+    {
+      "mismatches": [
+        "complete DOM tree differs for /timeseries at $/#document[0]/html[1]/body[1]/header[2]/nav[0] (children: ['a', 'a', 'a', 'a', 'a', 'a', 'a', 'a', 'a', 'a', 'a', 'a', 'a', 'form'] != ['a', 'a', 'a', 'a', 'a', 'a', 'a', 'a', 'a', 'a', 'a', 'a', 'a', 'a', 'a', 'a', 'a', 'form'])"
+      ],
+      "route": "/timeseries",
+      "state": "populated",
+      "status": "mismatch"
+    },
+    {
+      "kind": "shared-shell",
+      "mismatches": [
+        "shared shell differs for /bandwidth at $/#document[0]/html[1]/body[1]/header[2]/nav[0] (children: ['a', 'a', 'a', 'a', 'a', 'a', 'a', 'a', 'a', 'a', 'a', 'a', 'a', 'form'] != ['a', 'a', 'a', 'a', 'a', 'a', 'a', 'a', 'a', 'a', 'a', 'a', 'a', 'a', 'a', 'a', 'a', 'form'])"
+      ],
+      "route": "/bandwidth",
+      "state": "populated",
+      "status": "mismatch"
+    },
+    {
+      "mismatches": [
+        "complete DOM tree differs for /bandwidth at $/#document[0]/html[1]/body[1]/header[2]/nav[0] (children: ['a', 'a', 'a', 'a', 'a', 'a', 'a', 'a', 'a', 'a', 'a', 'a', 'a', 'form'] != ['a', 'a', 'a', 'a', 'a', 'a', 'a', 'a', 'a', 'a', 'a', 'a', 'a', 'a', 'a', 'a', 'a', 'form'])"
+      ],
+      "route": "/bandwidth",
+      "state": "populated",
+      "status": "mismatch"
+    },
+    {
+      "kind": "shared-shell",
+      "mismatches": [
+        "shared shell differs for /pings at $/#document[0]/html[1]/body[1]/header[2]/nav[0] (children: ['a', 'a', 'a', 'a', 'a', 'a', 'a', 'a', 'a', 'a', 'a', 'a', 'a', 'form'] != ['a', 'a', 'a', 'a', 'a', 'a', 'a', 'a', 'a', 'a', 'a', 'a', 'a', 'a', 'a', 'a', 'a', 'form'])"
+      ],
+      "route": "/pings",
+      "state": "populated",
+      "status": "mismatch"
+    },
+    {
+      "mismatches": [
+        "complete DOM tree differs for /pings at $/#document[0]/html[1]/body[1]/header[2]/nav[0] (children: ['a', 'a', 'a', 'a', 'a', 'a', 'a', 'a', 'a', 'a', 'a', 'a', 'a', 'form'] != ['a', 'a', 'a', 'a', 'a', 'a', 'a', 'a', 'a', 'a', 'a', 'a', 'a', 'a', 'a', 'a', 'a', 'form'])"
+      ],
+      "route": "/pings",
+      "state": "populated",
+      "status": "mismatch"
+    },
+    {
+      "kind": "shared-shell",
+      "mismatches": [
+        "shared shell differs for /routing at $/#document[0]/html[1]/body[1]/header[2]/nav[0] (children: ['a', 'a', 'a', 'a', 'a', 'a', 'a', 'a', 'a', 'a', 'a', 'a', 'a', 'form'] != ['a', 'a', 'a', 'a', 'a', 'a', 'a', 'a', 'a', 'a', 'a', 'a', 'a', 'a', 'a', 'a', 'a', 'form'])"
+      ],
+      "route": "/routing",
+      "state": "populated",
+      "status": "mismatch"
+    },
+    {
+      "mismatches": [
+        "complete DOM tree differs for /routing at $/#document[0]/html[1]/body[1]/header[2]/nav[0] (children: ['a', 'a', 'a', 'a', 'a', 'a', 'a', 'a', 'a', 'a', 'a', 'a', 'a', 'form'] != ['a', 'a', 'a', 'a', 'a', 'a', 'a', 'a', 'a', 'a', 'a', 'a', 'a', 'a', 'a', 'a', 'a', 'form'])"
+      ],
+      "route": "/routing",
+      "state": "populated",
+      "status": "mismatch"
+    },
+    {
+      "kind": "shared-shell",
+      "mismatches": [
+        "shared shell differs for /traces at $/#document[0]/html[1]/body[1]/header[1]/h1[0] (attributes: href)"
+      ],
+      "route": "/traces",
+      "state": "populated",
+      "status": "mismatch"
+    },
+    {
+      "mismatches": [
+        "complete DOM tree differs for /traces at $/#document[0]/html[1]/body[1]/header[1]/h1[0] (attributes: href)"
+      ],
+      "route": "/traces",
+      "state": "populated",
+      "status": "mismatch"
+    },
+    {
+      "kind": "shared-shell",
+      "mismatches": [
+        "shared shell differs for /runtime at $/#document[0]/html[1]/body[1]/header[1]/h1[0] (attributes: href)"
+      ],
+      "route": "/runtime",
+      "state": "populated",
+      "status": "mismatch"
+    },
+    {
+      "mismatches": [
+        "complete DOM tree differs for /runtime at $/#document[0]/html[1]/body[1]/header[1]/h1[0] (attributes: href)"
+      ],
+      "route": "/runtime",
+      "state": "populated",
+      "status": "mismatch"
+    },
+    {
+      "kind": "shared-shell",
+      "mismatches": [
+        "shared shell differs for /cache at $/#document[0]/html[1]/body[1]/header[2]/nav[0] (children: ['a', 'a', 'a', 'a', 'a', 'a', 'a', 'a', 'a', 'a', 'a', 'a', 'a', 'form'] != ['a', 'a', 'a', 'a', 'a', 'a', 'a', 'a', 'a', 'a', 'a', 'a', 'a', 'a', 'a', 'a', 'a', 'form'])"
+      ],
+      "route": "/cache",
+      "state": "populated",
+      "status": "mismatch"
+    },
+    {
+      "mismatches": [
+        "complete DOM tree differs for /cache at $/#document[0]/html[1]/body[1]/header[2]/nav[0] (children: ['a', 'a', 'a', 'a', 'a', 'a', 'a', 'a', 'a', 'a', 'a', 'a', 'a', 'form'] != ['a', 'a', 'a', 'a', 'a', 'a', 'a', 'a', 'a', 'a', 'a', 'a', 'a', 'a', 'a', 'a', 'a', 'form'])"
+      ],
+      "route": "/cache",
+      "state": "populated",
+      "status": "mismatch"
+    },
+    {
+      "kind": "api",
+      "mismatches": [],
+      "route": "/api/timeseries",
+      "state": "populated",
+      "status": "pass"
+    },
+    {
+      "kind": "api",
+      "mismatches": [],
+      "route": "/api/timeseries/grouped",
+      "state": "populated",
+      "status": "pass"
+    },
+    {
+      "kind": "api",
+      "mismatches": [],
+      "route": "/api/stats/summary",
+      "state": "populated",
+      "status": "pass"
+    },
+    {
+      "kind": "api",
+      "mismatches": [],
+      "route": "/api/stats/transcoding",
+      "state": "populated",
+      "status": "pass"
+    },
+    {
+      "kind": "api",
+      "mismatches": [
+        "dashboard API status differs for /api/stats/cache-observability: 500/200"
+      ],
+      "route": "/api/stats/cache-observability",
+      "state": "populated",
+      "status": "mismatch"
+    },
+    {
+      "kind": "api",
+      "mismatches": [],
+      "route": "/api/stats/canonical-request-segmentation",
+      "state": "populated",
+      "status": "pass"
+    },
+    {
+      "kind": "api",
+      "mismatches": [],
+      "route": "/api/stats/cache-stability",
+      "state": "populated",
+      "status": "pass"
+    },
+    {
+      "kind": "api",
+      "mismatches": [
+        "dashboard JSON projection differs for /api/stats/request-shaping"
+      ],
+      "route": "/api/stats/request-shaping",
+      "state": "populated",
+      "status": "mismatch"
+    },
+    {
+      "kind": "shared-shell",
+      "mismatches": [
+        "shared shell differs for /models/q012-chat-model at $/#document[0]/html[1]/body[1]/header[2]/nav[0] (children: ['a', 'a', 'a', 'a', 'a', 'a', 'a', 'a', 'a', 'a', 'a', 'a', 'a', 'form'] != ['a', 'a', 'a', 'a', 'a', 'a', 'a', 'a', 'a', 'a', 'a', 'a', 'a', 'a', 'a', 'a', 'a', 'form'])"
+      ],
+      "route": "/models/q012-chat-model",
+      "state": "populated-model-info",
+      "status": "mismatch"
+    },
+    {
+      "kind": "m003-model-info-detail",
+      "mismatches": [
+        "complete DOM tree differs for /models/q012-chat-model at $/#document[0]/html[1]/body[1]/header[2]/nav[0] (children: ['a', 'a', 'a', 'a', 'a', 'a', 'a', 'a', 'a', 'a', 'a', 'a', 'a', 'form'] != ['a', 'a', 'a', 'a', 'a', 'a', 'a', 'a', 'a', 'a', 'a', 'a', 'a', 'a', 'a', 'a', 'a', 'form'])"
+      ],
+      "route": "/models/q012-chat-model",
+      "state": "populated-model-info",
+      "status": "mismatch"
+    },
+    {
+      "inventory": 54,
+      "route": "static-assets",
+      "status": "pass"
+    },
+    {
+      "implementation": "python",
+      "kind": "auth",
+      "mismatches": [],
+      "route": "/",
+      "state": "private",
+      "status": "pass"
+    },
+    {
+      "implementation": "rust",
+      "kind": "auth",
+      "mismatches": [],
+      "route": "/",
+      "state": "private",
+      "status": "pass"
+    },
+    {
+      "implementation": "python",
+      "kind": "auth",
+      "mismatches": [],
+      "route": "/accounts",
+      "state": "private",
+      "status": "pass"
+    },
+    {
+      "implementation": "rust",
+      "kind": "auth",
+      "mismatches": [],
+      "route": "/accounts",
+      "state": "private",
+      "status": "pass"
+    },
+    {
+      "implementation": "python",
+      "kind": "auth",
+      "mismatches": [],
+      "route": "/models",
+      "state": "private",
+      "status": "pass"
+    },
+    {
+      "implementation": "rust",
+      "kind": "auth",
+      "mismatches": [],
+      "route": "/models",
+      "state": "private",
+      "status": "pass"
+    },
+    {
+      "implementation": "python",
+      "kind": "auth",
+      "mismatches": [],
+      "route": "/models/example-model",
+      "state": "private",
+      "status": "pass"
+    },
+    {
+      "implementation": "rust",
+      "kind": "auth",
+      "mismatches": [],
+      "route": "/models/example-model",
+      "state": "private",
+      "status": "pass"
+    },
+    {
+      "implementation": "python",
+      "kind": "auth",
+      "mismatches": [],
+      "route": "/latency",
+      "state": "private",
+      "status": "pass"
+    },
+    {
+      "implementation": "rust",
+      "kind": "auth",
+      "mismatches": [],
+      "route": "/latency",
+      "state": "private",
+      "status": "pass"
+    },
+    {
+      "implementation": "python",
+      "kind": "auth",
+      "mismatches": [],
+      "route": "/events",
+      "state": "private",
+      "status": "pass"
+    },
+    {
+      "implementation": "rust",
+      "kind": "auth",
+      "mismatches": [],
+      "route": "/events",
+      "state": "private",
+      "status": "pass"
+    },
+    {
+      "implementation": "python",
+      "kind": "auth",
+      "mismatches": [],
+      "route": "/timeseries",
+      "state": "private",
+      "status": "pass"
+    },
+    {
+      "implementation": "rust",
+      "kind": "auth",
+      "mismatches": [],
+      "route": "/timeseries",
+      "state": "private",
+      "status": "pass"
+    },
+    {
+      "implementation": "python",
+      "kind": "auth",
+      "mismatches": [],
+      "route": "/bandwidth",
+      "state": "private",
+      "status": "pass"
+    },
+    {
+      "implementation": "rust",
+      "kind": "auth",
+      "mismatches": [],
+      "route": "/bandwidth",
+      "state": "private",
+      "status": "pass"
+    },
+    {
+      "implementation": "python",
+      "kind": "auth",
+      "mismatches": [],
+      "route": "/pings",
+      "state": "private",
+      "status": "pass"
+    },
+    {
+      "implementation": "rust",
+      "kind": "auth",
+      "mismatches": [],
+      "route": "/pings",
+      "state": "private",
+      "status": "pass"
+    },
+    {
+      "implementation": "python",
+      "kind": "auth",
+      "mismatches": [],
+      "route": "/reliability",
+      "state": "private",
+      "status": "pass"
+    },
+    {
+      "implementation": "rust",
+      "kind": "auth",
+      "mismatches": [],
+      "route": "/reliability",
+      "state": "private",
+      "status": "pass"
+    },
+    {
+      "implementation": "python",
+      "kind": "auth",
+      "mismatches": [],
+      "route": "/routing",
+      "state": "private",
+      "status": "pass"
+    },
+    {
+      "implementation": "rust",
+      "kind": "auth",
+      "mismatches": [],
+      "route": "/routing",
+      "state": "private",
+      "status": "pass"
+    },
+    {
+      "implementation": "python",
+      "kind": "auth",
+      "mismatches": [],
+      "route": "/traces",
+      "state": "private",
+      "status": "pass"
+    },
+    {
+      "implementation": "rust",
+      "kind": "auth",
+      "mismatches": [],
+      "route": "/traces",
+      "state": "private",
+      "status": "pass"
+    },
+    {
+      "implementation": "python",
+      "kind": "auth",
+      "mismatches": [],
+      "route": "/runtime",
+      "state": "private",
+      "status": "pass"
+    },
+    {
+      "implementation": "rust",
+      "kind": "auth",
+      "mismatches": [],
+      "route": "/runtime",
+      "state": "private",
+      "status": "pass"
+    },
+    {
+      "implementation": "python",
+      "kind": "auth",
+      "mismatches": [],
+      "route": "/cache",
+      "state": "private",
+      "status": "pass"
+    },
+    {
+      "implementation": "rust",
+      "kind": "auth",
+      "mismatches": [],
+      "route": "/cache",
+      "state": "private",
+      "status": "pass"
+    },
+    {
+      "implementation": "python",
+      "kind": "auth",
+      "mismatches": [],
+      "route": "/api/timeseries",
+      "state": "private",
+      "status": "pass"
+    },
+    {
+      "implementation": "rust",
+      "kind": "auth",
+      "mismatches": [],
+      "route": "/api/timeseries",
+      "state": "private",
+      "status": "pass"
+    },
+    {
+      "implementation": "python",
+      "kind": "auth",
+      "mismatches": [],
+      "route": "/api/timeseries/grouped",
+      "state": "private",
+      "status": "pass"
+    },
+    {
+      "implementation": "rust",
+      "kind": "auth",
+      "mismatches": [],
+      "route": "/api/timeseries/grouped",
+      "state": "private",
+      "status": "pass"
+    },
+    {
+      "implementation": "python",
+      "kind": "auth",
+      "mismatches": [],
+      "route": "/api/stats/summary",
+      "state": "private",
+      "status": "pass"
+    },
+    {
+      "implementation": "rust",
+      "kind": "auth",
+      "mismatches": [],
+      "route": "/api/stats/summary",
+      "state": "private",
+      "status": "pass"
+    },
+    {
+      "implementation": "python",
+      "kind": "auth",
+      "mismatches": [],
+      "route": "/api/stats/transcoding",
+      "state": "private",
+      "status": "pass"
+    },
+    {
+      "implementation": "rust",
+      "kind": "auth",
+      "mismatches": [],
+      "route": "/api/stats/transcoding",
+      "state": "private",
+      "status": "pass"
+    },
+    {
+      "implementation": "python",
+      "kind": "auth",
+      "mismatches": [],
+      "route": "/api/stats/cache-observability",
+      "state": "private",
+      "status": "pass"
+    },
+    {
+      "implementation": "rust",
+      "kind": "auth",
+      "mismatches": [],
+      "route": "/api/stats/cache-observability",
+      "state": "private",
+      "status": "pass"
+    },
+    {
+      "implementation": "python",
+      "kind": "auth",
+      "mismatches": [],
+      "route": "/api/stats/canonical-request-segmentation",
+      "state": "private",
+      "status": "pass"
+    },
+    {
+      "implementation": "rust",
+      "kind": "auth",
+      "mismatches": [],
+      "route": "/api/stats/canonical-request-segmentation",
+      "state": "private",
+      "status": "pass"
+    },
+    {
+      "implementation": "python",
+      "kind": "auth",
+      "mismatches": [],
+      "route": "/api/stats/cache-stability",
+      "state": "private",
+      "status": "pass"
+    },
+    {
+      "implementation": "rust",
+      "kind": "auth",
+      "mismatches": [],
+      "route": "/api/stats/cache-stability",
+      "state": "private",
+      "status": "pass"
+    },
+    {
+      "implementation": "python",
+      "kind": "auth",
+      "mismatches": [],
+      "route": "/api/stats/request-shaping",
+      "state": "private",
+      "status": "pass"
+    },
+    {
+      "implementation": "rust",
+      "kind": "auth",
+      "mismatches": [],
+      "route": "/api/stats/request-shaping",
+      "state": "private",
+      "status": "pass"
+    }
+  ],
+  "duration_ms": 9589,
+  "environment": {
+    "browser": "isolated headless Chrome via Chrome DevTools Protocol",
+    "os": "darwin",
+    "python": "3.11.9"
+  },
+  "fixture": {
+    "accounts": 3,
+    "attempts": 6,
+    "events": 2,
+    "models": 3,
+    "path": "migration-rs/fixtures/dashboard/q012-populated.sql",
+    "pings": 3,
+    "providers": 2,
+    "requests": 5,
+    "routing_decisions": 5,
+    "secrets": "none",
+    "sha256": "3196d41b840d352de2c977647457808f5eda85a57cc5ec45f6b98d86c1854fce"
+  },
+  "fixture_matrix": [
+    {
+      "database": "fresh canonical schema",
+      "state": "empty"
+    },
+    {
+      "database": "one copied canonical SQLite fixture",
+      "state": "populated"
+    },
+    {
+      "database": "same secret-free fixture, model-info source work disabled",
+      "route": "/models/q012-chat-model",
+      "state": "populated-model-info"
+    },
+    {
+      "classes": [
+        "multiple providers",
+        "multiple accounts",
+        "multiple models",
+        "long/unicode/HTML escaping",
+        "error and retry",
+        "missing model-info"
+      ],
+      "state": "populated"
+    },
+    {
+      "classes": [
+        "unauthorized",
+        "authorized",
+        "all dashboard pages and JSON routes"
+      ],
+      "state": "private"
+    }
+  ],
+  "mismatch_count": 54,
+  "mismatch_groups": {
+    "overview-account-model": 12,
+    "runtime-cache": 6,
+    "shared-shell-and-api": 10,
+    "telemetry-routing-trace": 26
+  },
+  "page_routes": [
+    "/",
+    "/accounts",
+    "/models",
+    "/models/example-model",
+    "/latency",
+    "/events",
+    "/timeseries",
+    "/bandwidth",
+    "/pings",
+    "/reliability",
+    "/routing",
+    "/traces",
+    "/runtime",
+    "/cache"
+  ],
+  "parity_status": "gaps",
+  "plan": "Dashboard parity qualification",
+  "python_identity": "python:eggpool:local",
+  "rust_identity": "rust:rust/target/debug/eggpool",
+  "schema_version": "dashboard-parity-current-gaps.v1",
+  "screenshots": {
+    "count": 0,
+    "entries": [],
+    "procedure": "not requested"
+  },
+  "shutdown_restart": null,
+  "static_assets": {
+    "count": 54,
+    "oracle_candidate_differences": [
+      {
+        "candidate_sha256": "33edc8fb7b48551e56fbe823f9ce37445359848593de8b193872e9e6df663a50",
+        "oracle_sha256": "3f399629eb182de5689cb475b02f60dc468969d5e8fead059a6ebda82222ac6d",
+        "path": "static/dashboard.css",
+        "reason": "bound mobile panel intrinsic width within its table scroll wrapper, and let the sixteen-entry top navigation reflow inside the topbar instead of forcing one nowrap row that overflowed a 1280px viewport"
+      },
+      {
+        "candidate_sha256": "e801eca08461c88250934ef04e87c6d94fed9c381e460808e5378bc76c156b0d",
+        "oracle_sha256": "e08fcc2259cd25a0fbed62bafeb37520cddc2931c6600123734e0404f31d989f",
+        "path": "static/dashboard.js",
+        "reason": "submit the timeseries filter form natively so the server renders the chart, tables, and URL from one query"
+      }
+    ],
+    "paths": [
+      "static/chart.umd.min.js",
+      "static/dashboard.css",
+      "static/dashboard.js",
+      "static/favicon.svg",
+      "themes/Booberry.toml",
+      "themes/Catppuccin Latte.toml",
+      "themes/Catppuccin Macchiato.toml",
+      "themes/Catppuccin Mocha.toml",
+      "themes/Cyber Red.toml",
+      "themes/Cyberpunk.toml",
+      "themes/Dark Green.toml",
+      "themes/Discord (80_ Saturation).toml",
+      "themes/Discord.toml",
+      "themes/Dracula.toml",
+      "themes/Ferra Light.toml",
+      "themes/Flexor Dark.toml",
+      "themes/Gruvbox.toml",
+      "themes/Halcyon Dark.toml",
+      "themes/IntelliJ Light.toml",
+      "themes/Kanagawa.toml",
+      "themes/Macaw Dark.toml",
+      "themes/Macaw Light.toml",
+      "themes/Matrix.toml",
+      "themes/Noctis Lilac.toml",
+      "themes/Nord.toml",
+      "themes/Nostromo Terminal.toml",
+      "themes/One Dark.toml",
+      "themes/Oxocarbon.toml",
+      "themes/Rose Pine Dawn.toml",
+      "themes/Rose Pine Moon.toml",
+      "themes/Rose Pine.toml",
+      "themes/Solarized Dark.toml",
+      "themes/Sonokai.toml",
+      "themes/Tokyo Night Storm.toml",
+      "themes/VESPER.toml",
+      "themes/Zenburn.toml",
+      "themes/acton.toml",
+      "themes/bam.toml",
+      "themes/base16-atelier-forest-light.toml",
+      "themes/berlin.toml",
+      "themes/black but with important highlights.toml",
+      "themes/broc.toml",
+      "themes/cork.toml",
+      "themes/ferra.toml",
+      "themes/forest.toml",
+      "themes/lisbon.toml",
+      "themes/midnight.toml",
+      "themes/oslo.toml",
+      "themes/plum.toml",
+      "themes/portland.toml",
+      "themes/sunset.toml",
+      "themes/tofino.toml",
+      "themes/vanimo.toml",
+      "themes/vik.toml"
+    ],
+    "sha256": "e8a001f28f6c8e7124f08e4ee2a452461f929df559ba40cbd4f7c415f5715671"
+  },
+  "themes": {
+    "count": 51,
+    "names": [
+      "default",
+      "Booberry",
+      "Catppuccin Latte",
+      "Catppuccin Macchiato",
+      "Catppuccin Mocha",
+      "Cyber Red",
+      "Cyberpunk",
+      "Dark Green",
+      "Discord",
+      "Discord (80_ Saturation)",
+      "Dracula",
+      "Ferra Light",
+      "Flexor Dark",
+      "Gruvbox",
+      "Halcyon Dark",
+      "IntelliJ Light",
+      "Kanagawa",
+      "Macaw Dark",
+      "Macaw Light",
+      "Matrix",
+      "Noctis Lilac",
+      "Nord",
+      "Nostromo Terminal",
+      "One Dark",
+      "Oxocarbon",
+      "Rose Pine",
+      "Rose Pine Dawn",
+      "Rose Pine Moon",
+      "Solarized Dark",
+      "Sonokai",
+      "Tokyo Night Storm",
+      "VESPER",
+      "Zenburn",
+      "acton",
+      "bam",
+      "base16-atelier-forest-light",
+      "berlin",
+      "black but with important highlights",
+      "broc",
+      "cork",
+      "ferra",
+      "forest",
+      "lisbon",
+      "midnight",
+      "oslo",
+      "plum",
+      "portland",
+      "sunset",
+      "tofino",
+      "vanimo",
+      "vik"
+    ],
+    "review_set": [
+      "default",
+      "Cyber Red",
+      "Catppuccin Latte",
+      "Cyberpunk"
+    ]
+  }
+}

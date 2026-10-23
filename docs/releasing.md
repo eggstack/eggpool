@@ -12,7 +12,10 @@ Before creating a release tag:
 ~~~bash
 uv run python scripts/check_release_catalog.py
 uv run python scripts/validate_release_identity.py
-uv run python scripts/validate_release_workflow.py .github/workflows/release.yml
+uv run python scripts/validate_release_workflow.py \
+  .github/workflows/release.yml \
+  .github/workflows/qualification-release-artifacts.yml \
+  .github/workflows/qualification-public-release.yml
 uv run python scripts/validate_release_docs.py
 uv run python scripts/validate_runtime_package_boundary.py
 git diff --check
@@ -25,6 +28,12 @@ cannot be built or uploaded as an EggPool release. `Requires-Python >=3.11` on
 the Rust wheel exists for package-manager compatibility when an operator
 explicitly selects a historical Python target, not because the Rust process
 imports or spawns Python.
+
+The release workflow validator also runs on every push and pull request
+through `.github/workflows/ci.yml`, so the release workflow contract is
+checked in ordinary review and not only when a tag is about to publish. The
+single-file invocation `scripts/validate_release_workflow.py
+.github/workflows/release.yml` remains valid.
 
 The release set is exactly:
 
@@ -68,6 +77,50 @@ so the published package is self-contained; `eggpool-connect` stays
 unpublished (GitHub helper asset only). Crate versions are independent of
 the proxy release version. Verify with `cargo search eggpool` (or
 `cargo install eggpool --version <X.Y.Z> --dry-run`) after publishing.
+
+## Derived release version
+
+No release-related workflow carries a version literal. Every covered workflow
+learns the release version from the repository's version authority:
+`scripts/validate_release_identity.py` resolves the version from the release
+catalog and cross-checks `rust/Cargo.toml`, and the workflow publishes the
+result as a job output.
+
+`release.yml` derives the version in its `validate-release` job and consumes
+`needs.validate-release.outputs.version` in every artifact glob, every
+validator argument, and every publication gate. The two qualification
+workflows derive the version the same way in a `resolve-version` job and
+consume `needs.resolve-version.outputs.version`. The public-release
+qualification workflow additionally derives the historical Python rollback
+version from the catalog's `version_authority.historical_python_project_version`,
+so its dispatch inputs default to the repository's own versions instead of a
+copied literal.
+
+The derivation fails closed. A disagreement between the catalog and
+`rust/Cargo.toml` fails the version-resolution job; a built artifact that
+does not carry the derived version fails the wheel qualification and the
+artifact globs. The release artifact naming, the manifest schema, the
+packaging layout, and the publication gate are unchanged.
+
+## Qualification artifact retention
+
+`artifacts/qualification/` holds retained closure evidence: the qualification
+runs that back the plan closure records, and the committed tooling tests that
+read them (`tests/tooling/test_persistence_m004_evidence.py` and
+`tests/tooling/test_on_prem_mmc_tail_attribution.py`). The retained set is
+tracked, so the ignore rule is narrowed to generated run output only:
+`/artifacts/qualification/*` stays ignored except for the retained evidence
+directories and files, which are re-included. No path in the repository is
+simultaneously ignored and tracked, and the closure records that reference
+the retained artifacts still resolve.
+
+Fresh qualification output written by `scripts/qualification_*.py` still lands
+in an ignored path and stays out of the repository unless an operator
+deliberately retains it; `scripts/qualification_ordinary_server.py` is the
+exception, because it writes into the retained
+`artifacts/qualification/on-prem-concurrency-performance/ordinary-server/`
+corpus by default. Retaining new evidence means adding it to the allow-list
+in `.gitignore` and recording the closure reference that needs it.
 
 ## Desktop helper release assets (`eggpool-connect`)
 
