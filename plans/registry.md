@@ -94,7 +94,7 @@ No new runtime, schema or performance claim lands with these plans.
 | Runtime efficiency | closed | `plans/subsystems/runtime-efficiency-roadmap.md` | M001–M003 closed — no successor registered | No M003-dependent plan was unblocked. Persistence M007 has since completed Pi 5/MMC qualification and was rejected on WAL convergence gates; production is unchanged. |
 | Persistence | active | `plans/subsystems/persistence-roadmap.md` | M011 closed — post-M010 roadmap/documentation reconciliation | M009/M010 closures accepted. Documentation/tooling-only corrective; production remains WAL/NORMAL. No technical persistence successor is registered. |
 | Deployment and packaging | active | `plans/subsystems/deployment-packaging-roadmap.md` | M007 closed — release action-pin enforcement and guard correction | Reopened on evidence at baseline `e6822d8f78`: M001–M005 remain closed. M006 is closed through M007; no successor is registered in this subsystem. |
-| Dashboard | active | `plans/subsystems/dashboard-roadmap.md` | M014 ready — operator surface presentation and accessibility corrective | Reopened on evidence at baseline `e6822d8f78`: M001–M013 remain closed. M014 is registered as the intentional frontend change the asset-stability invariant requires; it has no hard dependency, and no successor is registered after it. |
+| Dashboard | closed | `plans/subsystems/dashboard-roadmap.md` | M014 closed — operator surface presentation and accessibility corrective | Reopened on evidence at baseline `e6822d8f78`: M001–M013 remain closed. M014 is closed; the paired browser disposition needs the frozen oracle worktree and a browser, and the stale on-prem browser reference artifact has to be regenerated on hardware. |
 | On-prem user access | closed | `plans/subsystems/on-prem-user-access-roadmap.md` | M024 closed — browser session CSRF delivery and member account surface corrective | Reopened on evidence at baseline `d04ad6831c6e030b7f5fc8a56501fdfecab982bd`: M001–M023 remain closed. `plans/adrs/ADR-0004-browser-session-csrf-delivery-and-account-scoped-sign-in-throttling.md` was accepted on 2026-10-23, and M024 implements that decision; it is closed. |
 | On-prem concurrency performance | active | `plans/subsystems/on-prem-concurrency-performance-roadmap.md` | M002 closed — ordinary-server synthetic baseline recorded | M001's Pi/microSD solo tail attribution stays conditionally closed; M002 authorizes no WAL/SQLite topology change. |
 | Operations CLI | active | `plans/subsystems/operations-cli-roadmap.md` | M003 closed — watchdog start-guard ownership correction | New subsystem roadmap opened at baseline `e6822d8f78` for `rust/src/operations/` and `rust/src/runtime.rs`, which no other roadmap claims as a primary owner. M001 is closed and M002 is closed through M003; no successor is registered in this subsystem. |
@@ -126,21 +126,28 @@ with a typed capability outcome instead of an ordinary selection failure. A
 bundled provider opt-in is explicitly not authorized by it.
 
 `plans/implementation/dashboard/014-operator-surface-presentation-and-accessibility-corrective.md`
-is registered as Dashboard M014 at baseline
-`d04ad6831c6e030b7f5fc8a56501fdfecab982bd`. The dashboard stylesheet declares
-no custom properties of its own, so every page shell that does not link the
-theme stylesheet resolves no variable at all, and the theme stylesheet is
-linked from the shared layout only. The administrative tables are emitted
-without the class the table rules target. The status pills are painted with
-fixed hexadecimal colours that bypass the theme's own semantic tokens. The
-chart loading path depends on Chart.js arriving within a fixed window. The
-chart surface and the refresh indicator are not announced to a screen reader,
-and a cluster of retired frontend code is still carried with no producer in
-the current renderers. The milestone is the intentional, separately reviewed
-frontend change the asset-stability invariant requires, and it keeps the
-oracle divergence record accurate with a reason per divergence. No published
-dashboard field name or shape changes, and no other registered milestone
-depends on it.
+is Dashboard M014 and is closed. The dashboard stylesheet declared no custom
+properties of its own, so every page shell that did not link the theme
+stylesheet resolved no variable at all, and the theme stylesheet was linked
+from the shared layout only. The administrative tables were emitted without
+the class the table rules target. The status pills were painted with fixed
+hexadecimal colours that bypassed the theme's own semantic tokens: measured
+against the surface the pill text sits on, all fifty bundled themes failed
+4.5:1, with a worst case of 1.42:1, and in thirteen themes every one of the
+five pills failed. The chart loading path depended on Chart.js arriving within
+a fixed window, and the chart surface and the refresh indicator were not
+announced to a screen reader. All of that is corrected: the theme is delivered
+on every shell, the table chrome is enforced by a shared opening tag, the pill
+foregrounds are derived from the theme's own tokens and now clear 4.5:1 in all
+fifty themes with a worst case of 4.53:1, the chart surface terminates in a
+chart or an explicit failure, the accessibility surface is in place, and the
+retired frontend is gone behind a guard that fails on reintroduction. The
+asset manifest matches the working-tree bytes and the oracle divergence record
+carries one reason per divergence. The paired browser disposition needs the
+frozen oracle worktree and a browser and could not be executed here, and the
+stale on-prem browser reference artifact has to be regenerated on hardware;
+both are recorded against the subsystem. No published dashboard field name or
+shape changed.
 
 `plans/implementation/on-prem-user-access/024-browser-session-csrf-delivery-and-member-account-surface-corrective.md`
 is On-prem user access M024 and is closed. The CSRF cookie was delivered on a
@@ -176,7 +183,6 @@ intended behavior of an account-scoped limiter and is recorded in ADR-0004.
 
 | Subsystem | Milestone | Status | Implementation plan | Dependencies / handoff note |
 |---|---|---|---|---|
-| Dashboard | M014 | ready | `plans/implementation/dashboard/014-operator-surface-presentation-and-accessibility-corrective.md` | None. The intentional frontend change the dashboard asset-stability invariant requires; the oracle divergence record stays accurate with a reason per divergence. |
 
 ## Active implementation plans
 
@@ -220,6 +226,7 @@ Historical M007 blocker assessment at baseline `7e241ad` (`plans/closure/persist
 
 | Subsystem / plan | Disposition | Evidence |
 | On-prem user access M024 — browser session CSRF delivery and member account surface corrective | closed — the CSRF cookie is delivered on exactly the requests the session cookie is delivered on, so a deep-linked operator's page is actionable; the double-submit token requirement, the server-side origin check, and the transport gate are unchanged; the sign-in throttle bounds an account rather than an (account, source address) pair, and a successful sign-in clears the account bucket only, never the per-peer bucket; one document builder renders every sign-in and member surface, every sign-in response is `no-store`, and a member lands on `/account/landing` that links the member surface; no schema, configuration, dependency, or published API change; ADR-0004 accepted 2026-10-23 with two self-contradicting passages corrected before acceptance | `plans/closure/on-prem-user-access/024-status.md`; implementation `c2ca0a6e`; ADR acceptance `7aa5d2d9` |
+| Dashboard M014 — operator surface presentation and accessibility corrective | closed — every reachable shell links the theme stylesheet and a guard proves every variable the stylesheet reads is published by every bundled theme; the status pills are derived from the theme's own semantic tokens and clear 4.5:1 in all fifty bundled themes where all fifty previously failed, worst case 1.42:1 before and 4.53:1 after, and the guard rejects a deliberate regression; the chart surface terminates in a rendered chart or an explicit failure without re-fetching the payload; every chart canvas has an accessible name, the chart shell and the refresh indicator are live regions, and the skip link is the first focusable element; the retired frontend surface is removed behind a guard that fails on reintroduction; the asset manifest matches the working-tree bytes and the oracle divergence record carries one reason per divergence; the paired browser disposition remains outstanding because it needs the frozen oracle worktree and a browser | `plans/closure/dashboard/014-status.md`; implementation `2db8265a` |
 | Request admission and wire M008 — remote compaction capability contract | closed — a compact request against an installation with no eligible provider surface fails with a typed capability outcome and consumes no provider attempt; the ordinary selection failure stays distinguishable; the bundled profile advertises no capability; nine new tests, each guard shown failing on a deliberate revert | `plans/closure/request-admission-wire/008-status.md` |
 |---|---|---|
 | Operations CLI M003 — watchdog start-guard ownership correction | closed — a lock that names no owner is reclaimable, so a publication that never completed no longer wedges the watchdog forever, while a lock whose owner cannot be determined is still held and left in place; the reclaim re-reads the moved file and restores a lock that gained an owner, and the publisher confirms the path still names its own file before it claims ownership; a lock that vanishes during the removal decision is free rather than reported as held; the file identity outside unix now distinguishes two files of the same length; 9 tests in the lock target, each guard shown failing on a deliberate revert; the lock file format, the PID file behaviour, and the CLI contract are unchanged | `plans/closure/operations-cli/003-status.md` |

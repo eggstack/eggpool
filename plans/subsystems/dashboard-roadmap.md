@@ -1,6 +1,6 @@
 # Dashboard Parity Roadmap
 
-Status: active
+Status: closed
 
 Long-term references:
 
@@ -179,12 +179,11 @@ M013 has no hard dependency on any dashboard milestone: it reconciles the
 duplicated dashboard and CLI derivations against each other and is now
 closed.
 
-M014 has no hard dependency on any dashboard milestone. It corrects the
+M014 has no hard dependency on any dashboard milestone. It corrected the
 operator-facing presentation of the dashboard's own pages and assets, and it
-is the intentional, separately reviewed frontend change that the asset
+was the intentional, separately reviewed frontend change that the asset
 stability invariant above requires before an embedded asset may move. No
-dashboard milestone depends on M014, and no successor is registered in this
-subsystem after it.
+dashboard milestone depended on M014, and M014 is now closed.
 
 No external product dependency is currently known. Browser tooling is qualification-only and must not enter the Rust production graph.
 
@@ -480,6 +479,30 @@ bytes and an unrecorded divergence still fails the qualification; the parity
 qualification passes with reviewed browser dispositions; no published field,
 schema, configuration, or dependency change.
 
+Outcome: every exit condition is met except the paired browser disposition,
+which needs the frozen Python oracle worktree and a browser and could not be
+executed in this environment. Every reachable page resolves a complete theme
+variable set, and a guard proves every variable the stylesheet reads is
+published by every bundled theme. Every emitted table carries the table
+chrome through a shared opening tag that a source-level guard enforces. The
+status pills are derived from the theme's own semantic tokens: before, all
+fifty bundled themes failed 4.5:1 against the surface the pill text sits on,
+with a worst case of 1.42:1, and in thirteen themes every one of the five
+pills failed; now all fifty pass with a worst case of 4.53:1, and the guard
+reads the served stylesheet and rejects a deliberate regression. The chart
+surface terminates in a rendered chart or an explicit failure without
+re-fetching the payload. Every chart canvas has an accessible name, the chart
+shell and the refresh indicator are live regions, the skip link is the first
+focusable element, and the retired frontend surface is gone with a guard that
+fails on reintroduction. The asset manifest matches the working-tree bytes and
+the oracle divergence record carries one reason per divergence. Closure:
+`plans/closure/dashboard/014-status.md`; implementation `2db8265a`.
+
+The paired browser disposition and the stale on-prem browser reference
+artifact are recorded against the subsystem rather than carried by a new
+milestone: both need hardware, and the recorded evidence must come from a real
+run. Neither reopens the subsystem.
+
 ## 12. Milestone status
 
 | Milestone | Status | Implementation plan | Closure record | Blockers |
@@ -497,7 +520,7 @@ schema, configuration, or dependency change.
 | 011 | closed | plans/implementation/dashboard/011-hosted-oracle-history-qualification.md | plans/closure/dashboard/011-status.md | Hosted CI run 37049147155 passed all gates, including frozen manifest blob identity. |
 | 012 | closed | plans/implementation/dashboard/012-lifecycle-closure-and-documentation-polish.md | plans/closure/dashboard/012-status.md | M001-M011 closed; terminal planning/docs cleanup only; no production or oracle change. |
 | 013 | closed | plans/implementation/dashboard/013-observation-projection-derivation-reconciliation.md | plans/closure/dashboard/013-status.md | none |
-| 014 | ready | plans/implementation/dashboard/014-operator-surface-presentation-and-accessibility-corrective.md | — | None. The intentional frontend change the asset-stability invariant requires; the oracle divergence record stays accurate with a reason per divergence. |
+| 014 | closed | plans/implementation/dashboard/014-operator-surface-presentation-and-accessibility-corrective.md | plans/closure/dashboard/014-status.md | None. The intentional frontend change the asset-stability invariant requires; the oracle divergence record stays accurate with a reason per divergence. |
 
 M001-M013 are closed. M008 corrected the post-merge strict-CI failure without
 reopening accepted dashboard parity dispositions.
@@ -530,3 +553,14 @@ carried with no producer in the current renderers. The milestone is the
 intentional, separately reviewed frontend change that the asset-stability
 invariant requires, and it keeps the oracle divergence record accurate with
 a reason per divergence.
+
+M014 is closed on that evidence. Every exit condition is met except the
+paired browser disposition, which needs the frozen Python oracle worktree and
+a browser. The theme is delivered on every shell, the table chrome is
+enforced by a shared opening tag, the status pills are theme-derived and
+clear 4.5:1 in all fifty bundled themes where all fifty previously failed,
+the chart surface terminates, the accessibility surface is in place, and the
+retired frontend is gone with a guard that fails on reintroduction. The
+subsystem closes. The paired browser disposition and the stale on-prem
+browser reference artifact are recorded against the subsystem: both need
+hardware, and the recorded evidence must come from a real run.
