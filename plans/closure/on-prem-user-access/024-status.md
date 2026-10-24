@@ -172,6 +172,28 @@ real rather than decorative:
 | Member redirect always `/account` | `a_member_lands_on_the_member_landing_page_and_reaches_the_member_surface` |
 | Member refusal back to bare text | `a_member_refused_an_administrative_page_gets_an_actionable_html_page` |
 
+### Post-closure verification evidence
+
+Added after the closure was recorded. The disposition and every conclusion
+above stand; this only supplies the one gate the closure had not executed.
+
+The `--no-default-features` **test** suite had never been run in this
+repository — CI runs no-default only for `check` and `clippy` — so the
+closure's acceptance criterion "the default and no-default workspace suites
+pass" rested on the default suite plus the no-default check and Clippy. The
+no-default suite was executed afterwards and passes:
+
+```bash
+cargo test --manifest-path rust/Cargo.toml --workspace --all-targets --no-default-features --offline --locked -- --test-threads=1
+```
+
+1209 passed, 0 failed. The acceptance criterion is now fully satisfied.
+
+`--offline --locked` is required in this environment: without it, cargo blocks
+trying to refresh the crates.io index over the blocked network. The build is
+otherwise identical to the default-features one, and `--locked` asserts that
+the lockfile is unchanged by the run.
+
 ## 5. Invariant review
 
 - **The server-side origin check stays authoritative.** The same-origin check
