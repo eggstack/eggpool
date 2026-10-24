@@ -242,6 +242,28 @@ uv run python scripts/validate_release_docs.py
 | `uv run pyright scripts/` | 0 errors, 0 warnings, 0 informations |
 | `uv run python scripts/validate_release_docs.py` | pass, 7 documents checked, 0.8.2 published |
 
+### Post-closure verification evidence
+
+Added after the closure was recorded. The disposition and every conclusion
+above stand; this only supplies the one gate the closure had not executed.
+
+The `--no-default-features` **test** suite had never been run in this
+repository — CI runs no-default only for `check` and `clippy` — so the
+closure's acceptance criterion "the default and no-default workspace suites
+pass" rested on the default suite plus the no-default check and Clippy. The
+no-default suite was executed afterwards and passes:
+
+```bash
+cargo test --manifest-path rust/Cargo.toml --workspace --all-targets --no-default-features --offline --locked -- --test-threads=1
+```
+
+1209 passed, 0 failed. The acceptance criterion is now fully satisfied.
+
+`--offline --locked` is required in this environment: without it, cargo blocks
+trying to refresh the crates.io index over the blocked network. The build is
+otherwise identical to the default-features one, and `--locked` asserts that
+the lockfile is unchanged by the run.
+
 ## 5. Invariant review
 
 - **The dashboard stays observational.** No routing, quota, health, reload,
