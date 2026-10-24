@@ -561,8 +561,9 @@ canonical wire map did not hint, and the live public catalog confirmed that two
 of them — `beam-free` and `minimax-m3.1-flash-free` — are served. A downstream
 consumer selecting either free route therefore fails closed at
 `wire_unresolved`. That is a finding about this repository's shared profile,
-not a consumer defect, and it is recorded on the CodeGG side at
-`plans/closure/harness-lab/evidence/route-audit-20261022.json`.
+not a consumer defect, and it is recorded on the CodeGG side, at that
+repository's `CodeGG:plans/closure/harness-lab/evidence/route-audit-20261022.json`
+rather than in this one.
 
 M002's own unblock audit: searched `plans/implementation/`,
 `plans/subsystems/`, and the dependency-ready, active, and blocked registry
