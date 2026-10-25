@@ -1363,7 +1363,7 @@ print_binary_next_steps() {
     echo "Next steps:"
     echo "  eggpool onboard"
     echo "  eggpool --config $config_path check-config"
-    echo "  sudo env \"PATH=\$PATH\" \"\$(command -v eggpool)\" deploy systemd --install"
+    echo "  sudo env \"PATH=\$PATH\" \"HOME=\$HOME\" \"\$(command -v eggpool)\" deploy systemd --install"
     echo "  eggpool deploy cron --install        # when systemd is unavailable"
     echo "  eggpool update"
 }
@@ -1809,7 +1809,7 @@ run_package_authority() {
     echo "Next steps:"
     echo "  eggpool onboard"
     echo "  eggpool --config $config_path check-config"
-    echo "  sudo env \"PATH=\$PATH\" \"\$(command -v eggpool)\" deploy systemd --install"
+    echo "  sudo env \"PATH=\$PATH\" \"HOME=\$HOME\" \"\$(command -v eggpool)\" deploy systemd --install"
     echo "  eggpool deploy cron --install        # when systemd is unavailable"
     echo "  eggpool update"
 }
