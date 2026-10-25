@@ -1,6 +1,6 @@
 # On-prem User Access Milestone 024 — Browser session CSRF delivery and member account surface corrective
 
-Status: ready
+Status: implemented
 
 Repository baseline: `d04ad6831c6e030b7f5fc8a56501fdfecab982bd`
 

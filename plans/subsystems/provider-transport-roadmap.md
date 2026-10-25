@@ -271,7 +271,7 @@ Deferred work:
 
 ### Milestone 002 — Adopt stable Eggfetch transport error taxonomy
 
-Class: infrastructure. Status: ready.
+Class: infrastructure. Status: closed.
 
 Implementation plan:
 
@@ -460,7 +460,7 @@ Deferred work:
 
 ### Milestone 006 — Eggress 1.0.12 dependency refresh and requalification
 
-Class: infrastructure. Status: ready.
+Class: infrastructure. Status: closed.
 
 Implementation plan:
 

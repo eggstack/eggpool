@@ -612,7 +612,7 @@ Exit conditions:
 
 ### Milestone 006 — External semantic-producer consumer contract
 
-Status: ready.
+Status: closed.
 
 Class: infrastructure
 
