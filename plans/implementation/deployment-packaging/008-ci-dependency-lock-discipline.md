@@ -1,6 +1,6 @@
 # Deployment and Packaging Milestone 008 — CI dependency-lock discipline
 
-Status: ready
+Status: implemented
 
 Repository baseline: `1929abf5a725cc7faac0f866622afa7af017694a`
 

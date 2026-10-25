@@ -1,6 +1,6 @@
 # Routing Selection Milestone 008 — Durable health state repair and authentication-failure durability
 
-Status: ready
+Status: implemented
 
 Repository baseline: `1929abf5a725cc7faac0f866622afa7af017694a`
 

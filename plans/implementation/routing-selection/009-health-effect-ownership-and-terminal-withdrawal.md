@@ -1,6 +1,6 @@
 # Routing Selection Milestone 009 — Health effect ownership and terminal-withdrawal producer retirement
 
-Status: blocked
+Status: ready
 
 Repository baseline: `1929abf5a725cc7faac0f866622afa7af017694a`
 
@@ -34,7 +34,7 @@ the applier onto the path that actually runs.
 
 ## 2. Why this milestone is ready
 
-**Blocked on M008 only.** This milestone removes three types from the library
+**Ready.** This milestone removes three types from the library
 crate's public surface (`pub mod health` at `rust/src/lib.rs:16` makes them
 public API), and it changes a capability boundary: whether the authoritative
 terminal model withdrawal exists as a supported capability. Both are the
@@ -53,16 +53,16 @@ rather than three names; and the Negative consequences now name the capability
 the milestone retires. The Decision is unchanged in substance: Option B is
 selected.
 
-The milestone has one remaining hard dependency: **Routing Selection M008 must
-be closed.** M008 owns the durable health state repair in
-`rust/src/health/repository.rs`, `rust/src/health/health_manager.rs`,
-`rust/src/routing/router.rs`, and the migration directory; this milestone
-edits the same files. The two do not run concurrently.
+The milestone's one hard dependency, **Routing Selection M008 closed**, is
+discharged. M008 closed at implementation `b66373f2` with its closure record
+`plans/closure/routing-selection/008-status.md`. M008 owned the durable health
+state repair in `rust/src/health/repository.rs`,
+`rust/src/health/health_manager.rs`, `rust/src/routing/router.rs`, and the
+migration directory; this milestone edits the same files, which is why the two
+did not run concurrently.
 
 Every defect it addresses is reproducible from the repository at the stated
-baseline. When M008 is closed, this plan's §2 is rewritten to record it, the
-plan's `Status` moves from `blocked` to `ready`, and the milestone becomes
-dependency-ready in the registry.
+baseline. The milestone is dependency-ready in the registry.
 
 ## 3. Current implementation evidence
 
