@@ -126,9 +126,9 @@ Public score_accounts/rank_accounts/near_ties remain available and delegate to t
 - M005 had no hard dependency; the durable tables already existed and only a consumer path was missing. It is now closed, and the durable path persists the same policy the live path applies.
 - M006 had a hard dependency on M005: the policy and vocabulary it adopts must be the ones the durable path persists. The M005 closure satisfied it, and M006 is now closed.
 - M007 had a hard dependency on M005 and M006 closed, and is now closed.
-- M008 depends on the acceptance of
-  `plans/adrs/ADR-0005-durable-health-state-repair-and-authentication-failure-durability.md`
-  and on no other milestone.
+- M008 required the acceptance of
+  `plans/adrs/ADR-0005-durable-health-state-repair-and-authentication-failure-durability.md`,
+  which the maintainers accepted on 2026-10-25, and on no other milestone.
 - M009 depends on the acceptance of
   `plans/adrs/ADR-0006-authoritative-terminal-model-withdrawal-ownership.md`
   and on M008 closed. M008 is a hard dependency because both milestones edit
@@ -416,7 +416,8 @@ Dependencies:
 
 - Hard: `plans/adrs/ADR-0005-durable-health-state-repair-and-authentication-failure-durability.md`
   accepted. The milestone implements that decision, and the decision changes
-  what durable state means across a restart and changes auth semantics.
+  what durable state means across a restart and changes auth semantics. The
+  maintainers accepted it on 2026-10-25.
 - Interface: the durable backoff table's scope convention is unchanged. A NULL
   `model_id` still means account-wide suppression.
 - Hard: none on another milestone. Milestone 009 follows this one and is not
@@ -566,5 +567,5 @@ evidence. No routing architecture or public compatibility surface may regress.
 | 005 — durable health effect application and quarantine gating | closed | plans/implementation/routing-selection/005-durable-health-effect-application-and-quarantine-gating.md | plans/closure/routing-selection/005-status.md | none; closed through M007 |
 | 006 — backoff policy adoption and health-reason vocabulary unification | closed | plans/implementation/routing-selection/006-backoff-policy-adoption-and-health-reason-vocabulary.md | plans/closure/routing-selection/006-status.md | none; closed through M007 |
 | 007 — durable backoff scope and reason correction | closed | plans/implementation/routing-selection/007-durable-backoff-scope-and-reason-correction.md | plans/closure/routing-selection/007-status.md | none |
-| 008 — durable health state repair and authentication-failure durability | blocked | plans/implementation/routing-selection/008-durable-health-state-repair-and-authentication-failure-durability.md | — | Acceptance of `plans/adrs/ADR-0005-durable-health-state-repair-and-authentication-failure-durability.md` |
+| 008 — durable health state repair and authentication-failure durability | ready | plans/implementation/routing-selection/008-durable-health-state-repair-and-authentication-failure-durability.md | — | none; ADR-0005 accepted 2026-10-25 |
 | 009 — health effect ownership and terminal-withdrawal producer retirement | blocked | plans/implementation/routing-selection/009-health-effect-ownership-and-terminal-withdrawal.md | — | Acceptance of `plans/adrs/ADR-0006-authoritative-terminal-model-withdrawal-ownership.md`; M008 closed |

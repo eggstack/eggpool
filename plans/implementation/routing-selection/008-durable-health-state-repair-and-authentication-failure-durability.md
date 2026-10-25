@@ -1,6 +1,6 @@
 # Routing Selection Milestone 008 — Durable health state repair and authentication-failure durability
 
-Status: blocked
+Status: ready
 
 Repository baseline: `1929abf5a725cc7faac0f866622afa7af017694a`
 
@@ -17,8 +17,7 @@ Long-term requirements:
 Applicable ADRs:
 
 - `plans/adrs/ADR-0005-durable-health-state-repair-and-authentication-failure-durability.md`
-  (**proposed** 2026-10-25 — this milestone implements that decision; the milestone is
-  blocked on its acceptance, see §2)
+  (**accepted** 2026-10-25 — this milestone implements that decision; see §2)
 
 Primary class: invariant
 
@@ -38,20 +37,29 @@ the credential-change rehash path already exist for.
 
 ## 2. Why this milestone is ready
 
-**Blocked.** This milestone changes what durable state means across a restart,
+**Ready.** This milestone changes what durable state means across a restart,
 which is the repository's ADR threshold: it touches auth semantics (whether a
 credential rejection survives a restart) and it changes a durable storage
 contract (a new migration and a new index). The decision — what a malformed
 legacy row means, whether the authentication failure is durable, and what the
 durable scope key guarantees — is recorded in
 `plans/adrs/ADR-0005-durable-health-state-repair-and-authentication-failure-durability.md`,
-which the project maintainers must accept before this milestone proceeds.
+which the project maintainers accepted on 2026-10-25.
+
+The acceptance revision is the commit that changes that record from `proposed`
+to `accepted`. Two passages in the proposed draft were corrected before
+acceptance because they contradicted the record's own Decision: the draft did
+not say how the skipped-row report reaches the operator, and it described the
+migration's cleanup scope as two rules where the migration applies one. Both
+corrections are recorded in the decision record's acceptance note. The Decision
+is unchanged in substance: Option A is selected, the migration is v64, the
+hydration skips and reports rather than failing the batch, the NULL-scope
+uniqueness follows migration 0054's pattern, and the live failure path writes
+the deadline-less `authentication_failed` row.
 
 The milestone has no hard dependency on another milestone. Every defect it
-addresses is reproducible from the repository at the stated baseline. When
-ADR-0005 is accepted, this plan's §2 is rewritten to record the acceptance
-revision, the plan's `Status` moves from `blocked` to `ready`, and the milestone
-becomes dependency-ready in the registry.
+addresses is reproducible from the repository at the stated baseline. The
+milestone is dependency-ready in the registry.
 
 The related milestone for the parallel effect applier and the unreachable
 terminal-withdrawal producer is a successor milestone in this subsystem. That

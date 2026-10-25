@@ -1,8 +1,42 @@
 # ADR-0005: Durable health state repair and authentication-failure durability
 
-Status: proposed
+Status: accepted
 
 Date: 2026-10-25
+
+Accepted: 2026-10-25 by the project maintainers, on explicit maintainer
+direction. The acceptance revision is the commit that changes this record from
+`proposed` to `accepted`. The implementing milestone is Routing Selection M008;
+its closure record carries the implementing revision.
+
+Two passages in the `proposed` draft were corrected before acceptance, because
+the draft contradicted its own Decision:
+
+- The Decision says the hydration path "skips any such row that is nonetheless
+  present … and reports it as a skipped legacy row", and the Positive
+  consequences say "the skipped-row case is reported rather than silent, so an
+  operator who restores an old backup sees what was dropped". The draft's
+  Compatibility section did not say how the report reaches the operator, and a
+  reader could take "skip-and-report" to mean a log line. The corrected wording
+  states the bound that actually holds: the skip is counted in the hydration
+  report and surfaced through the existing diagnostics path, and the report
+  carries a count and a reason vocabulary only — never a credential, a prompt, a
+  raw body, or a cache key.
+- The Negative consequences say the migration "deletes rows. It is a destructive
+  step on the durable table, scoped to exactly one reason and one NULL scope".
+  The draft's Compatibility section additionally described the cleanup as
+  deleting "duplicate account-scoped rows and the legacy `model_unavailable`
+  rows that carry no model identity". The corrected wording states the actual
+  scope: the cleanup deletes duplicate rows in the `(account_id, reason)` scope
+  where `model_id IS NULL`, and the legacy `model_unavailable` rows are removed
+  because they are part of that same NULL scope — not by a separate rule keyed
+  on the reason. The partial unique index the migration then creates covers
+  exactly the scope the cleanup normalised.
+
+The Decision is unchanged in substance: Option A is selected, the migration is
+v64, the hydration skips and reports rather than failing the batch, the
+NULL-scope uniqueness follows migration 0054's pattern, and the live failure
+path writes the deadline-less `authentication_failed` row.
 
 Decision owners: project maintainers
 
