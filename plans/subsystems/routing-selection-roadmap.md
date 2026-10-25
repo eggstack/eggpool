@@ -129,6 +129,10 @@ Public score_accounts/rank_accounts/near_ties remain available and delegate to t
 - M008 depends on the acceptance of
   `plans/adrs/ADR-0005-durable-health-state-repair-and-authentication-failure-durability.md`
   and on no other milestone.
+- M009 depends on the acceptance of
+  `plans/adrs/ADR-0006-authoritative-terminal-model-withdrawal-ownership.md`
+  and on M008 closed. M008 is a hard dependency because both milestones edit
+  `rust/src/health/` and `rust/src/routing/router.rs`.
 - No plan in the dashboard, request admission and wire, operations CLI, deployment and packaging, or planning governance subsystems depends on this roadmap's milestones.
 
 ## 7. Milestones
@@ -395,8 +399,7 @@ Deferred work:
 - Whether a provider hint should escalate along the policy ladder. That is a
   policy change on the dominant rate-limit path and needs its own milestone.
 - The parallel `HealthEffectApplier` in `rust/src/health/effects.rs`, which
-  has no production caller. Discharged by a successor milestone in this
-  subsystem.
+  has no production caller. Discharged by Milestone 009.
 
 ### Milestone 008 — Durable health state repair and authentication-failure durability
 
@@ -456,6 +459,57 @@ Deferred work:
   produced, because a legacy account-wide row carries no model identity to
   attribute. The new migration records that.
 
+### Milestone 009 — Health effect ownership and terminal-withdrawal producer retirement
+
+Class: invariant
+
+Objective:
+
+Make the health subsystem say what it does — one effect-application path, one
+owner, and no code that no producer can reach.
+
+Dependencies:
+
+- Hard: `plans/adrs/ADR-0006-authoritative-terminal-model-withdrawal-ownership.md`
+  accepted. The milestone removes three types from the library crate's public
+  surface and changes a capability boundary.
+- Hard: Milestone 008 closed. Both edit `rust/src/health/` and
+  `rust/src/routing/router.rs`, so they do not run concurrently.
+
+Deliverable boundary:
+
+- The parallel `HealthEffectApplier` and its public re-export are removed.
+- The unreachable terminal-withdrawal producer — the `terminal_withdrawal`
+  model effect, the `AbsentAuthoritative` variant, the field that carried it,
+  and the in-memory terminal set nothing populates — are removed.
+- The durable terminal-withdrawal vocabulary and its enforcement are retained,
+  so an existing durable row keeps being parsed and honoured.
+- The coverage the removed applier test gave the applier is re-established
+  against the live path.
+- The bounded quarantine, the durable writers, the policy table, and the
+  routing behaviour of a healthy system are unchanged.
+
+User or operator value:
+
+The repository stops carrying a second, contradictory design of the same
+subsystem, and a test stops asserting a backoff duration the live policy never
+produces.
+
+Exit conditions:
+
+- A test asserts that the live model-absence path produces the bounded
+  quarantine effect and no terminal effect.
+- A test asserts that a durable quarantine row carrying the terminal state is
+  still parsed and still enforced.
+- The removed public types are absent from the library crate's public surface.
+- Default and no-default workspace suites pass.
+
+Deferred work:
+
+- An authoritative-absence producer. It requires the durable success-path
+  clearing that Milestone 005 identified as its prerequisite, and it is not
+  this milestone's work.
+
 ## 8. Cross-cutting requirements
 
 Storage/migration: none.
@@ -513,3 +567,4 @@ evidence. No routing architecture or public compatibility surface may regress.
 | 006 — backoff policy adoption and health-reason vocabulary unification | closed | plans/implementation/routing-selection/006-backoff-policy-adoption-and-health-reason-vocabulary.md | plans/closure/routing-selection/006-status.md | none; closed through M007 |
 | 007 — durable backoff scope and reason correction | closed | plans/implementation/routing-selection/007-durable-backoff-scope-and-reason-correction.md | plans/closure/routing-selection/007-status.md | none |
 | 008 — durable health state repair and authentication-failure durability | blocked | plans/implementation/routing-selection/008-durable-health-state-repair-and-authentication-failure-durability.md | — | Acceptance of `plans/adrs/ADR-0005-durable-health-state-repair-and-authentication-failure-durability.md` |
+| 009 — health effect ownership and terminal-withdrawal producer retirement | blocked | plans/implementation/routing-selection/009-health-effect-ownership-and-terminal-withdrawal.md | — | Acceptance of `plans/adrs/ADR-0006-authoritative-terminal-model-withdrawal-ownership.md`; M008 closed |
