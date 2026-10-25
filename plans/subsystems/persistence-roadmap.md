@@ -482,7 +482,7 @@ Exit conditions:
 
 ## 8. Cross-cutting requirements
 
-Storage and migration: no schema change. WAL/NORMAL and the current schema (migration chain v1–v63) remain authoritative.
+Storage and migration: no schema change. WAL/NORMAL and the current schema (migration chain v1–v64) remain authoritative.
 
 Protocol and compatibility: no HTTP, wire, CLI, config, or public Rust API change.
 
