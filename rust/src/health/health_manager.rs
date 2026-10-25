@@ -16,11 +16,6 @@ use super::{
 pub enum HealthManagerError {
     #[error("backoff record for unknown account id {0}")]
     UnknownAccount(i64),
-    #[error("model-scoped backoff {reason} for account {account_id} has no model")]
-    MissingModel {
-        account_id: i64,
-        reason: BackoffReason,
-    },
     #[error("nonterminal backoff {reason} has no expiry")]
     MissingExpiry { reason: BackoffReason },
 }
@@ -541,14 +536,31 @@ impl HealthManager {
 
     /// Hydrate restart hints using a wall-clock remaining duration and anchor
     /// every resulting deadline in the process-local monotonic domain.
+    ///
+    /// Returns the number of rows that became an in-memory effect and the
+    /// number of legacy rows that carried no recoverable scope and were
+    /// skipped. A legacy row is a model-scoped reason with no model identity:
+    /// it can be attributed to no model and means nothing account-wide, so it
+    /// grants neither an account-wide nor a model-wide suppression. It is
+    /// skipped and counted, never fatal, because a row this runtime cannot
+    /// interpret must not decide whether the process starts.
     pub fn hydrate_backoffs(
         &self,
         records: &[AccountBackoffRecord],
         account_names: &BTreeMap<i64, String>,
         wall_now: f64,
-    ) -> Result<usize, HealthManagerError> {
+    ) -> Result<(usize, usize), HealthManagerError> {
         let mut applied = 0;
+        let mut skipped_legacy = 0;
         for record in records {
+            if record.reason == BackoffReason::ModelUnavailable && record.model_id.is_none() {
+                // The durable contract pairs a model-unavailable reason with
+                // the model it applies to. A row without one carries no scope
+                // this runtime can restore, so it is skipped and counted
+                // instead of failing the whole hydration batch.
+                skipped_legacy += 1;
+                continue;
+            }
             let Some(account_name) = account_names.get(&record.account_id) else {
                 // Skip-and-warn on stale rows so one unknown account does not
                 // fail-closed the entire hydration batch.
@@ -572,16 +584,6 @@ impl HealthManager {
                 continue;
             }
             let remaining = remaining.min(MAX_NONTERMINAL_BACKOFF_SECONDS);
-            if reason == BackoffReason::ModelUnavailable && record.model_id.is_none() {
-                // The durable contract pairs a model-unavailable reason with
-                // the model it applies to.  A row that breaks that pairing is
-                // malformed, so the batch fails closed instead of restoring
-                // an effect the row does not describe.
-                return Err(HealthManagerError::MissingModel {
-                    account_id: record.account_id,
-                    reason,
-                });
-            }
             // The scope of the row decides which effect is restored, not the
             // reason value: a model-scoped row restores the model disable and
             // the model's own escalation rung, and an account-scoped row
@@ -603,7 +605,7 @@ impl HealthManager {
             }
             applied += 1;
         }
-        Ok(applied)
+        Ok((applied, skipped_legacy))
     }
 
     fn seed_model_failure(&self, account_name: &str, model_id: &str, consecutive_failures: u32) {

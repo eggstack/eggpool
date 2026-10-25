@@ -839,6 +839,351 @@ async fn an_expired_row_stops_gating_once_the_expiry_runs() {
     let _ = fs::remove_file(&path);
 }
 
+/// Insert the legacy shape a restored backup, a hand-edited database, or a
+/// writer this runtime does not own can leave behind: a model-scoped reason
+/// with no model identity. The durable writer refuses to create such a row,
+/// so it is inserted directly.
+async fn seed_legacy_model_unavailable_row(database: &Database, account_id: i64) {
+    database
+        .call(move |connection| {
+            connection.execute(
+                "INSERT INTO account_backoffs (account_id, model_id, reason, status_code, error_class, consecutive_failures, backoff_until, last_failure_at, updated_at) \
+                 VALUES (?1, NULL, 'model_unavailable', 404, 'model_not_found', 1, \
+                         CAST(strftime('%s','now') AS INTEGER) + 300, \
+                         CAST(strftime('%s','now') AS INTEGER), \
+                         CAST(strftime('%s','now') AS INTEGER))",
+                [account_id],
+            )
+        })
+        .await
+        .expect("the legacy row persists");
+}
+
+/// The number of durable account-scoped rows that match a reason, read
+/// directly from SQLite.
+async fn count_account_scoped_rows(database: &Database, account_id: i64, reason: &str) -> i64 {
+    let reason = reason.to_owned();
+    database
+        .call(move |connection| {
+            connection.query_row(
+                "SELECT COUNT(*) FROM account_backoffs WHERE account_id = ?1 \
+                 AND model_id IS NULL AND reason = ?2",
+                tokio_rusqlite::rusqlite::params![account_id, reason],
+                |row| row.get::<_, i64>(0),
+            )
+        })
+        .await
+        .expect("the durable rows are countable")
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn a_legacy_model_unavailable_row_is_skipped_and_reported() {
+    let (database, path) = database("legacy-row").await;
+    seed_accounts(&database).await;
+    seed_legacy_model_unavailable_row(&database, 1).await;
+
+    let registry = registry();
+    let health = health_for(&registry);
+    let quarantine = ModelQuarantine::default();
+    let backoffs = AccountBackoffRepository::new(&database);
+    let quarantine_repository = ModelQuarantineRepository::new(&database);
+    let report = hydrate_generation_health(
+        &backoffs,
+        &quarantine_repository,
+        &health,
+        &quarantine,
+        &account_names(),
+        now_epoch(),
+    )
+    .await
+    .expect("a legacy row must not fail the hydration");
+    assert_eq!(
+        report.skipped_legacy_backoffs, 1,
+        "the legacy row must be reported as skipped"
+    );
+    assert_eq!(
+        report.backoffs, 0,
+        "a skipped row must not become an in-memory effect"
+    );
+
+    let snapshot = health
+        .snapshot("account-a")
+        .expect("the account is known to the health manager");
+    assert!(
+        snapshot.cooldown_until <= 0.0 && snapshot.disabled_until.is_none(),
+        "a skipped row must not grant an account-wide suppression: {snapshot:?}"
+    );
+    assert!(
+        snapshot.disabled_models.is_empty(),
+        "a skipped row must not grant a model-wide suppression: {snapshot:?}"
+    );
+
+    database.close().await.expect("database closes");
+    let _ = fs::remove_file(&path);
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn a_legacy_row_does_not_prevent_a_generation_from_being_published() {
+    let (database, path) = database("legacy-generation").await;
+    seed_accounts(&database).await;
+    seed_legacy_model_unavailable_row(&database, 1).await;
+
+    // The generation build path hydrates the durable tables before the
+    // generation is published, and a row this runtime cannot interpret must
+    // not decide whether the process starts.
+    let generation = build_generation(&database).await;
+    let plan = generation.router.build_routing_plan(&facts("shared-model"));
+    assert!(
+        plan.candidates
+            .iter()
+            .any(|candidate| candidate.account_name == "account-a"),
+        "a skipped row must not gate the account"
+    );
+
+    generation.database.close().await.expect("database closes");
+    let _ = fs::remove_file(&path);
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn a_credential_rejection_writes_the_durable_authentication_failed_row() {
+    let (database, path) = database("auth-row").await;
+    seed_accounts(&database).await;
+    let generation = build_generation(&database).await;
+
+    let claim = generation
+        .router
+        .select_and_claim(&facts("shared-model"), &BTreeSet::new())
+        .await
+        .expect("claim operation")
+        .expect("a claim is published");
+
+    // The authentication policy declares no delay, so the live effect is the
+    // account disable and the durable row carries no deadline.
+    generation
+        .router
+        .apply_failure_effects(
+            &claim,
+            true,
+            false,
+            "none",
+            Some("authentication_failed"),
+            None,
+            true,
+        )
+        .await;
+
+    let backoffs = AccountBackoffRepository::new(&database)
+        .list_all(64)
+        .await
+        .expect("backoff rows are readable");
+    let auth_row = backoffs
+        .iter()
+        .find(|row| row.reason == BackoffReason::AuthenticationFailed)
+        .expect("the credential rejection must be persisted: {backoffs:?}");
+    assert_eq!(auth_row.account_id, 1, "the row belongs to the account");
+    assert!(
+        auth_row.model_id.is_none(),
+        "the durable row is account-scoped: {backoffs:?}"
+    );
+    assert!(
+        auth_row.backoff_until_epoch.is_none(),
+        "the durable row carries no deadline: {backoffs:?}"
+    );
+
+    // The live disable is unchanged: the account is disabled, with no expiry.
+    let snapshot = generation
+        .health
+        .snapshot("account-a")
+        .expect("the account is known to the health manager");
+    assert_eq!(
+        snapshot.health_state, "authentication_failed",
+        "the live disable is unchanged: {snapshot:?}"
+    );
+    assert!(
+        snapshot.disabled_until.is_none(),
+        "the live disable has no expiry: {snapshot:?}"
+    );
+
+    // A restart restores the disable from the durable row.
+    let restarted = health_for(&registry());
+    let quarantine = ModelQuarantine::default();
+    hydrate_generation_health(
+        &AccountBackoffRepository::new(&database),
+        &ModelQuarantineRepository::new(&database),
+        &restarted,
+        &quarantine,
+        &account_names(),
+        now_epoch(),
+    )
+    .await
+    .expect("the durable health hydrates");
+    let restored = restarted
+        .snapshot("account-a")
+        .expect("the account is known to the health manager");
+    assert_eq!(
+        restored.health_state, "authentication_failed",
+        "a credential rejection must stay disabled after a restart: {restored:?}"
+    );
+    assert!(
+        restored.disabled_until.is_none(),
+        "the restored disable has no deadline: {restored:?}"
+    );
+
+    generation.database.close().await.expect("database closes");
+    let _ = fs::remove_file(&path);
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn a_credential_rotation_releases_the_durable_authentication_failure() {
+    let (database, path) = database("auth-rotation").await;
+    seed_accounts(&database).await;
+
+    // The durable row the credential-change path releases is the one the live
+    // failure path writes.
+    AccountBackoffRepository::new(&database)
+        .upsert(&AccountBackoffRecord {
+            id: 0,
+            account_id: 1,
+            model_id: None,
+            reason: BackoffReason::AuthenticationFailed,
+            status_code: Some(401),
+            error_class: Some("credential_invalid".to_owned()),
+            consecutive_failures: 1,
+            backoff_until_epoch: None,
+            last_failure_epoch: now_epoch(),
+            updated_epoch: now_epoch(),
+        })
+        .await
+        .expect("the authentication row persists");
+
+    // The credential-change path deletes exactly these rows for the accounts
+    // whose credentials change.
+    let released = AccountBackoffRepository::new(&database)
+        .clear_authentication(1)
+        .await
+        .expect("the credential change releases the row");
+    assert_eq!(released, 1, "the credential change releases the row");
+    assert_eq!(
+        count_account_scoped_rows(&database, 1, "authentication_failed").await,
+        0,
+        "no authentication row survives the credential change"
+    );
+
+    // The account is eligible again once the durable row is gone.
+    let health = health_for(&registry());
+    let quarantine = ModelQuarantine::default();
+    hydrate_generation_health(
+        &AccountBackoffRepository::new(&database),
+        &ModelQuarantineRepository::new(&database),
+        &health,
+        &quarantine,
+        &account_names(),
+        now_epoch(),
+    )
+    .await
+    .expect("the durable health hydrates");
+    let snapshot = health
+        .snapshot("account-a")
+        .expect("the account is known to the health manager");
+    assert_ne!(
+        snapshot.health_state, "authentication_failed",
+        "a credential rotation must re-enable the account: {snapshot:?}"
+    );
+
+    database.close().await.expect("database closes");
+    let _ = fs::remove_file(&path);
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn the_live_path_writes_no_model_unavailable_row_with_a_null_model() {
+    let (database, path) = database("null-model").await;
+    seed_accounts(&database).await;
+    let generation = build_generation(&database).await;
+
+    let claim = generation
+        .router
+        .select_and_claim(&facts("shared-model"), &BTreeSet::new())
+        .await
+        .expect("claim operation")
+        .expect("a claim is published");
+
+    // A model absence is a model-scoped reason. The account-scoped writer
+    // must not persist it without the model it applies to.
+    generation
+        .router
+        .apply_failure_effects(
+            &claim,
+            true,
+            true,
+            "quarantine",
+            Some("model_unavailable"),
+            Some(Duration::from_secs(30)),
+            true,
+        )
+        .await;
+
+    let backoffs = AccountBackoffRepository::new(&database)
+        .list_all(64)
+        .await
+        .expect("backoff rows are readable");
+    assert!(
+        !backoffs
+            .iter()
+            .any(|row| row.reason == BackoffReason::ModelUnavailable && row.model_id.is_none()),
+        "the live path must not write a model-unavailable row without a model: {backoffs:?}"
+    );
+    assert!(
+        backoffs.iter().any(|row| {
+            row.reason == BackoffReason::ModelUnavailable
+                && row.model_id.as_deref() == Some("shared-model")
+        }),
+        "the model-scoped row carries the model it applies to: {backoffs:?}"
+    );
+
+    generation.database.close().await.expect("database closes");
+    let _ = fs::remove_file(&path);
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn the_durable_schema_rejects_a_second_account_scoped_row() {
+    let (database, path) = database("null-scope-unique").await;
+    seed_accounts(&database).await;
+
+    let insert = |database: &Database| {
+        let database = database.clone();
+        async move {
+            database
+                .call(|connection| {
+                    connection.execute(
+                        "INSERT INTO account_backoffs (account_id, model_id, reason, consecutive_failures, last_failure_at, updated_at) \
+                         VALUES (1, NULL, 'rate_limited', 1, \
+                                 CAST(strftime('%s','now') AS INTEGER), \
+                                 CAST(strftime('%s','now') AS INTEGER))",
+                        [],
+                    )
+                })
+                .await
+        }
+    };
+
+    insert(&database)
+        .await
+        .expect("the first account-scoped row is accepted");
+    let duplicate = insert(&database).await;
+    assert!(
+        duplicate.is_err(),
+        "a second account-scoped row for the same account and reason must be rejected"
+    );
+    assert_eq!(
+        count_account_scoped_rows(&database, 1, "rate_limited").await,
+        1,
+        "the rejected duplicate must leave exactly one row"
+    );
+
+    database.close().await.expect("database closes");
+    let _ = fs::remove_file(&path);
+}
+
 /// The durable write must not happen inside the selection critical section.
 ///
 /// This is a source-level contract, the same shape as the existing wire

@@ -38,6 +38,9 @@ pub struct HealthHydrationReport {
     pub backoffs: usize,
     /// Quarantine rows that became an in-memory quarantine entry.
     pub quarantines: usize,
+    /// Legacy backoff rows that carried no recoverable scope and were
+    /// skipped. A skipped row grants no suppression at all.
+    pub skipped_legacy_backoffs: usize,
 }
 
 /// The durable health hydration failed as a whole.
@@ -54,9 +57,11 @@ pub enum HealthHydrationError {
 /// The backoff rows become the generation's in-memory cooldowns and model
 /// disables; the quarantine rows become the generation's model quarantine
 /// gate. A row that names an account the generation does not know is skipped
-/// with a warning, so one stale row never fails a generation, but a
-/// repository failure that cannot be bounded does: a generation must not
-/// become reachable with partially hydrated health.
+/// with a warning, so one stale row never fails a generation, and a legacy
+/// row that carries no recoverable scope is skipped and counted, so one
+/// uninterpretable row never fails a generation either. A repository failure
+/// that cannot be bounded does: a generation must not become reachable with
+/// partially hydrated health.
 pub async fn hydrate_generation_health(
     backoffs: &AccountBackoffRepository,
     quarantine_repository: &ModelQuarantineRepository,
@@ -65,15 +70,25 @@ pub async fn hydrate_generation_health(
     account_names: &BTreeMap<i64, String>,
     wall_now: f64,
 ) -> Result<HealthHydrationReport, HealthHydrationError> {
-    let hydrated_backoffs = backoffs
+    let (hydrated_backoffs, skipped_legacy) = backoffs
         .hydrate_into(health, account_names, wall_now)
         .await?;
     let hydrated_quarantines = quarantine_repository
         .hydrate_into(quarantine, wall_now)
         .await?;
+    if skipped_legacy > 0 {
+        // The report names a count and the reason vocabulary only: no
+        // credential, prompt, raw body, or cache key is involved.
+        tracing::warn!(
+            skipped_legacy,
+            reason = BackoffReason::ModelUnavailable.as_str(),
+            "health hydrate: skipped legacy backoff rows that carry no model scope"
+        );
+    }
     Ok(HealthHydrationReport {
         backoffs: hydrated_backoffs,
         quarantines: hydrated_quarantines,
+        skipped_legacy_backoffs: skipped_legacy,
     })
 }
 
@@ -189,12 +204,17 @@ impl AccountBackoffRepository {
         rows.into_iter().map(parse_backoff).collect()
     }
 
+    /// Restore the durable backoff rows into one generation's health state.
+    ///
+    /// Returns the number of rows that became an in-memory effect and the
+    /// number of legacy rows that carried no recoverable scope and were
+    /// skipped.
     pub async fn hydrate_into(
         &self,
         manager: &super::HealthManager,
         account_names: &BTreeMap<i64, String>,
         wall_now: f64,
-    ) -> Result<usize, AccountBackoffRepositoryError> {
+    ) -> Result<(usize, usize), AccountBackoffRepositoryError> {
         let records = self.list_all(5_000).await?;
         manager
             .hydrate_backoffs(&records, account_names, wall_now)
@@ -415,11 +435,11 @@ fn parse_backoff(raw: RawBackoff) -> Result<AccountBackoffRecord, AccountBackoff
     }
     let reason = BackoffReason::try_from(raw.reason.as_str())
         .map_err(|_| AccountBackoffRepositoryError::Invalid(format!("reason {:?}", raw.reason)))?;
-    if reason == BackoffReason::ModelUnavailable && raw.model_id.is_none() {
-        return Err(AccountBackoffRepositoryError::Invalid(
-            "model-scoped reason has no model".to_owned(),
-        ));
-    }
+    // A model-scoped reason with no model identity is the legacy shape: the
+    // row carries no scope this runtime can restore. It is parsed so the
+    // hydration can skip and report it, rather than failing the whole batch
+    // over a row that only a restored backup or a foreign writer can produce.
+    let legacy_unscoped = reason == BackoffReason::ModelUnavailable && raw.model_id.is_none();
     let status_code = match raw.status_code {
         Some(value) if (100..=599).contains(&value) => Some(value as u16),
         Some(_) => {
@@ -438,7 +458,10 @@ fn parse_backoff(raw: RawBackoff) -> Result<AccountBackoffRecord, AccountBackoff
         .map_err(AccountBackoffRepositoryError::Invalid)?;
     let backoff_until_epoch = optional_timestamp(raw.backoff_until.as_deref())
         .map_err(AccountBackoffRepositoryError::Invalid)?;
-    if reason != BackoffReason::AuthenticationFailed && backoff_until_epoch.is_none() {
+    if reason != BackoffReason::AuthenticationFailed
+        && !legacy_unscoped
+        && backoff_until_epoch.is_none()
+    {
         return Err(AccountBackoffRepositoryError::Invalid(
             "nonterminal expiry".to_owned(),
         ));

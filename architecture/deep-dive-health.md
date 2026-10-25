@@ -23,7 +23,12 @@ Mutations are `record_success`, `record_failure`, `record_cooldown`, `disable_ac
 `enable_account`, `disable_model`, `enable_model`, and `prune_disabled_models`.
 `snapshot` lazily normalizes expired timed disables so diagnostics agree with gating.
 `hydrate_backoffs` converts validated wall-clock `AccountBackoffRecord` rows into monotonic
-remaining durations; unknown accounts are skipped with a warning, never fail-closed.
+remaining durations; unknown accounts are skipped with a warning, never fail-closed. A legacy
+row whose reason is model-scoped but whose `model_id` is NULL carries no scope this runtime can
+restore, so it is skipped and counted rather than failing the batch, and it grants neither an
+account-wide nor a model-wide suppression. The count reaches the hydration report
+(`HealthHydrationReport::skipped_legacy_backoffs`) and is surfaced as a warning that names the
+count and the reason vocabulary only.
 
 ## Backoff and circuit breaker
 
@@ -124,9 +129,21 @@ Both repositories are constructed once per generation in the generation build pa
 `HealthManager` from `account_backoffs` and its `ModelQuarantine` from `model_quarantine`
 before the generation is published, and attaches the quarantine to the router with
 `with_quarantine` so the eligibility gate is live. A row naming an account the generation
-does not know is skipped with a warning and never fails the build; a repository failure
-that cannot be bounded fails generation publication closed, because a generation must not
-become reachable with partially hydrated health.
+does not know is skipped with a warning and never fails the build; a legacy row that carries
+no recoverable scope is skipped and counted, so one row this runtime cannot interpret never
+decides whether the process starts; a repository failure that cannot be bounded fails
+generation publication closed, because a generation must not become reachable with partially
+hydrated health.
+
+The durable scope convention is unchanged: a NULL `model_id` means account-wide suppression
+and a non-NULL value scopes the row to one (account, model) pair. The table-level
+`UNIQUE(account_id, model_id, reason)` does not cover the NULL scope, because SQLite treats
+NULLs as distinct in a unique index, so migration v64 adds the partial unique index
+`uq_account_backoffs_null_model` over `(account_id, reason)` where `model_id IS NULL`, after
+the duplicate-row cleanup that must precede it. The lookup key stays the NULL-safe
+`model_id IS ?2` form. The writer still refuses to create a model-unavailable row without a
+model identity, so no new malformed row can be written by this runtime; the hydration's
+skip-and-count path exists for a restored backup or a writer this runtime does not own.
 
 The routing path's failure effects are mirrored into the same tables after the in-memory
 application, outside the selection lock. The mirror records the live decision rather than
@@ -137,6 +154,15 @@ observation on purpose: the live terminal state has no expiry, so persisting it 
 a stale withdrawal outlive the process that observed the authoritative absence and the
 in-memory success path that lifts it could never lift the durable row. Expired rows are
 retired by the `retention_cleanup` task on the bounded database maintenance schedule.
+
+The credential rejection is the one durable backoff shape without a deadline. The
+authentication policy declares no delay, so the live effect is the account disable and the
+durable row is written on the `(account_id, NULL, 'authentication_failed')` key with no
+expiry; the hydration restores it with `disable_account(name, reason, None)`, so the account
+stays disabled across a restart until the credential-change path clears the row or
+`clear_authentication` deletes it. The in-memory disable and its timing are unchanged: the
+durable row is an addition that makes the suppression survive a restart, and a failed
+durable write is warned about and leaves the live disable standing.
 
 The durable write clamps a persisted deadline to the cap the reason's own policy declares
 (`get_backoff_policy(reason).cap`, never a literal), so a policy-derived deadline within the
@@ -163,6 +189,10 @@ reads them.
 - Persistence holds restart hints only, validated on read, with secret-free diagnostics.
 - A durable mirror never widens the live window: the persisted expiry is the deadline the
   live path applied, and a terminal withdrawal is never persisted as a terminal row.
+- A row this runtime cannot interpret is skipped and reported, never fatal, and grants no
+  suppression.
+- The durable account-scoped scope is unique: one row per `(account_id, reason)` where
+  `model_id IS NULL`.
 
 ## Verification
 

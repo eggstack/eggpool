@@ -164,6 +164,14 @@ timed backoff produces none. The escalation state is therefore the health manage
 existing counters, never a second map inside this module, and no await is added to the
 selection lock.
 
+The durable account-scoped mirror follows the same policy. A reason with a timed backoff is
+persisted with the deadline the live path applied. The authentication failure is the one
+shape without a deadline: its policy declares no delay, so the live effect is the account
+disable and the durable row is written on the `(account_id, NULL, 'authentication_failed')`
+key with no expiry, which the hydration restores as a disable that has no deadline. The
+in-memory disable and its timing are unchanged; the durable row only makes the suppression
+survive a restart, and the credential-change path releases it.
+
 `with_missing_account_recovery` rejects a non-finite or non-positive interval instead of
 coercing it: `f64::max` ignores NaN, so a NaN interval silently became "no interval at
 all" and let every request re-probe a missing account immediately. A rejected value leaves
@@ -196,6 +204,8 @@ fallback. They are not exact output-token or invoice caps.
 - A durable health mirror never widens the live window: the persisted expiry is the
   deadline the live path applied, and a terminal withdrawal is never persisted as a
   terminal row.
+- A durable account-scoped row is unique per `(account_id, reason)`, and the credential
+  rejection is persisted in the deadline-less shape the validator accepts.
 
 ## Verification
 

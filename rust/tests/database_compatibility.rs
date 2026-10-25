@@ -40,8 +40,8 @@ async fn fresh_database_migrates_idempotently_and_preserves_pragmas() {
         .run()
         .await
         .expect("migrations apply");
-    assert_eq!(first.applied_versions.len(), 63);
-    assert_eq!(first.applied_this_run.len(), 63);
+    assert_eq!(first.applied_versions.len(), 64);
+    assert_eq!(first.applied_this_run.len(), 64);
     let default_member_profile: Option<String> = database
         .call(|connection| {
             connection.query_row(
@@ -270,7 +270,7 @@ async fn python_historical_fixture_upgrades_and_repositories_round_trip() {
         .await
         .expect("current migrations apply");
     assert_eq!(state.applied_this_run.first(), Some(&12));
-    assert_eq!(state.applied_this_run.last(), Some(&63));
+    assert_eq!(state.applied_this_run.last(), Some(&64));
 
     let account = AccountRepository::new(&database)
         .get_by_name("historical-account")
@@ -640,14 +640,14 @@ async fn schema54_image_upgrades_with_legacy_state_preserved() {
         .archive;
     BackupService::validate_archive(&archive).expect("pre-upgrade archive validates");
 
-    // Forward-only production upgrade: exactly migrations 55..63.
+    // Forward-only production upgrade: exactly migrations 55..64.
     let state = MigrationRunner::new(&database)
         .run()
         .await
         .expect("production upgrade applies");
     assert_eq!(state.applied_this_run.first(), Some(&55));
-    assert_eq!(state.applied_this_run.last(), Some(&63));
-    assert_eq!(state.applied_this_run.len(), 9);
+    assert_eq!(state.applied_this_run.last(), Some(&64));
+    assert_eq!(state.applied_this_run.len(), 10);
     database
         .quick_check()
         .await
@@ -1042,5 +1042,114 @@ async fn upgraded_schema54_database_recovers_identity_policy_and_budgets() {
         "managed"
     );
     restored.close().await.expect("restored database closes");
+    fs::remove_file(&path).expect("temporary database removed");
+}
+
+/// The v64 migration repairs the durable account-backoff scope.
+///
+/// The migration is immutable and already shipped, so the test replays its
+/// SQL against a database deliberately put back into the pre-migration shape:
+/// the partial unique index is dropped, the legacy rows the migration deletes
+/// are inserted, and the duplicate account-scoped rows the table-level
+/// NULL-distinct constraint admitted are inserted.
+#[tokio::test(flavor = "current_thread")]
+async fn the_v64_migration_removes_the_legacy_rows_and_constrains_the_null_scope() {
+    let path = temporary_database_path("v64-null-scope");
+    let database = open_database(&path).await;
+    let state = MigrationRunner::new(&database)
+        .run()
+        .await
+        .expect("migrations apply");
+    assert_eq!(
+        state.applied_versions.first(),
+        Some(&1),
+        "the migration chain is contiguous from v1"
+    );
+    assert_eq!(
+        state.applied_versions.last(),
+        Some(&64),
+        "the migration chain is contiguous and ends at v64"
+    );
+
+    database
+        .call(|connection| {
+            connection.execute_batch(
+                "DROP INDEX IF EXISTS uq_account_backoffs_null_model;
+                 INSERT INTO accounts (id, name, api_key_env, enabled, weight, provider_id)
+                 VALUES (1, 'account-a', 'account-a_KEY', 1, 1.0, 'provider-a');
+                 INSERT INTO account_backoffs (account_id, model_id, reason, status_code, error_class, consecutive_failures, backoff_until, last_failure_at, updated_at)
+                 VALUES (1, NULL, 'model_unavailable', 404, 'model_not_found', 1, '2030-01-01 00:00:00', '2026-01-01 00:00:00', '2026-01-01 00:00:00'),
+                        (1, NULL, 'rate_limited', 429, 'rate_limit', 1, '2030-01-01 00:00:00', '2026-01-01 00:00:00', '2026-01-01 00:00:00'),
+                        (1, NULL, 'rate_limited', 429, 'rate_limit', 2, '2030-01-01 00:00:00', '2026-01-02 00:00:00', '2026-01-02 00:00:00'),
+                        (1, 'shared-model', 'model_unavailable', 404, 'model_not_found', 1, '2030-01-01 00:00:00', '2026-01-01 00:00:00', '2026-01-01 00:00:00');",
+            )
+        })
+        .await
+        .expect("the pre-migration rows persist");
+
+    database
+        .call(|connection| {
+            connection.execute_batch(include_str!(
+                "../assets/db/migrations/0064_account_backoffs_null_identity.sql"
+            ))
+        })
+        .await
+        .expect("the v64 migration applies");
+
+    let rows: Vec<(String, Option<String>, i64)> = database
+        .call(|connection| {
+            let mut statement = connection.prepare(
+                "SELECT reason, model_id, consecutive_failures FROM account_backoffs ORDER BY id",
+            )?;
+            statement
+                .query_map([], |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)))?
+                .collect::<Result<Vec<_>, _>>()
+        })
+        .await
+        .expect("the durable rows are readable");
+
+    assert!(
+        !rows
+            .iter()
+            .any(|(reason, model_id, _)| reason == "model_unavailable" && model_id.is_none()),
+        "the migration deletes the legacy rows that carry no model identity: {rows:?}"
+    );
+    assert_eq!(
+        rows.iter()
+            .filter(|(reason, model_id, _)| reason == "rate_limited" && model_id.is_none())
+            .count(),
+        1,
+        "the duplicate account-scoped rows collapse into one: {rows:?}"
+    );
+    assert!(
+        rows.iter()
+            .any(|(reason, model_id, failures)| reason == "rate_limited"
+                && model_id.is_none()
+                && *failures == 2),
+        "the surviving account-scoped row is the most recently updated one: {rows:?}"
+    );
+    assert!(
+        rows.iter()
+            .any(|(reason, model_id, _)| reason == "model_unavailable"
+                && model_id.as_deref() == Some("shared-model")),
+        "the model-scoped row is untouched: {rows:?}"
+    );
+
+    // The partial unique index now rejects a second account-scoped row.
+    let duplicate = database
+        .call(|connection| {
+            connection.execute(
+                "INSERT INTO account_backoffs (account_id, model_id, reason, consecutive_failures, last_failure_at, updated_at) \
+                 VALUES (1, NULL, 'rate_limited', 1, '2026-01-03 00:00:00', '2026-01-03 00:00:00')",
+                [],
+            )
+        })
+        .await;
+    assert!(
+        duplicate.is_err(),
+        "the durable schema rejects a second account-scoped row for the same account and reason"
+    );
+
+    database.close().await.expect("database closes");
     fs::remove_file(&path).expect("temporary database removed");
 }

@@ -825,9 +825,15 @@ impl RoutingRouter {
 
     /// Mirror the account-scoped cooldown into the durable backoff table.
     ///
-    /// Only a real cooldown is durable: a bare circuit penalty carries no
-    /// deadline to restore after a restart, and the durable backoff row
-    /// requires one.
+    /// A timed cooldown is durable with the deadline the live path applied.
+    /// The authentication-failure reason is the one shape the durable
+    /// contract defines without a deadline: its policy declares no delay, and
+    /// the durable validator accepts the deadline-less row, which the
+    /// hydration restores as an account disable with no expiry. The row is
+    /// written on the `(account_id, NULL, 'authentication_failed')` key, so a
+    /// credential rejection survives a restart and is released by the
+    /// credential-change path. Every other reason keeps its early return, so
+    /// no other reason's durable behaviour changes.
     async fn persist_account_backoff(
         &self,
         claim: &SelectionClaim,
@@ -838,8 +844,13 @@ impl RoutingRouter {
         let Some(durable) = self.state.durable.as_ref() else {
             return;
         };
-        let Some(delay) = backoff_until else {
-            return;
+        let deadline = if reason == BackoffReason::AuthenticationFailed {
+            None
+        } else {
+            let Some(delay) = backoff_until else {
+                return;
+            };
+            Some(delay.as_secs_f64())
         };
         let now = epoch_seconds() as f64;
         let record = AccountBackoffRecord {
@@ -850,7 +861,7 @@ impl RoutingRouter {
             status_code: None,
             error_class: None,
             consecutive_failures,
-            backoff_until_epoch: Some(now + delay.as_secs_f64()),
+            backoff_until_epoch: deadline.map(|seconds| now + seconds),
             last_failure_epoch: now,
             updated_epoch: now,
         };
