@@ -129,10 +129,11 @@ Public score_accounts/rank_accounts/near_ties remain available and delegate to t
 - M008 required the acceptance of
   `plans/adrs/ADR-0005-durable-health-state-repair-and-authentication-failure-durability.md`,
   which the maintainers accepted on 2026-10-25, and on no other milestone.
-- M009 depends on the acceptance of
-  `plans/adrs/ADR-0006-authoritative-terminal-model-withdrawal-ownership.md`
-  and on M008 closed. M008 is a hard dependency because both milestones edit
-  `rust/src/health/` and `rust/src/routing/router.rs`.
+- M009 required the acceptance of
+  `plans/adrs/ADR-0006-authoritative-terminal-model-withdrawal-ownership.md`,
+  which the maintainers accepted on 2026-10-25, and on M008 closed. M008 is a
+  hard dependency because both milestones edit `rust/src/health/` and
+  `rust/src/routing/router.rs`.
 - No plan in the dashboard, request admission and wire, operations CLI, deployment and packaging, or planning governance subsystems depends on this roadmap's milestones.
 
 ## 7. Milestones
@@ -473,7 +474,8 @@ Dependencies:
 
 - Hard: `plans/adrs/ADR-0006-authoritative-terminal-model-withdrawal-ownership.md`
   accepted. The milestone removes three types from the library crate's public
-  surface and changes a capability boundary.
+  surface and changes a capability boundary. The maintainers accepted it on
+  2026-10-25.
 - Hard: Milestone 008 closed. Both edit `rust/src/health/` and
   `rust/src/routing/router.rs`, so they do not run concurrently.
 
@@ -568,4 +570,4 @@ evidence. No routing architecture or public compatibility surface may regress.
 | 006 — backoff policy adoption and health-reason vocabulary unification | closed | plans/implementation/routing-selection/006-backoff-policy-adoption-and-health-reason-vocabulary.md | plans/closure/routing-selection/006-status.md | none; closed through M007 |
 | 007 — durable backoff scope and reason correction | closed | plans/implementation/routing-selection/007-durable-backoff-scope-and-reason-correction.md | plans/closure/routing-selection/007-status.md | none |
 | 008 — durable health state repair and authentication-failure durability | ready | plans/implementation/routing-selection/008-durable-health-state-repair-and-authentication-failure-durability.md | — | none; ADR-0005 accepted 2026-10-25 |
-| 009 — health effect ownership and terminal-withdrawal producer retirement | blocked | plans/implementation/routing-selection/009-health-effect-ownership-and-terminal-withdrawal.md | — | Acceptance of `plans/adrs/ADR-0006-authoritative-terminal-model-withdrawal-ownership.md`; M008 closed |
+| 009 — health effect ownership and terminal-withdrawal producer retirement | blocked | plans/implementation/routing-selection/009-health-effect-ownership-and-terminal-withdrawal.md | — | ADR-0006 accepted 2026-10-25; M008 closed |

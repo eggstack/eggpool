@@ -17,8 +17,7 @@ Long-term requirements:
 Applicable ADRs:
 
 - `plans/adrs/ADR-0006-authoritative-terminal-model-withdrawal-ownership.md`
-  (**proposed** 2026-10-25 — this milestone implements that decision; the milestone is
-  blocked on its acceptance, see §2)
+  (**accepted** 2026-10-25 — this milestone implements that decision; see §2)
 
 Primary class: invariant
 
@@ -35,25 +34,35 @@ the applier onto the path that actually runs.
 
 ## 2. Why this milestone is ready
 
-**Blocked.** This milestone removes three types from the library crate's public
-surface (`pub mod health` at `rust/src/lib.rs:16` makes them public API), and it
-changes a capability boundary: whether the authoritative terminal model
-withdrawal exists as a supported capability. Both are the repository's ADR
-threshold. The decision — what is retired, what is retained, and what the
-prerequisite for reintroducing a producer is — is recorded in
+**Blocked on M008 only.** This milestone removes three types from the library
+crate's public surface (`pub mod health` at `rust/src/lib.rs:16` makes them
+public API), and it changes a capability boundary: whether the authoritative
+terminal model withdrawal exists as a supported capability. Both are the
+repository's ADR threshold. The decision — what is retired, what is retained, and
+what the prerequisite for reintroducing a producer is — is recorded in
 `plans/adrs/ADR-0006-authoritative-terminal-model-withdrawal-ownership.md`,
-which the project maintainers must accept before this milestone proceeds.
+which the project maintainers accepted on 2026-10-25.
 
-The milestone has one hard dependency: **Routing Selection M008 must be
-closed.** M008 owns the durable health state repair in
+The acceptance revision is the commit that changes that record from `proposed`
+to `accepted`. Three passages in the proposed draft were corrected before
+acceptance because they contradicted the record's own Decision or understated its
+consequence: the two Decision bullets that read as contradictory now name the
+removed set and the retained enforcement as the two different mechanisms they
+are; the Compatibility section now lists the complete published-surface change
+rather than three names; and the Negative consequences now name the capability
+the milestone retires. The Decision is unchanged in substance: Option B is
+selected.
+
+The milestone has one remaining hard dependency: **Routing Selection M008 must
+be closed.** M008 owns the durable health state repair in
 `rust/src/health/repository.rs`, `rust/src/health/health_manager.rs`,
 `rust/src/routing/router.rs`, and the migration directory; this milestone
 edits the same files. The two do not run concurrently.
 
 Every defect it addresses is reproducible from the repository at the stated
-baseline. When ADR-0006 is accepted and M008 is closed, this plan's §2 is
-rewritten to record both, the plan's `Status` moves from `blocked` to `ready`,
-and the milestone becomes dependency-ready in the registry.
+baseline. When M008 is closed, this plan's §2 is rewritten to record it, the
+plan's `Status` moves from `blocked` to `ready`, and the milestone becomes
+dependency-ready in the registry.
 
 ## 3. Current implementation evidence
 
@@ -276,7 +285,24 @@ and the terminal-withdrawal comment at `:486-489`.
 `rust/src/health/health_manager.rs`: the in-memory `terminal_models` set
 (`:44`, `:68`, `:89`, `:179`) and its eligibility checks (`:99`, `:222`,
 `:340`) are removed, along with the removal sites (`:512`, `:536`), because
-nothing populates the set once the producer is gone.
+nothing populates the set once the producer is gone. That set is the
+HealthManager's own mechanism: it is populated only by `disable_model` and is
+never hydrated from a durable row. It is not the enforcement that reads the
+retained durable terminal vocabulary — that enforcement is the quarantine map's
+terminal state together with the routing eligibility gate that consults it, and
+it stays.
+
+`rust/src/operations/status.rs`: the `has_model_quarantine` projection reads
+`!snapshot.terminal_models.is_empty() || !snapshot.disabled_models.is_empty()`
+and reads `!snapshot.disabled_models.is_empty()` after the change. The two
+agree in every reachable state, because `disable_model` inserts into
+`disabled_models` in both of its branches and `terminal_models` is only ever
+inserted as a subset of it, so the published boolean does not change.
+
+Because the set is removed, the HealthManager no longer expresses "a terminal
+withdrawal that a later timed disable must not clear". That capability had no
+producer and no reachable state, and the durable terminal withdrawal remains
+enforced by the retained quarantine gate, which the success path still lifts.
 
 ### 6.3 The retained vocabulary is annotated, not removed
 
@@ -305,6 +331,12 @@ path in `rust/tests/durable_health_effects.rs`:
 The test at `rust/tests/health.rs` that exercises the quarantine's terminal
 state directly (`:234`, `:255`, `:281`) is retained, because the terminal
 vocabulary is retained.
+
+The HealthManager-level test that asserts a terminal withdrawal survives a
+later timed disable (`rust/tests/health.rs:136`) is removed together with the
+capability it asserts. The retained enforcement is asserted instead: a durable
+quarantine row carrying the terminal state is still parsed and still enforced
+by the quarantine gate, and the success path still lifts it.
 
 ### 6.5 The deep dives are corrected
 
@@ -401,10 +433,12 @@ removed.
 
 **Concurrency.** Nothing changes.
 
-**Public surface.** The three removed names are a published-surface change, not
-a runtime behaviour change. A downstream consumer that constructed a
-`HealthEffectApplier` had no production path to apply it to; the removal
-surfaces that rather than hiding it.
+**Public surface.** The removed names are a published-surface change, not a
+runtime behaviour change, and the complete list is the one in §9. A downstream
+consumer that constructed a `HealthEffectApplier` had no production path to
+apply it to; the removal surfaces that rather than hiding it. The same holds
+for the `terminal_models` fields and for the `AbsentAuthoritative` variant: no
+reachable production state depended on them.
 
 ## 9. Compatibility and migration
 
@@ -414,10 +448,23 @@ reason string changes. The `model_quarantine` table keeps every state and
 provenance value it admits today, and every existing row is parsed and
 enforced exactly as it is today.
 
-The published-surface change is the removal of `health::HealthEffect`,
-`health::HealthEffectApplier`, and `health::HealthEffectOutcome` from the
-library crate's public surface. `pub mod health` remains, and the module's
-remaining exports are unchanged.
+The published-surface change is the removal of three public re-exports plus
+four public members that exist only to carry the retired capability:
+
+- `health::HealthEffect`, `health::HealthEffectApplier`, and
+  `health::HealthEffectOutcome` are removed.
+- The public `terminal_models` field is removed from `health::AccountHealth`
+  and from `health::AccountHealthSnapshot`.
+- The public `coordinator::ProviderModelPresence::AbsentAuthoritative` variant
+  is removed; `Known` and `Unknown` remain.
+- The public `coordinator::FailureObservation::provider_model_presence` field
+  is removed.
+- `health::HealthManager::disable_model` loses its `terminal: bool` parameter.
+
+`pub mod health` and `pub mod coordinator` remain, and the modules' remaining
+exports keep their names and shapes apart from the members listed above. The
+`has_model_quarantine` projection in `rust/src/operations/status.rs` is
+unchanged in value; see §6.2.
 
 The routing-selection roadmap's M007 deferred-work entry is updated to point
 at this milestone. The closed closure records

@@ -90,7 +90,7 @@ No new runtime, schema or performance claim lands with these plans.
 | Provider profile metadata corrective | closed | `plans/subsystems/provider-profile-metadata-corrective-roadmap.md` | M001 closed — provider template endpoint/source reconciliation | M001 terminal; no successor registered. |
 | Provider profile metadata planning/documentation reconciliation | closed | `plans/subsystems/provider-profile-metadata-planning-reconciliation-corrective-roadmap.md` | C001 closed — closed-roadmap/source-truth reconciliation | No successor registered. |
 | Shared provider profile contract | closed | `plans/subsystems/shared-provider-profile-contract-roadmap.md` | M002 closed — OpenCode Go wire hints for the current first-party endpoint table | M001 and M002 closed; the roadmap re-opened on evidence and closed again on the same evidence. The four placed-but-unhinted models now resolve on their reviewed surfaces — `beam-free`, `minimax-m3.1-flash-free` and `step-5-preview` on Chat Completions, `claude-haiku-5-5` on Anthropic Messages. `gemini-4-argon-contributor` and the five unplaced catalog ids stay unresolved. The six entries the current table no longer places keep their hints with a recorded disposition, and a drift guard compares the wire map, the reviewed record and a dated catalog snapshot, failing closed on an unexplained delta. CodeGG consumption of M001 remains unblocked at immutable revision `9ac6a131`; CodeGG consumption of M002 is pinned to the M002 closure revision. `longcat-2.5-preview-free` stays withdrawn upstream and is not M002's to restore. |
-| Routing selection | active | `plans/subsystems/routing-selection-roadmap.md` | M009 blocked — health effect ownership and terminal-withdrawal producer retirement | Reopened on evidence at baseline `e6822d8f78`: M001–M003 remain closed. M004, M005, and M006 are closed through M007. M008 is ready: `plans/adrs/ADR-0005-durable-health-state-repair-and-authentication-failure-durability.md` was accepted on 2026-10-25 and M008 has no other dependency. M009 is registered and is blocked on the acceptance of `plans/adrs/ADR-0006-authoritative-terminal-model-withdrawal-ownership.md` and on M008 closed. |
+| Routing selection | active | `plans/subsystems/routing-selection-roadmap.md` | M009 blocked — health effect ownership and terminal-withdrawal producer retirement | Reopened on evidence at baseline `e6822d8f78`: M001–M003 remain closed. M004, M005, and M006 are closed through M007. M008 is ready: `plans/adrs/ADR-0005-durable-health-state-repair-and-authentication-failure-durability.md` was accepted on 2026-10-25 and M008 has no other dependency. M009 is registered and is blocked only on M008 closed; `plans/adrs/ADR-0006-authoritative-terminal-model-withdrawal-ownership.md` was accepted on 2026-10-25. |
 | Runtime efficiency | closed | `plans/subsystems/runtime-efficiency-roadmap.md` | M001–M003 closed — no successor registered | No M003-dependent plan was unblocked. Persistence M007 has since completed Pi 5/MMC qualification and was rejected on WAL convergence gates; production is unchanged. |
 | Persistence | active | `plans/subsystems/persistence-roadmap.md` | M011 closed — post-M010 roadmap/documentation reconciliation | M009/M010 closures accepted. Documentation/tooling-only corrective; production remains WAL/NORMAL. No technical persistence successor is registered. |
 | Deployment and packaging | active | `plans/subsystems/deployment-packaging-roadmap.md` | M008 ready — CI dependency-lock discipline | Reopened on evidence at baseline `e6822d8f78`: M001–M005 remain closed. M006 is closed through M007. M008 is registered and has no dependency. |
@@ -225,12 +225,18 @@ applier. The Python-era runtime had a producer for it and the Rust runtime does
 not. The durable terminal state itself was a deliberate exclusion, recorded in
 the closed M005 record because the synchronous success path could never lift a
 durable terminal row. The milestone removes three types from the library
-crate's public surface and changes a capability boundary, so it is blocked on
-the acceptance of
+crate's public surface and changes a capability boundary, so it required the
+acceptance of
 `plans/adrs/ADR-0006-authoritative-terminal-model-withdrawal-ownership.md` and
 on M008 closed, because both milestones edit `rust/src/health/` and
-`rust/src/routing/router.rs`. Accepting that ADR is a one-line status change on
-the ADR plus its acceptance note.
+`rust/src/routing/router.rs`. The maintainers accepted that ADR on 2026-10-25,
+with three passages in the proposed draft corrected before acceptance because
+they contradicted the record's own Decision or understated its consequence:
+the two Decision bullets that read as contradictory now name the removed set
+and the retained enforcement as the two different mechanisms they are, the
+Compatibility section now lists the complete published-surface change rather
+than three names, and the Negative consequences now name the capability the
+milestone retires. M009 is therefore blocked only on M008 closed.
 
 `plans/implementation/deployment-packaging/008-ci-dependency-lock-discipline.md`
 is registered as Deployment and Packaging M008 at baseline
@@ -272,7 +278,7 @@ isolation is unaffected.
 
 | Subsystem | Milestone | Blocker |
 |---|---|---|
-| Routing selection | M009 | Acceptance of `plans/adrs/ADR-0006-authoritative-terminal-model-withdrawal-ownership.md`, and M008 closed. The plan is `plans/implementation/routing-selection/009-health-effect-ownership-and-terminal-withdrawal.md`. M008 is a hard dependency because both milestones edit `rust/src/health/` and `rust/src/routing/router.rs`. |
+| Routing selection | M009 | M008 closed. The plan is `plans/implementation/routing-selection/009-health-effect-ownership-and-terminal-withdrawal.md`. ADR-0006 was accepted on 2026-10-25. M008 is a hard dependency because both milestones edit `rust/src/health/` and `rust/src/routing/router.rs`. |
 
 Unblock audit (on-prem user access reopening after M012 closure, baseline
 `3c7def1e`): M001–M013 closure records remain immutable; no

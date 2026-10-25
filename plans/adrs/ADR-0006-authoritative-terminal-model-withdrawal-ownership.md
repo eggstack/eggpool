@@ -1,8 +1,48 @@
 # ADR-0006: Authoritative terminal model withdrawal ownership
 
-Status: proposed
+Status: accepted
 
 Date: 2026-10-25
+
+Accepted: 2026-10-25 by the project maintainers, on explicit maintainer
+direction. The acceptance revision is the commit that changes this record from
+`proposed` to `accepted`. The implementing milestone is Routing Selection M009;
+its closure record carries the implementing revision.
+
+Three passages in the `proposed` draft were corrected before acceptance,
+because the draft contradicted itself or understated its own consequence:
+
+- The Decision removed "the in-memory `terminal_models` set and the eligibility
+  checks that read it" and, in the next bullet, retained "the in-memory
+  terminal enforcement that reads them". As drafted the two bullets read as
+  contradicting each other. The corrected wording names the two mechanisms
+  explicitly, because they are different: the removed set is the HealthManager's
+  own `AccountHealth.terminal_models`, which is populated only by
+  `disable_model` and is never hydrated from a durable row; the retained
+  enforcement is the quarantine map's terminal state together with the routing
+  eligibility gate that consults it, which is where a hydrated
+  `terminal_withdrawn` row lands.
+- The draft's Compatibility section said the published-surface change was the
+  removal of three re-exports and that "the module's remaining exports are
+  unchanged". That understated it. Removing the set also removes the public
+  `terminal_models` field from `health::AccountHealth` and
+  `health::AccountHealthSnapshot`; removing the producer also removes the
+  public `coordinator::ProviderModelPresence::AbsentAuthoritative` variant, the
+  public `coordinator::FailureObservation::provider_model_presence` field, and
+  the `terminal: bool` parameter of `health::HealthManager::disable_model`. The
+  corrected wording lists the complete published-surface change and states why
+  the one consumer of the removed field keeps the same published boolean.
+- The draft's Negative consequences counted only the three lost types and did
+  not name the capability the milestone retires. The corrected wording states
+  it: the HealthManager no longer expresses "a terminal withdrawal that a
+  later timed disable must not clear". That capability had no producer and no
+  reachable state, and the durable terminal withdrawal is still enforced by the
+  retained quarantine gate.
+
+The Decision is unchanged in substance: Option B is selected, the parallel
+applier and the unreachable producer path are removed, the durable
+terminal-withdrawal vocabulary is retained with its enforcement, and the M005
+durable-clearing prerequisite is recorded.
 
 Decision owners: project maintainers
 
@@ -238,19 +278,25 @@ Option B is selected.
   public re-export from `rust/src/health/mod.rs`. The public API of the library
   crate loses `health::HealthEffect`, `health::HealthEffectApplier`, and
   `health::HealthEffectOutcome`. This is a published-surface change and is
-  recorded as such.
+  recorded as such; the complete list is given under Compatibility and
+  migration.
 - The `terminal_withdrawal` model effect, the `AbsentAuthoritative` variant, the
   `provider_model_presence` field, and the unreachable terminal selection in the
   router are removed. The live model-absence behaviour is the bounded
   quarantine, which is what the code already does in every reachable case.
-- The in-memory `terminal_models` set and the eligibility checks that read it
-  are removed, because nothing populates them once the producer is gone.
+- The HealthManager's own in-memory `terminal_models` set and the eligibility
+  checks that read it are removed, because nothing populates them once the
+  producer is gone. That set is populated only by `disable_model`; it is never
+  hydrated from a durable row.
 - The durable terminal-withdrawal vocabulary is **retained**: the
   `QuarantineState::TerminalWithdrawn` state, the `set_terminal_withdrawn`
   writer, and the `EvidenceProvenance::ProviderCatalog` and `MigrationLegacy`
-  provenances remain, and the in-memory terminal enforcement that reads them is
-  therefore also retained. They are the reader for a durable state the schema
-  admits; removing them would change the behaviour of an existing row.
+  provenances remain, and so does the enforcement that reads them. That
+  enforcement is the quarantine map's terminal state together with the routing
+  eligibility gate that consults it — which is where a hydrated
+  `terminal_withdrawn` row lands, and it is a different mechanism from the
+  removed `terminal_models` set. They are the reader for a durable state the
+  schema admits; removing them would change the behaviour of an existing row.
 - The M005 prerequisite is recorded explicitly: reintroducing a producer
   requires a milestone that first makes the success path's clearing durable, or
   that adds an explicit terminal-withdrawal durable state with its own clearing
@@ -280,10 +326,21 @@ retained without a producer only when the durable reader still enforces it.
 
 ### Negative
 
-- The public API of the library crate loses three types. A downstream consumer
-  of `eggpool::health::HealthEffectApplier` would need to change. The crate is
-  the runtime, and the repository's own tooling consumes it only in-tree, but
-  the removal is a published-surface change and is not free.
+- The public API of the library crate loses three types and four public
+  members, as the Compatibility section lists. A downstream consumer of
+  `eggpool::health::HealthEffectApplier`, of
+  `eggpool::coordinator::ProviderModelPresence::AbsentAuthoritative`, of
+  `eggpool::coordinator::FailureObservation::provider_model_presence`, or of
+  either `terminal_models` field would need to change. The crate is the
+  runtime, and the repository's own tooling consumes it only in-tree, but the
+  removal is a published-surface change and is not free.
+- The HealthManager no longer expresses "a terminal withdrawal that a later
+  timed disable must not clear". That capability had no producer and no
+  reachable state — the set was never populated in production — so no reachable
+  behaviour changes; the durable terminal withdrawal is still enforced, by the
+  retained quarantine gate, and the success path still lifts it there. The
+  test that asserted the retired capability at the HealthManager level is
+  removed with it, and the retained enforcement is asserted instead.
 - The retained terminal-withdrawal vocabulary has no producer, so a reader
   without a writer remains in the tree. That is a deliberate, recorded state,
   not an oversight, and it is bounded: the vocabulary is small, it is enforced,
@@ -313,11 +370,31 @@ vocabulary changes. The `model_quarantine` table keeps every state and
 provenance value it admits today, and every existing row is parsed and
 enforced exactly as it is today.
 
-The published-surface change is the removal of three public re-exports:
-`health::HealthEffect`, `health::HealthEffectApplier`, and
-`health::HealthEffectOutcome`. `pub mod health` remains; the module's remaining
-exports are unchanged. No endpoint, response shape, configuration key, reason
-string, or durable row format changes.
+The published-surface change is the removal of three public re-exports plus
+four public members that exist only to carry the retired capability:
+
+- `health::HealthEffect`, `health::HealthEffectApplier`, and
+  `health::HealthEffectOutcome` are removed.
+- The public `terminal_models` field is removed from `health::AccountHealth`
+  and from `health::AccountHealthSnapshot`.
+- The public `coordinator::ProviderModelPresence::AbsentAuthoritative` variant
+  is removed; `Known` and `Unknown` remain.
+- The public `coordinator::FailureObservation::provider_model_presence` field is
+  removed.
+- `health::HealthManager::disable_model` loses its `terminal: bool` parameter.
+
+`pub mod health` and `pub mod coordinator` remain, and the modules' remaining
+exports keep their names and shapes apart from the members listed above. No
+endpoint, response shape, configuration key, reason string, or durable row
+format changes.
+
+The one consumer of the removed field outside `rust/src/health/` is the
+`has_model_quarantine` projection in `rust/src/operations/status.rs`, which
+reads `!snapshot.terminal_models.is_empty() || !snapshot.disabled_models.is_empty()`.
+After the change it reads `!snapshot.disabled_models.is_empty()`. The two
+expressions agree in every reachable state, because `disable_model` inserts
+into `disabled_models` in both of its branches and `terminal_models` is only
+ever inserted as a subset of it, so the published boolean does not change.
 
 No credential, prompt, raw body, or cache key enters any affected path.
 
