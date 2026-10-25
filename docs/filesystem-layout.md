@@ -35,10 +35,10 @@ and operations path.
 
 | Path | Owner | Mode |
 |------|-------|------|
-| `~/.config/eggpool/` | invoking user | `0755` |
+| `~/.config/eggpool/` | invoking user | `0700` (deploy) / `0755` (installer) |
 | `~/.config/eggpool/config.toml` | invoking user | `0600` |
 | `~/.config/eggpool/.env` | invoking user | `0600` |
-| `~/.local/share/eggpool/` | invoking user | `0755` |
+| `~/.local/share/eggpool/` | invoking user | `0750` (deploy) / `0755` (installer) |
 | `~/.local/share/eggpool/*.sqlite3` | invoking user | `0644` |
 | `~/.local/state/eggpool/` | invoking user | `0700` |
 
@@ -47,10 +47,14 @@ plaintext; the installer publishes it `0600` and the runtime writes it
 `0600`. The runtime state directory is owner-only because it holds the PID
 file, the control socket, and the runtime log. The `.env` file is
 operator-created rather than runtime-created, so its mode is a requirement
-on the operator, not an enforced one.
+on the operator, not an enforced one. The database file keeps the SQLite
+default mode; the directory holding it is what controls access to it.
 
 `eggpool deploy systemd --install` creates the directories above as the
-deploy user before writing the unit file.
+deploy user before writing the unit file, and sets the config directory to
+`0700`, the data directory to `0750`, and the state directory to `0700`.
+The installer creates the config and data directories with the process
+umask instead, so they are `0755` unless the operator's umask is stricter.
 
 ## Production layout
 
