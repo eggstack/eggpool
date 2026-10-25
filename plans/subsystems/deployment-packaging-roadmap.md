@@ -200,9 +200,7 @@ contract under their explicit release tag.
   uses; a reintroduced literal fails validation in ordinary CI.
 - M006 closed. No further milestone is registered in this subsystem.
 - M007 closed. No further milestone is registered in this subsystem.
-- M008 has no dependency. It changes the command that installs the Python
-  environment in the CI and qualification workflows, not the dependencies the
-  lockfile selects, and it touches no other subsystem's milestones.
+- M008 closed. No further milestone is registered in this subsystem.
 
 ## 7. Milestones
 
@@ -678,4 +676,4 @@ CI environment is built from the committed lockfile or the job fails.
 | 5 | closed | `plans/archive/implementation/deployment-packaging/005-active-path-integration-detection-corrective.md` | `plans/closure/deployment-packaging/005-status.md` | none; M004 closed |
 | 6 | closed | `plans/implementation/deployment-packaging/006-release-artifact-version-derivation-and-artifact-hygiene.md` | `plans/closure/deployment-packaging/006-status.md` | none; closed through M007 |
 | 7 | closed | `plans/implementation/deployment-packaging/007-release-action-pin-enforcement-and-guard-correction.md` | `plans/closure/deployment-packaging/007-status.md` | none |
-| 8 | ready | `plans/implementation/deployment-packaging/008-ci-dependency-lock-discipline.md` | — | none |
+| 8 | closed | `plans/implementation/deployment-packaging/008-ci-dependency-lock-discipline.md` | `plans/closure/deployment-packaging/008-status.md` | none |
