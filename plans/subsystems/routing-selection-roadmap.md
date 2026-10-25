@@ -125,6 +125,10 @@ Public score_accounts/rank_accounts/near_ties remain available and delegate to t
 - M004 had no hard dependency; it was a local fail-closed correction set and is now closed.
 - M005 had no hard dependency; the durable tables already existed and only a consumer path was missing. It is now closed, and the durable path persists the same policy the live path applies.
 - M006 had a hard dependency on M005: the policy and vocabulary it adopts must be the ones the durable path persists. The M005 closure satisfied it, and M006 is now closed.
+- M007 had a hard dependency on M005 and M006 closed, and is now closed.
+- M008 depends on the acceptance of
+  `plans/adrs/ADR-0005-durable-health-state-repair-and-authentication-failure-durability.md`
+  and on no other milestone.
 - No plan in the dashboard, request admission and wire, operations CLI, deployment and packaging, or planning governance subsystems depends on this roadmap's milestones.
 
 ## 7. Milestones
@@ -391,7 +395,66 @@ Deferred work:
 - Whether a provider hint should escalate along the policy ladder. That is a
   policy change on the dominant rate-limit path and needs its own milestone.
 - The parallel `HealthEffectApplier` in `rust/src/health/effects.rs`, which
-  has no production caller.
+  has no production caller. Discharged by a successor milestone in this
+  subsystem.
+
+### Milestone 008 — Durable health state repair and authentication-failure durability
+
+Class: invariant
+
+Objective:
+
+Make the durable health state internally consistent — a row the runtime cannot
+interpret must not decide whether the process starts, the durable table's
+uniqueness must match the scope convention its own migration documents, and an
+account whose credential was rejected must stay disabled across a restart.
+
+Dependencies:
+
+- Hard: `plans/adrs/ADR-0005-durable-health-state-repair-and-authentication-failure-durability.md`
+  accepted. The milestone implements that decision, and the decision changes
+  what durable state means across a restart and changes auth semantics.
+- Interface: the durable backoff table's scope convention is unchanged. A NULL
+  `model_id` still means account-wide suppression.
+- Hard: none on another milestone. Milestone 009 follows this one and is not
+  a dependency of it.
+
+Deliverable boundary:
+
+- A durable `model_unavailable` row with a NULL `model_id` is reported and
+  skipped by the hydration instead of failing the whole batch, and the
+  generation is still published.
+- The durable backoff table gains the NULL-scope uniqueness that migration 0054
+  gave the quarantine table, preceded by the same duplicate-row cleanup.
+- The live failure path writes the deadline-less `authentication_failed` row
+  that the schema, the validator, the hydrator, and the credential-change
+  rehash path already exist for.
+- The backoff policy table, the reason vocabulary, the scope rules, the
+  escalation rungs, and the quarantine state machine are unchanged.
+
+User or operator value:
+
+A database written by a predecessor release no longer prevents EggPool from
+starting, and an account whose credential the upstream rejected is still
+disabled after a restart instead of quietly becoming eligible again.
+
+Exit conditions:
+
+- A durable-effects test asserts that a hydration over a table containing the
+  malformed row succeeds and reports the skip.
+- A durable-effects test asserts that the presence of such a row does not
+  prevent a generation from being published.
+- A durable-effects test asserts that a credential rejection writes the
+  durable row and that hydration restores the account disable.
+- The migration chain is contiguous from v1 to v64 and the checksum inventory
+  guard passes.
+- Default and no-default workspace suites pass.
+
+Deferred work:
+
+- The `migration_legacy` provenance promised by migration 0051 is not
+  produced, because a legacy account-wide row carries no model identity to
+  attribute. The new migration records that.
 
 ## 8. Cross-cutting requirements
 
@@ -435,7 +498,7 @@ Run strict Clippy and the full serial default/no-default workspace before closur
 ## 11. Completion definition
 
 This roadmap closes when M001 and M003 are closed with semantic and performance
-evidence, and when M004–M006 are closed with correctness and durable-health
+evidence, and when M004–M009 are closed with correctness and durable-health
 evidence. No routing architecture or public compatibility surface may regress.
 
 ## 12. Milestone status
@@ -449,3 +512,4 @@ evidence. No routing architecture or public compatibility surface may regress.
 | 005 — durable health effect application and quarantine gating | closed | plans/implementation/routing-selection/005-durable-health-effect-application-and-quarantine-gating.md | plans/closure/routing-selection/005-status.md | none; closed through M007 |
 | 006 — backoff policy adoption and health-reason vocabulary unification | closed | plans/implementation/routing-selection/006-backoff-policy-adoption-and-health-reason-vocabulary.md | plans/closure/routing-selection/006-status.md | none; closed through M007 |
 | 007 — durable backoff scope and reason correction | closed | plans/implementation/routing-selection/007-durable-backoff-scope-and-reason-correction.md | plans/closure/routing-selection/007-status.md | none |
+| 008 — durable health state repair and authentication-failure durability | blocked | plans/implementation/routing-selection/008-durable-health-state-repair-and-authentication-failure-durability.md | — | Acceptance of `plans/adrs/ADR-0005-durable-health-state-repair-and-authentication-failure-durability.md` |
