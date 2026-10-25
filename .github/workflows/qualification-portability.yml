@@ -36,7 +36,7 @@ jobs:
       - uses: dtolnay/rust-toolchain@stable
         with:
           targets: ${{ matrix.rust_target }}
-      - run: uv sync --frozen
+      - run: uv sync --locked
       - run: cargo fmt --manifest-path rust/Cargo.toml --all -- --check
       - run: cargo clippy --manifest-path rust/Cargo.toml --all-targets --target ${{ matrix.rust_target }} -- -D warnings
       - run: cargo build --manifest-path rust/Cargo.toml --release --target ${{ matrix.rust_target }}

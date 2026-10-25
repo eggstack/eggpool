@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 import subprocess
+import sys
 from pathlib import Path
 
 from scripts.validate_release_docs import validate_release_docs
@@ -26,7 +27,7 @@ def test_public_metadata_and_docs_are_consistent() -> None:
 
 def test_guard_is_machine_readable_and_rejects_root_release_builds() -> None:
     completed = subprocess.run(
-        ["uv", "run", "python", "scripts/validate_release_docs.py"],
+        [sys.executable, str(ROOT / "scripts/validate_release_docs.py")],
         cwd=ROOT,
         capture_output=True,
         text=True,

@@ -46,5 +46,5 @@ jobs:
       - uses: astral-sh/setup-uv@v4
         with:
           python-version: "3.11"
-      - run: uv sync --frozen
+      - run: uv sync --locked
       - run: uv run pytest tests/tooling/test_installer.py -q --tb=short --maxfail=1
