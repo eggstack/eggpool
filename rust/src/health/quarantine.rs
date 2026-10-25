@@ -56,6 +56,16 @@ pub enum QuarantineState {
     Healthy,
     Suspected,
     Quarantined,
+    /// Durable terminal withdrawal.
+    ///
+    /// The runtime has no producer for this state: Routing Selection M009
+    /// retired the only one, the authoritative-absence classification that
+    /// could select it. It is retained so a durable row that already carries
+    /// `terminal_withdrawn` keeps being parsed and keeps being enforced by
+    /// [`ModelQuarantine::is_model_quarantined`] and the routing eligibility
+    /// gate that consults it. Reintroducing a producer requires a milestone
+    /// that first makes the success path's clearing durable, the prerequisite
+    /// the closed M005 record records.
     TerminalWithdrawn,
 }
 
@@ -88,10 +98,27 @@ impl TryFrom<&str> for QuarantineState {
 #[serde(rename_all = "snake_case")]
 pub enum EvidenceProvenance {
     RuntimeHttp,
+    /// Producer-less durable provenance.
+    ///
+    /// The runtime has no producer for it: Routing Selection M009 retired the
+    /// authoritative-absence producer that could have carried it. It is
+    /// retained so a durable row that already carries `provider_catalog`
+    /// keeps being parsed and keeps being enforced. Reintroducing a producer
+    /// requires a milestone that first makes the success path's clearing
+    /// durable, the prerequisite the closed M005 record records.
     ProviderCatalog,
     ModelInfo,
     ManualOverride,
     OperatorAction,
+    /// Producer-less durable provenance.
+    ///
+    /// The runtime has no producer for it: migration 0051 promised it and the
+    /// closed M007 record explains that a legacy account-wide row carries no
+    /// model identity to attribute. It is retained so a durable row that
+    /// already carries `migration_legacy` keeps being parsed and keeps being
+    /// enforced. Reintroducing a producer requires a milestone that first
+    /// makes the success path's clearing durable, the prerequisite the closed
+    /// M005 record records.
     MigrationLegacy,
 }
 
@@ -249,6 +276,13 @@ impl ModelQuarantine {
         )
     }
 
+    /// The retained enforcement for the durable terminal-withdrawal state.
+    ///
+    /// This is the mechanism a hydrated `terminal_withdrawn` row lands in, and
+    /// the routing eligibility gate consults it. It is a different mechanism
+    /// from the in-memory terminal set that Routing Selection M009 removed:
+    /// that set was the health manager's own and was populated only by
+    /// `disable_model`, while this one is the quarantine map's durable state.
     pub fn is_model_quarantined(&self, key: &QuarantineKey, now: f64) -> bool {
         let entries = self
             .entries
@@ -397,6 +431,17 @@ impl ModelQuarantine {
         self.clear_key(key, reason, now, false)
     }
 
+    /// Write the durable terminal-withdrawal state.
+    ///
+    /// The runtime has no producer for the state this writes: Routing
+    /// Selection M009 retired the authoritative-absence classification that
+    /// could select it, and with it the only in-tree caller. It is retained
+    /// so a durable row that already carries `terminal_withdrawn` keeps being
+    /// parsed and keeps being enforced by
+    /// [`ModelQuarantine::is_model_quarantined`] and the routing eligibility
+    /// gate that consults it. Reintroducing a producer requires a milestone
+    /// that first makes the success path's clearing durable, the prerequisite
+    /// the closed M005 record records.
     pub fn set_terminal_withdrawn(
         &self,
         key: QuarantineKey,

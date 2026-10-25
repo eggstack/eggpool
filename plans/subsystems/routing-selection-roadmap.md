@@ -133,7 +133,7 @@ Public score_accounts/rank_accounts/near_ties remain available and delegate to t
   `plans/adrs/ADR-0006-authoritative-terminal-model-withdrawal-ownership.md`,
   which the maintainers accepted on 2026-10-25, and on M008 closed. M008 is a
   hard dependency because both milestones edit `rust/src/health/` and
-  `rust/src/routing/router.rs`.
+  `rust/src/routing/router.rs`. M009 is now closed.
 - No plan in the dashboard, request admission and wire, operations CLI, deployment and packaging, or planning governance subsystems depends on this roadmap's milestones.
 
 ## 7. Milestones
@@ -400,7 +400,7 @@ Deferred work:
 - Whether a provider hint should escalate along the policy ladder. That is a
   policy change on the dominant rate-limit path and needs its own milestone.
 - The parallel `HealthEffectApplier` in `rust/src/health/effects.rs`, which
-  has no production caller. Discharged by Milestone 009.
+  has no production caller. Discharged by Milestone 009, which is now closed.
 
 ### Milestone 008 — Durable health state repair and authentication-failure durability
 
@@ -570,4 +570,4 @@ evidence. No routing architecture or public compatibility surface may regress.
 | 006 — backoff policy adoption and health-reason vocabulary unification | closed | plans/implementation/routing-selection/006-backoff-policy-adoption-and-health-reason-vocabulary.md | plans/closure/routing-selection/006-status.md | none; closed through M007 |
 | 007 — durable backoff scope and reason correction | closed | plans/implementation/routing-selection/007-durable-backoff-scope-and-reason-correction.md | plans/closure/routing-selection/007-status.md | none |
 | 008 — durable health state repair and authentication-failure durability | closed | plans/implementation/routing-selection/008-durable-health-state-repair-and-authentication-failure-durability.md | plans/closure/routing-selection/008-status.md | none |
-| 009 — health effect ownership and terminal-withdrawal producer retirement | ready | plans/implementation/routing-selection/009-health-effect-ownership-and-terminal-withdrawal.md | — | none; ADR-0006 accepted 2026-10-25; M008 closed |
+| 009 — health effect ownership and terminal-withdrawal producer retirement | closed | plans/implementation/routing-selection/009-health-effect-ownership-and-terminal-withdrawal.md | plans/closure/routing-selection/009-status.md | none |

@@ -36,7 +36,6 @@ pub struct AccountHealth {
     pub disabled_reason: String,
     pub cooldown_until: f64,
     pub disabled_models: BTreeMap<String, Option<f64>>,
-    pub terminal_models: BTreeSet<String>,
     pub circuit_breaker: CircuitBreaker,
     /// Per-model consecutive-failure rung. A model-scoped failure never
     /// advances the account counter, so backoff escalation needs its own
@@ -60,7 +59,6 @@ pub struct AccountHealthSnapshot {
     pub disabled_reason: String,
     pub cooldown_until: f64,
     pub disabled_models: BTreeMap<String, Option<f64>>,
-    pub terminal_models: BTreeSet<String>,
     pub circuit: CircuitStats,
 }
 
@@ -81,7 +79,6 @@ impl AccountHealth {
             disabled_reason: self.disabled_reason.clone(),
             cooldown_until: self.cooldown_until,
             disabled_models: self.disabled_models.clone(),
-            terminal_models: self.terminal_models.clone(),
             circuit: self.circuit_breaker.stats(),
         }
     }
@@ -91,9 +88,6 @@ impl AccountHealth {
     }
 
     fn is_model_disabled(&self, model_id: &str, now: f64) -> bool {
-        if self.terminal_models.contains(model_id) {
-            return true;
-        }
         if self.is_disabled(now) {
             return true;
         }
@@ -171,7 +165,6 @@ impl HealthManager {
                 disabled_reason: String::new(),
                 cooldown_until: 0.0,
                 disabled_models: BTreeMap::new(),
-                terminal_models: BTreeSet::new(),
                 model_failures: BTreeMap::new(),
                 circuit_breaker: CircuitBreaker::with_clock(move || clock(), 5, 300.0, 1),
             });
@@ -213,9 +206,7 @@ impl HealthManager {
             .disabled_models
             .iter()
             .filter_map(|(model, until)| {
-                if until.is_some_and(|expiry| now >= expiry)
-                    && !account.terminal_models.contains(model)
-                {
+                if until.is_some_and(|expiry| now >= expiry) {
                     Some(model.clone())
                 } else {
                     None
@@ -332,9 +323,7 @@ impl HealthManager {
             account.cooldown_until = 0.0;
         }
         if let Some(model_id) = model_id {
-            if !account.terminal_models.contains(model_id) {
-                account.disabled_models.remove(model_id);
-            }
+            account.disabled_models.remove(model_id);
             account.model_failures.remove(model_id);
         }
         account.circuit_breaker.record_success();
@@ -460,13 +449,7 @@ impl HealthManager {
         account.circuit_breaker.reset();
     }
 
-    pub fn disable_model(
-        &self,
-        account_name: &str,
-        model_id: &str,
-        duration: Option<f64>,
-        terminal: bool,
-    ) {
+    pub fn disable_model(&self, account_name: &str, model_id: &str, duration: Option<f64>) {
         let now = self.now();
         let mut accounts = self
             .accounts
@@ -475,14 +458,6 @@ impl HealthManager {
         let Some(account) = accounts.get_mut(account_name) else {
             return;
         };
-        if terminal || duration.is_none() {
-            account.terminal_models.insert(model_id.to_owned());
-        } else if !account.terminal_models.contains(model_id) {
-            // A timed disable never clears an authoritative (terminal)
-            // withdrawal: that state has no timed expiry, so removing it here
-            // would silently re-admit the model once the quarantine lapses.
-            account.terminal_models.remove(model_id);
-        }
         account.disabled_models.insert(
             model_id.to_owned(),
             duration.map(|value| {
@@ -504,7 +479,6 @@ impl HealthManager {
             .get_mut(account_name)
         {
             account.disabled_models.remove(model_id);
-            account.terminal_models.remove(model_id);
         }
     }
 
@@ -528,7 +502,6 @@ impl HealthManager {
             .collect();
         for model in &stale {
             account.disabled_models.remove(model);
-            account.terminal_models.remove(model);
             account.model_failures.remove(model);
         }
         stale.len()
@@ -590,7 +563,7 @@ impl HealthManager {
             // restores the account cooldown.
             match record.model_id.as_deref() {
                 Some(model_id) => {
-                    self.disable_model(account_name, model_id, Some(remaining), false);
+                    self.disable_model(account_name, model_id, Some(remaining));
                     // The durable rung restores the escalation the process-local
                     // counter would otherwise forget across a restart.
                     self.seed_model_failure(

@@ -121,7 +121,6 @@ pub struct FailureObservation {
     pub downstream_started: bool,
     pub alternate_wire_available: bool,
     pub credential_configured: bool,
-    pub provider_model_presence: ProviderModelPresence,
     pub dispatch_phase: String,
 }
 
@@ -164,7 +163,6 @@ impl FailureObservation {
             downstream_started: false,
             alternate_wire_available: false,
             credential_configured: false,
-            provider_model_presence: ProviderModelPresence::Unknown,
             dispatch_phase: "response_status".into(),
         }
     }
@@ -187,7 +185,6 @@ impl FailureObservation {
 pub enum ProviderModelPresence {
     Known,
     Unknown,
-    AbsentAuthoritative,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -548,13 +545,7 @@ pub fn classify(observation: &FailureObservation, policy: RetryPolicy) -> Failur
             }
             (Some(404), "model_absent") => {
                 category = FailureCategory::ModelUnavailable;
-                model_effect = if observation.provider_model_presence
-                    == ProviderModelPresence::AbsentAuthoritative
-                {
-                    "terminal_withdrawal"
-                } else {
-                    "quarantine"
-                };
+                model_effect = "quarantine";
                 persist_backoff = true;
                 let reason = category.backoff_reason(observation.status);
                 backoff_reason = Some(reason);

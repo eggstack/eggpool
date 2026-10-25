@@ -72,22 +72,20 @@ diagnostic (`CircuitStats`).
 
 ## Narrow effects
 
-`effects.rs::HealthEffectApplier::apply` maps one classified `HealthEffect` (built via
-`HealthEffect::account` plus optional `model`) to the narrowest safe mutation.
+`routing/router.rs::RoutingRouter::apply_failure_effects` is the one effect-application path
+the runtime uses. It maps one classified failure to the narrowest safe mutation.
 Account-wide failures advance the breaker/cooldown; `ModelUnavailable` with a model key
 writes the exact quarantine partition and calls `disable_model` only, never advancing the
 account circuit, and escalates its own per-model rung (`record_model_failure`, seeded from
 the durable rung on hydration, cleared by a success for the same model) so a persistently
-failing model reaches the later policy rungs; `ContextLimitExceeded` and `Unknown` only release the probe. The returned `HealthEffectOutcome` records
-`account_changed`, `model_changed`, `circuit_penalized`, `probe_released`,
-`backoff_seconds`, and `terminal_withdrawal`. Optional repositories persist the same
-bounded facts; no credentials, prompts, bodies, or cache keys cross this boundary.
+failing model reaches the later policy rungs; `ContextLimitExceeded` and `Unknown` only release the probe.
+The applied effect is mirrored into the durable repositories, so the live decision and the
+persisted row cannot disagree about the delay that was applied. No credentials, prompts,
+bodies, or cache keys cross this boundary.
 
-The production failure path does not run through this applier. It applies the same
-narrowest-safe mutations directly in `routing/router.rs::apply_failure_effects` and
-mirrors the applied effect into the durable repositories, so the live decision and the
-persisted row cannot disagree about the delay that was applied. The applier remains the
-deterministic boundary the repository tests exercise.
+There is no second applier. The parallel `HealthEffectApplier` module that used to sit
+beside this path had no production caller and was removed, so the repository carries one
+design of the health subsystem rather than two contradictory ones.
 
 The router derives the duration from the policy rather than accepting one from the caller:
 `apply_failure_effects` resolves the typed reason, reads the escalation rung the health
@@ -109,7 +107,11 @@ canonical model, optional upstream model, upstream protocol, SHA-256 digest).
 bounded TTLs; `record_observation_until` takes the caller's expiry instead, which is what
 the routing path uses so the gate and the health manager exclude a model for the same
 window; `set_terminal_withdrawn` requires authoritative provenance
-(`ProviderCatalog`, `ManualOverride`, `OperatorAction`) and never expires.
+(`ProviderCatalog`, `ManualOverride`, `OperatorAction`) and never expires. The terminal
+vocabulary has no producer in the runtime: `TerminalWithdrawn`, `set_terminal_withdrawn`,
+and the `ProviderCatalog` and `MigrationLegacy` provenances are retained as the reader for
+a durable state the schema admits, so an existing `terminal_withdrawn` row keeps being
+parsed and keeps being enforced by the gate above.
 `clear_exact_key`, `clear_authoritative_reappearance`, `manual_clear`, `hydrate_entry`,
 `prune_expired`, and `list_entries` keep clearing exact-key and never silently disable
 unrelated models. Entries are LRU-capped at 4,096 with terminal rows evicted last.
@@ -149,11 +151,10 @@ The routing path's failure effects are mirrored into the same tables after the i
 application, outside the selection lock. The mirror records the live decision rather than
 a recomputed one: the account backoff carries the applied delay, and the model-scoped
 quarantine uses the canonical-only partition the eligibility gate always evaluates with
-the live backoff deadline as its expiry. A terminal withdrawal is mirrored as a bounded
-observation on purpose: the live terminal state has no expiry, so persisting it would let
-a stale withdrawal outlive the process that observed the authoritative absence and the
-in-memory success path that lifts it could never lift the durable row. Expired rows are
-retired by the `retention_cleanup` task on the bounded database maintenance schedule.
+the live backoff deadline as its expiry. The live path only ever writes a bounded
+observation, because the runtime has no producer for the terminal state; the durable
+terminal vocabulary stays as the reader for a row this runtime does not write. Expired rows
+are retired by the `retention_cleanup` task on the bounded database maintenance schedule.
 
 The credential rejection is the one durable backoff shape without a deadline. The
 authentication policy declares no delay, so the live effect is the account disable and the

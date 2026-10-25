@@ -37,8 +37,10 @@ rather than forced auth-disable, while credential-invalid text disables with `ex
 evidence; 402 and quota-evidenced 403/409/422 map to quota; 408 maps to a timeout path; 429/425 and
 rate-evidenced 409/422 map to rate limit with `parse_retry_after` (delay-seconds or RFC-1123 dates)
 clamped to `max_retry_after`; 5xx maps to temporary with a bounded backoff; transport failures map to
-transient transport with a 30 s backoff. Model-absent 404 quarantines, or terminally withdraws only on
-authoritative catalog presence (`ProviderModelPresence::AbsentAuthoritative`).
+transient transport with a 30 s backoff. Model-absent 404 always quarantines: the runtime has
+no producer for the terminal withdrawal, so the bounded quarantine is the only model-absence
+behaviour. The terminal state stays in the durable quarantine vocabulary as a producer-less
+reader, and the eligibility gate keeps enforcing an existing `terminal_withdrawn` row.
 
 ## One shared bounded budget
 
@@ -119,11 +121,15 @@ only `KNOWN_OUTCOMES` counters plus one scalar last-event.
 
 `apply_effects` forwards only narrow facts — account-penalty flag, model-quarantine flag, model-effect label,
 backoff reason with its relative `backoff_until` duration, circuit penalty — and `rust/src/health/` applies
-the narrowest matching consequence: pair quarantine versus account breaker (`HealthEffectApplier`), bounded
+the narrowest matching consequence: pair quarantine versus account breaker
+(`RoutingRouter::apply_failure_effects` in `rust/src/routing/router.rs`), bounded
 reason-specific backoff (`compute_backoff_seconds` over `BackoffReason`, capped by
 `MAX_NONTERMINAL_BACKOFF_SECONDS`), exact-key model quarantine (`ModelQuarantine`: `Suspected` to
-`Quarantined` promotion, `TerminalWithdrawn` only from authoritative `EvidenceProvenance`). The coordinator
-never reinterprets those outcomes as fresh retry evidence, and release-probe-only outcomes
+`Quarantined` promotion, `TerminalWithdrawn` only from authoritative `EvidenceProvenance`). The
+terminal state is retained as a producer-less durable reader: the runtime has no producer for
+it, and an existing `terminal_withdrawn` row keeps being parsed and keeps being enforced.
+The coordinator never reinterprets those outcomes as fresh retry evidence, and
+release-probe-only outcomes
 (`release_probe_only`) free capacity without recording a failure.
 
 Publication runs in a spawned worker so caller cancellation cannot strand a claim mid-commit (a dropped

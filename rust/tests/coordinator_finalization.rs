@@ -14,9 +14,8 @@ use eggpool::{
     coordinator::{
         CoordinatorFaultInjector, CrashFaultPoint, DurableFinalizer, EffectLedger,
         FailureObservation, FinalizationCommand, FinalizationData, FinalizationError,
-        FinalizationOutcome, FinalizationSupervisor, ProviderModelPresence,
-        PublicationFaultInjector, PublicationInput, PublicationOutcome, PublicationService,
-        PublicationStage, RetryPolicy, classify,
+        FinalizationOutcome, FinalizationSupervisor, PublicationFaultInjector, PublicationInput,
+        PublicationOutcome, PublicationService, PublicationStage, RetryPolicy, classify,
     },
     db::{Account, Database, DatabaseConfig, MigrationRunner},
     quota::{AccountQuota, QuotaEstimator},
@@ -402,7 +401,6 @@ fn failure_policy_distinguishes_ambiguous_credentials_and_model_evidence() {
 
     let mut model =
         FailureObservation::response(1, 1, http::StatusCode::NOT_FOUND).signal("model_absent");
-    model.provider_model_presence = ProviderModelPresence::Known;
     let effects = classify(&model, RetryPolicy::default());
     assert_eq!(effects.model_effect, "quarantine");
     assert_eq!(effects.wire_effect, "none");

@@ -370,8 +370,7 @@ pub fn account_input_from_snapshot(
         || !snapshot.is_healthy && snapshot.last_failure_category.is_some();
     let routable = enabled && has_usable_credentials && !live_blocked;
     let in_backoff = enabled && has_usable_credentials && (in_cooldown || circuit_open);
-    let has_quarantine =
-        !snapshot.terminal_models.is_empty() || !snapshot.disabled_models.is_empty();
+    let has_quarantine = !snapshot.disabled_models.is_empty();
     AccountStatusInput {
         account_name: account_name.to_owned(),
         provider_id: provider_id.to_owned(),

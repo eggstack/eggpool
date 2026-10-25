@@ -627,7 +627,13 @@ impl RoutingRouter {
         claim: &SelectionClaim,
         apply_account_penalty: bool,
         quarantine_model: bool,
-        model_effect: &str,
+        // The failure engine's model-effect label. Routing Selection M009
+        // retired the only consumer that read it — the terminal-withdrawal
+        // branch, which no producer could reach — so the router no longer
+        // interprets it. The parameter is retained so the published
+        // signature of this method does not change; the label itself is
+        // still published on `FailureEffects::model_effect`.
+        _model_effect: &str,
         backoff_reason: Option<&str>,
         backoff_until: Option<Duration>,
         circuit_penalty: bool,
@@ -647,7 +653,6 @@ impl RoutingRouter {
                 claim.account_name(),
                 claim.canonical_model_id(),
                 policy.delay.map(|value| value.as_secs_f64()),
-                model_effect == "terminal_withdrawal",
             );
             self.persist_model_quarantine(claim, reason, policy.delay, policy.model_rung)
                 .await;
@@ -760,11 +765,12 @@ impl RoutingRouter {
     /// unrelated failure classes onto one reason and a restart cannot
     /// restore an account-scoped rung as the model's ladder.
     ///
-    /// A terminal withdrawal is deliberately mirrored as a bounded
-    /// observation. The live terminal state has no expiry, so persisting it
-    /// would let a stale withdrawal outlive the process that observed the
-    /// authoritative absence, and the in-memory success path that lifts a
-    /// terminal withdrawal could never lift the durable one.
+    /// The live model-absence effect is always mirrored as a bounded
+    /// observation. The runtime has no producer for the terminal withdrawal
+    /// state, so this path cannot write one; the durable terminal vocabulary
+    /// is retained as a reader for rows this runtime does not write, and
+    /// mirroring the live effect as a bounded observation keeps the durable
+    /// row consistent with the live one.
     async fn persist_model_quarantine(
         &self,
         claim: &SelectionClaim,

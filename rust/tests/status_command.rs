@@ -293,7 +293,6 @@ fn health_snapshot_mapping_marks_auth_terminal_as_unavailable() {
         disabled_reason: "authentication_failed".to_owned(),
         cooldown_until: 0.0,
         disabled_models: std::collections::BTreeMap::new(),
-        terminal_models: std::collections::BTreeSet::new(),
         circuit: CircuitStats {
             state: CircuitState::Closed,
             failure_count: 3,

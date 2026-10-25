@@ -17,6 +17,7 @@ use eggpool::{
     Config,
     accounts::{AccountRegistry, CredentialStore},
     catalog::{ModelCatalogCache, ModelInput, ProtocolResolutionStatus},
+    coordinator::{FailureObservation, RetryPolicy, classify},
     db::{Account, Database, DatabaseConfig, MigrationRunner},
     health::{
         AccountBackoffRecord, AccountBackoffRepository, BackoffReason, EvidenceProvenance,
@@ -300,6 +301,45 @@ async fn seed_quarantine(
         .upsert_entry(&entry)
         .await
         .expect("quarantine row persists");
+}
+
+/// A durable quarantine row that already carries the terminal withdrawal.
+///
+/// The runtime has no producer for the terminal state, so the row is written
+/// the way an existing database holds one: directly, with the terminal state,
+/// the authoritative catalogue provenance, and no expiry.
+async fn seed_terminal_quarantine(
+    database: &Database,
+    account_name: &str,
+    canonical_model_id: &str,
+    upstream_protocol: &str,
+) {
+    let quarantine = ModelQuarantine::default();
+    let key = quarantine.key(
+        "provider-a",
+        account_name,
+        canonical_model_id,
+        None,
+        upstream_protocol,
+    );
+    let entry = QuarantineEntry {
+        key,
+        state: QuarantineState::TerminalWithdrawn,
+        evidence_provenance: EvidenceProvenance::ProviderCatalog,
+        reason: "authoritative_model_withdrawal".to_owned(),
+        first_observed: now_epoch(),
+        last_observed: now_epoch(),
+        observation_count: 1,
+        expiry: None,
+        cleared_at: None,
+        clear_reason: None,
+        last_status_code: None,
+        last_error_class: None,
+    };
+    ModelQuarantineRepository::new(database)
+        .upsert_entry(&entry)
+        .await
+        .expect("the terminal quarantine row persists");
 }
 
 #[tokio::test(flavor = "current_thread")]
@@ -1219,4 +1259,325 @@ fn the_selection_path_performs_no_durable_health_write() {
         failure.contains("upsert") || failure.contains("persist_account_backoff"),
         "the failure path must own the durable write"
     );
+}
+
+/// The live model-absence path quarantines the model and never withdraws it.
+///
+/// The terminal-withdrawal producer was unreachable, so the bounded
+/// quarantine is the only model-absence behaviour the runtime has. This test
+/// is the coverage the retired parallel applier used to give, re-established
+/// against the path that actually runs: the classifier's own model effect, the
+/// in-memory model disable, the durable quarantine row, and the durable
+/// model-scoped backoff row all describe one bounded quarantine and no
+/// terminal state.
+#[tokio::test(flavor = "current_thread")]
+async fn the_live_model_absence_path_quarantines_and_never_withdraws_terminally() {
+    let (database, path) = database("model-absence").await;
+    seed_accounts(&database).await;
+    let generation = build_generation(&database).await;
+
+    // The classifier's own decision for a model absence. The bounded
+    // quarantine is the only model effect it can produce.
+    let observation =
+        FailureObservation::response(1, 1, http::StatusCode::NOT_FOUND).signal("model_absent");
+    let effects = classify(&observation, RetryPolicy::default());
+    assert_eq!(
+        effects.model_effect, "quarantine",
+        "a model absence must produce the bounded quarantine effect"
+    );
+    assert!(
+        effects.quarantine_model,
+        "a model absence must quarantine the model: {effects:?}"
+    );
+
+    let claim = generation
+        .router
+        .select_and_claim(&facts("shared-model"), &BTreeSet::new())
+        .await
+        .expect("claim operation")
+        .expect("a claim is published");
+    let account_name = claim.account_name().to_owned();
+    let canonical_model_id = claim.canonical_model_id().to_owned();
+
+    generation
+        .router
+        .apply_failure_effects(
+            &claim,
+            effects.apply_account_penalty,
+            effects.quarantine_model,
+            &effects.model_effect,
+            effects.backoff_reason.as_deref(),
+            effects.backoff_until,
+            effects.circuit_penalty,
+        )
+        .await;
+
+    // The in-memory effect is a timed disable. A permanent disable is what a
+    // terminal withdrawal produced, and the retirement removes that.
+    let snapshot = generation
+        .health
+        .snapshot(&account_name)
+        .expect("the claimed account is known to the health manager");
+    let disabled_until = snapshot
+        .disabled_models
+        .get(&canonical_model_id)
+        .copied()
+        .expect("the live path disables the model");
+    assert!(
+        disabled_until.is_some(),
+        "the model-absence effect must be bounded, not permanent: {snapshot:?}"
+    );
+
+    // The quarantine map holds the bounded observation, never the terminal
+    // state.
+    let key = generation.quarantine.key(
+        "provider-a",
+        &account_name,
+        &canonical_model_id,
+        None,
+        claim.protocol().unwrap_or("unknown"),
+    );
+    let entry = generation
+        .quarantine
+        .get_entry(&key)
+        .expect("the live path records a quarantine observation");
+    assert_ne!(
+        entry.state,
+        QuarantineState::TerminalWithdrawn,
+        "the live path must never record a terminal withdrawal: {entry:?}"
+    );
+    assert!(
+        entry.expiry.is_some(),
+        "the live quarantine observation must be bounded: {entry:?}"
+    );
+
+    // The durable quarantine row is bounded too.
+    let quarantines = ModelQuarantineRepository::new(&database)
+        .list_all(64)
+        .await
+        .expect("quarantine rows are readable");
+    let row = quarantines
+        .iter()
+        .find(|row| row.canonical_model_id == canonical_model_id)
+        .expect("a quarantine row is persisted");
+    assert_ne!(
+        row.state, "terminal_withdrawn",
+        "the live path must never persist a terminal withdrawal: {quarantines:?}"
+    );
+    assert!(
+        row.expiry_epoch.is_some(),
+        "the live quarantine row must be bounded: {quarantines:?}"
+    );
+
+    // The durable model-scoped backoff row carries the live reason and the
+    // model's own rung, and it is bounded too.
+    let backoffs = AccountBackoffRepository::new(&database)
+        .list_all(64)
+        .await
+        .expect("backoff rows are readable");
+    let model_row = backoffs
+        .iter()
+        .find(|row| row.model_id.as_deref() == Some(canonical_model_id.as_str()))
+        .expect("a model-scoped row is persisted");
+    assert_eq!(
+        model_row.reason,
+        BackoffReason::ModelUnavailable,
+        "the model-scoped row must carry the live reason: {backoffs:?}"
+    );
+    assert!(
+        model_row.backoff_until_epoch.is_some(),
+        "the model-scoped row must be bounded: {backoffs:?}"
+    );
+
+    generation.database.close().await.expect("database closes");
+    let _ = fs::remove_file(&path);
+}
+
+/// A durable quarantine row carrying the terminal state is still parsed and
+/// still enforced.
+///
+/// The runtime has no producer for the terminal state, but the durable
+/// vocabulary still admits it and an existing row must keep being honoured.
+/// The row is hydrated into the quarantine map, the routing eligibility gate
+/// excludes the model, and the success path lifts the withdrawal again.
+#[tokio::test(flavor = "current_thread")]
+async fn a_durable_terminal_quarantine_row_is_parsed_and_enforced() {
+    let (database, path) = database("terminal-row").await;
+    seed_accounts(&database).await;
+
+    // A claim taken before the terminal row exists, so the success path has a
+    // claim for the account and the model the row withdraws.
+    let first = build_generation(&database).await;
+    let claim = first
+        .router
+        .select_and_claim(&facts("shared-model"), &BTreeSet::new())
+        .await
+        .expect("claim operation")
+        .expect("a claim is published");
+    let account_name = claim.account_name().to_owned();
+    let canonical_model_id = claim.canonical_model_id().to_owned();
+    let upstream_protocol = claim.protocol().unwrap_or("unknown").to_owned();
+    seed_terminal_quarantine(
+        &database,
+        &account_name,
+        &canonical_model_id,
+        &upstream_protocol,
+    )
+    .await;
+
+    // A generation built now hydrates the durable row.
+    let generation = build_generation(&database).await;
+    let key = generation.quarantine.key(
+        "provider-a",
+        &account_name,
+        &canonical_model_id,
+        None,
+        &upstream_protocol,
+    );
+    let entry = generation
+        .quarantine
+        .get_entry(&key)
+        .expect("the durable terminal row is hydrated");
+    assert_eq!(
+        entry.state,
+        QuarantineState::TerminalWithdrawn,
+        "a durable row carrying the terminal state must still be parsed"
+    );
+    assert!(
+        generation
+            .quarantine
+            .is_model_quarantined(&key, now_epoch()),
+        "the durable terminal state must still be enforced"
+    );
+
+    // The routing eligibility gate excludes the withdrawn model.
+    let plan = generation
+        .router
+        .build_routing_plan(&facts(&canonical_model_id));
+    assert!(
+        !plan
+            .candidates
+            .iter()
+            .any(|candidate| candidate.account_name == account_name),
+        "the terminal withdrawal must gate the model"
+    );
+    assert_eq!(
+        exclusion_reason(&plan, &account_name).as_deref(),
+        Some("model_quarantined"),
+        "the quarantine gate must report its own exclusion reason code"
+    );
+
+    // The success path lifts it: serving the model successfully is
+    // authoritative evidence that the withdrawal no longer holds.
+    generation.router.record_success(&claim);
+    assert!(
+        !generation
+            .quarantine
+            .is_model_quarantined(&key, now_epoch()),
+        "the success path must lift the terminal withdrawal"
+    );
+    let plan = generation
+        .router
+        .build_routing_plan(&facts(&canonical_model_id));
+    assert!(
+        plan.candidates
+            .iter()
+            .any(|candidate| candidate.account_name == account_name),
+        "the lifted withdrawal must make the model routable again"
+    );
+
+    generation.database.close().await.expect("database closes");
+    let _ = fs::remove_file(&path);
+}
+
+/// The health subsystem has one effect-application path and no reachable
+/// terminal-withdrawal producer.
+///
+/// This is a source-level contract, the same shape as the selection-path
+/// guard above. The parallel applier and the unreachable terminal producer
+/// must not come back, the durable terminal vocabulary must stay, and the
+/// live-path coverage must stay with them: a milestone that removes the
+/// live-path assertions has removed the coverage this milestone added.
+#[test]
+fn the_health_effect_ownership_is_single_and_the_terminal_producer_is_gone() {
+    let manifest = std::path::Path::new(env!("CARGO_MANIFEST_DIR"));
+    assert!(
+        !manifest.join("src/health/effects.rs").exists(),
+        "the parallel health effect applier must not come back"
+    );
+    let facade = include_str!("../src/health/mod.rs");
+    assert!(
+        !facade.contains("HealthEffect"),
+        "the health module must not re-export the retired applier types"
+    );
+    let failure = include_str!("../src/coordinator/failure.rs");
+    assert!(
+        failure.contains("model_effect = \"quarantine\";"),
+        "the live model-absence path must keep producing the bounded quarantine effect"
+    );
+    for retired in [
+        "terminal_withdrawal",
+        "AbsentAuthoritative",
+        "provider_model_presence",
+    ] {
+        assert!(
+            !failure.contains(retired),
+            "the terminal-withdrawal producer must not come back: {retired}"
+        );
+    }
+    let manager = include_str!("../src/health/health_manager.rs");
+    assert!(
+        !manager.contains("terminal_models"),
+        "the in-memory terminal set must not come back"
+    );
+    let quarantine = include_str!("../src/health/quarantine.rs");
+    for retained in [
+        "TerminalWithdrawn",
+        "set_terminal_withdrawn",
+        "ProviderCatalog",
+        "MigrationLegacy",
+    ] {
+        assert!(
+            quarantine.contains(retained),
+            "the durable terminal vocabulary must stay: {retained}"
+        );
+    }
+    let router = include_str!("../src/routing/router.rs");
+    let live = router
+        .split("pub async fn apply_failure_effects(")
+        .nth(1)
+        .expect("the live effect path exists");
+    assert!(
+        !live.contains("terminal_withdrawal"),
+        "the live effect path must not select the terminal withdrawal"
+    );
+
+    // The live-path assertions are part of the contract. A milestone that
+    // removes them has removed the coverage the retired applier test gave.
+    // The needles are assembled at runtime so this guard's own source does
+    // not satisfy its own search.
+    let coverage = include_str!("../tests/durable_health_effects.rs");
+    for assertion in [
+        [
+            "the_live_model_absence_path_quarantines_and_never_withdraws_",
+            "terminally",
+        ]
+        .concat(),
+        [
+            "a model absence must produce the bounded ",
+            "quarantine effect",
+        ]
+        .concat(),
+        [
+            "a_durable_terminal_quarantine_row_is_parsed_and_",
+            "enforced",
+        ]
+        .concat(),
+        ["the durable terminal state must still be ", "enforced"].concat(),
+    ] {
+        assert!(
+            coverage.contains(&assertion),
+            "the live-path coverage must stay: {assertion}"
+        );
+    }
 }

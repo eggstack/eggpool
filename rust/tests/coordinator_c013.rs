@@ -123,7 +123,6 @@ fn observation(name: &str) -> FailureObservation {
     result.error_class = Some(name.into());
     result.alternate_wire_available = alternate_wire;
     result.credential_configured = true;
-    result.provider_model_presence = eggpool::coordinator::ProviderModelPresence::Known;
     result.retry_after = (name == "http_429_rate_limit").then(|| Duration::from_secs(12));
     result.downstream_started = name == "post_handoff_500";
     result

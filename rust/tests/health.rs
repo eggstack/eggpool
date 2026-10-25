@@ -16,9 +16,9 @@ use eggpool::{
         ModelQuarantineRepository,
     },
     health::{
-        BackoffReason, CircuitBreaker, CircuitState, EvidenceProvenance, HealthEffect,
-        HealthEffectApplier, HealthManager, ModelQuarantine, QuarantineState,
-        classify_failure_category, compute_backoff_seconds, get_backoff_policy,
+        BackoffReason, CircuitBreaker, CircuitState, EvidenceProvenance, HealthManager,
+        ModelQuarantine, QuarantineState, classify_failure_category, compute_backoff_seconds,
+        get_backoff_policy,
     },
 };
 
@@ -121,7 +121,7 @@ fn health_separates_cooldowns_models_operator_disable_and_circuit() {
     );
     now.store(160, Ordering::Relaxed);
     assert!(manager.is_account_healthy_read_only("account-a"));
-    manager.disable_model("account-a", "model-a", Some(10.0), false);
+    manager.disable_model("account-a", "model-a", Some(10.0));
     assert!(!manager.is_model_healthy_read_only("account-a", "model-a"));
     now.store(170, Ordering::Relaxed);
     assert!(manager.is_model_healthy_read_only("account-a", "model-a"));
@@ -130,30 +130,6 @@ fn health_separates_cooldowns_models_operator_disable_and_circuit() {
     assert!(!manager.is_account_healthy_read_only("account-a"));
     manager.enable_account("account-a");
     assert!(manager.is_account_healthy_read_only("account-a"));
-}
-
-#[test]
-fn terminal_model_withdrawal_survives_a_later_timed_disable() {
-    let now = Arc::new(AtomicU64::new(100));
-    let manager = {
-        let now = Arc::clone(&now);
-        HealthManager::with_clock(move || now.load(Ordering::Relaxed) as f64)
-    };
-    manager.register_account(1, "account-a");
-    // A terminal (authoritative) withdrawal has no timed expiry.
-    manager.disable_model("account-a", "model-a", None, true);
-    assert!(!manager.is_model_healthy_read_only("account-a", "model-a"));
-    // A later timed disable for the same key must not erase it, or the
-    // quarantine silently lapses and the model is re-admitted.
-    manager.disable_model("account-a", "model-a", Some(10.0), false);
-    now.store(1_000, Ordering::Relaxed);
-    assert!(
-        !manager.is_model_healthy_read_only("account-a", "model-a"),
-        "a timed disable must not clear a terminal withdrawal"
-    );
-    // Re-registering the account does not resurrect it either.
-    manager.register_account(1, "account-a");
-    assert!(!manager.is_model_healthy_read_only("account-a", "model-a"));
 }
 
 #[test]
@@ -341,78 +317,6 @@ async fn schema54_health_rows_round_trip_and_corrupt_state_fails_closed() {
             .list_all(10)
             .await
             .is_err()
-    );
-    database.close().await.expect("close");
-}
-
-#[tokio::test(flavor = "current_thread")]
-async fn effect_application_is_durable_without_retry_or_finalization_policy() {
-    let database = Database::open(DatabaseConfig::default())
-        .await
-        .expect("database");
-    MigrationRunner::new(&database)
-        .run()
-        .await
-        .expect("migrations");
-    database.call(|connection| {
-        connection.execute("INSERT INTO accounts (id,name,api_key_env,enabled,weight,provider_id) VALUES (1,'account-a','KEY',1,1.0,'provider-a')", [])
-    }).await.expect("account");
-    let manager = HealthManager::default();
-    manager.register_account(1, "account-a");
-    let quarantine = ModelQuarantine::default();
-    let backoffs = AccountBackoffRepository::new(&database);
-    let quarantine_repository = ModelQuarantineRepository::new(&database);
-    let applier = HealthEffectApplier {
-        health: &manager,
-        quarantine: &quarantine,
-        account_backoffs: Some(&backoffs),
-        quarantine_repository: Some(&quarantine_repository),
-    };
-    let mut rate = HealthEffect::account(
-        1,
-        "account-a",
-        "provider-a",
-        BackoffReason::RateLimited,
-        1_000.0,
-    );
-    rate.retry_after_seconds = Some(500.0);
-    let rate_result = applier.apply(&rate).await.expect("rate effect");
-    assert_eq!(rate_result.backoff_seconds, Some(500.0));
-    assert_eq!(
-        manager
-            .snapshot("account-a")
-            .expect("health")
-            .circuit
-            .failure_count,
-        0
-    );
-    let model_effect = HealthEffect::account(
-        1,
-        "account-a",
-        "provider-a",
-        BackoffReason::ModelUnavailable,
-        1_001.0,
-    )
-    .model("model-a", Some("upstream-a".into()), "openai");
-    let model_result = applier.apply(&model_effect).await.expect("model effect");
-    assert!(model_result.model_changed);
-    assert_eq!(
-        manager
-            .snapshot("account-a")
-            .expect("health")
-            .circuit
-            .failure_count,
-        0
-    );
-    assert!(!manager.is_model_healthy_read_only("account-a", "model-a"));
-    assert_eq!(backoffs.list_all(10).await.expect("backoff rows").len(), 2);
-    assert_eq!(
-        quarantine_repository
-            .list_all(10)
-            .await
-            .expect("quarantine rows")
-            .len(),
-        1
     );
     database.close().await.expect("close");
 }
