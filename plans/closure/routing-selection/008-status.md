@@ -160,7 +160,7 @@ verified byte-identical afterwards (`git status --short` clean for both).
 | `cargo check --workspace --all-targets --no-default-features` | 0 | Compiles without the SSH default |
 | `cargo clippy --workspace --all-targets --no-default-features -- -D warnings` | 0 | No warnings, no allowlist added |
 | `cargo test --workspace --all-targets -- --test-threads=1` | 0 | 90 test binaries; **1,215 passed, 0 failed**. `durable_health_effects` 18 passed; `database_compatibility` 12 passed; `health` 15 passed; `backoff_policy_adoption` 12 passed; `build_manifest` 4 passed |
-| `cargo test --workspace --all-targets --no-default-features -- --test-threads=1` | 0 | **1,216 passed, 0 failed** (additional evidence; CI runs no-default for `check`/`clippy` only. The one-test difference from the default run is `tests/provider_transport.rs`, which is feature-gated) |
+| `cargo test --workspace --all-targets --no-default-features -- --test-threads=1` | 0 | **1,216 passed, 0 failed** (additional evidence; CI runs no-default for `check`/`clippy` only. The one-test difference from the default run is `rust/tests/provider_transport.rs`, which is feature-gated) |
 | `uv run pytest tests/tooling/ -q --tb=short` | 0 | 251 passed, 1 skipped in 148.12 s |
 | `uv run ruff format --check scripts/ tests/tooling/` | 0 | 71 files already formatted |
 | `uv run ruff check scripts/ tests/tooling/` | 0 | All checks passed! |
