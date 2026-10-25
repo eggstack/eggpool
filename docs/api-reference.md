@@ -179,7 +179,8 @@ restart and do not replace durable daily/monthly user or instance budgets.
 With `[dashboard].enabled = true`, the dashboard also serves browser-session
 pages for `/users`, `/profiles`, `/usage`, `/admin/audit`, `/my-account`, and
 `/my-account/models`. Mutations use same-origin, CSRF-protected form posts
-under `/admin/users/*`, `/admin/profiles/*`, and `/account/tokens*`.
+under `/admin/users/*`, `/admin/profiles/*`, `/admin/budget/instance*`, and
+`/account/tokens*`.
 Administrator pages and writes require an active admin browser session;
 members can read only their own usage, model access, and credentials. Agent
 tokens never authenticate these pages. A newly issued token is returned once

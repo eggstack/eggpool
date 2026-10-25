@@ -36,11 +36,18 @@ and operations path.
 | Path | Owner | Mode |
 |------|-------|------|
 | `~/.config/eggpool/` | invoking user | `0755` |
-| `~/.config/eggpool/config.toml` | invoking user | `0644` |
+| `~/.config/eggpool/config.toml` | invoking user | `0600` |
 | `~/.config/eggpool/.env` | invoking user | `0600` |
 | `~/.local/share/eggpool/` | invoking user | `0755` |
 | `~/.local/share/eggpool/*.sqlite3` | invoking user | `0644` |
-| `~/.local/state/eggpool/` | invoking user | `0755` |
+| `~/.local/state/eggpool/` | invoking user | `0700` |
+
+The config file is owner-only because it can hold the server API key in
+plaintext; the installer publishes it `0600` and the runtime writes it
+`0600`. The runtime state directory is owner-only because it holds the PID
+file, the control socket, and the runtime log. The `.env` file is
+operator-created rather than runtime-created, so its mode is a requirement
+on the operator, not an enforced one.
 
 `eggpool deploy systemd --install` creates the directories above as the
 deploy user before writing the unit file.

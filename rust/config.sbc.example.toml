@@ -84,6 +84,10 @@ allow_insecure_web_auth = false
 enabled = true
 # Canonical public read-only default (matches config.example.toml). The
 # loopback bind above keeps this SBC profile local-only regardless.
+#
+# The exemption applies only before local identity initialization. Once an
+# administrator exists, every dashboard page and every `/api/*` route needs a
+# browser session, and this setting no longer changes what is reachable.
 public = true
 
 [backup]

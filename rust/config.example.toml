@@ -379,6 +379,10 @@ enabled = true
 # dashboard without an API key, while inference (`/v1/*`), integration
 # (`/api/integrations/*`), and runtime/update/status endpoints stay
 # authenticated. Set `public = false` to require the API key everywhere.
+#
+# The exemption applies only before local identity initialization. Once an
+# administrator exists, every dashboard page and every `/api/*` route needs a
+# browser session, and this setting no longer changes what is reachable.
 public = true
 # Theme name (without .toml extension). "default" uses GitHub Primer colors.
 # Themes are from Halloy: https://themes.halloy.chat/

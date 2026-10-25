@@ -26,14 +26,14 @@
       "path": "config/config.example.toml",
       "category": "configuration-template",
       "source": "rust/config.example.toml",
-      "sha256": "bf1bbe6c23475bbb0f6a9f309c02bdc29bd9e01c22d39ea182f5353226bc83d6",
+      "sha256": "9f00c1652495dae9704730b33a229c702a4f7943807c844b8945868da8e1b828",
       "identity": "exact"
     },
     {
       "path": "config/config.sbc.example.toml",
       "category": "configuration-template",
       "source": "rust/config.sbc.example.toml",
-      "sha256": "cae152978cd756cc795f22110a01b28751bfe2804e18f253b60430163a9f07dd",
+      "sha256": "88643e96dcae79f3fa5a546dd82861e56252b8d1cfbe817ae7e6aa5a50bc6baa",
       "identity": "exact"
     },
     {
