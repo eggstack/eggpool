@@ -98,7 +98,7 @@ sudo systemctl start eggpool
 Use the supported installer instead of hand-writing scripts:
 
 ```bash
-sudo env "PATH=$PATH" "$(command -v eggpool)" deploy backup-cron --install
+sudo env "PATH=$PATH" "HOME=$HOME" "$(command -v eggpool)" deploy backup-cron --install
 ```
 
 It writes `/usr/local/bin/eggpool-backup` (a wrapper that execs

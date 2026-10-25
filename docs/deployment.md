@@ -19,8 +19,15 @@ for public-facing deployments.
 ```bash
 bash -o pipefail -c 'curl -fsSL https://raw.githubusercontent.com/eggstack/eggpool/main/scripts/install.sh | bash' && export PATH="$HOME/.local/bin:$PATH"
 eggpool onboard
-sudo env "PATH=$PATH" "$(command -v eggpool)" deploy systemd --install
+sudo env "PATH=$PATH" "HOME=$HOME" "$(command -v eggpool)" deploy systemd --install
 ```
+
+`PATH` and `HOME` are passed explicitly because `sudo` resets both to root's
+environment on distributions that set `always_set_home` in `sudoers` (Debian
+and Ubuntu do by default). The personal unit runs as the invoking user, so it
+must resolve that user's configuration, data directory, and home. Without
+`HOME`, the unit is written with `User=` the invoking user but `HOME=` root's
+home, and the service cannot read the configuration it was installed against.
 
 The installer is binary-first for fresh current-native installs: it verifies
 the GitHub raw executable for the detected target (SHA-256 before execution,
@@ -294,7 +301,7 @@ curl http://localhost:11300/v1/healthz
 ```bash
 sudo env "PATH=$PATH" "$(command -v eggpool)" deploy logrotate --install
 
-sudo env "PATH=$PATH" "$(command -v eggpool)" deploy all --install
+sudo env "PATH=$PATH" "HOME=$HOME" "$(command -v eggpool)" deploy all --install
 ```
 
 `deploy logrotate --install` writes `/etc/logrotate.d/eggpool` and

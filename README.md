@@ -34,7 +34,7 @@ bash -o pipefail -c 'curl -fsSL https://raw.githubusercontent.com/eggstack/eggpo
 eggpool onboard
 
 # Install as a systemd service
-sudo env "PATH=$PATH" "$(command -v eggpool)" deploy systemd --install
+sudo env "PATH=$PATH" "HOME=$HOME" "$(command -v eggpool)" deploy systemd --install
 ```
 
 See [Deployment](docs/deployment.md) for systemd, cron, and production setup,
