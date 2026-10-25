@@ -313,7 +313,7 @@ transactions over `AccountRegistry`, `ModelCatalogCache`, `QuotaEstimator`,
 `HealthManager`, quarantine, and fairness rotor. `rust/src/quota/`
 (`state.rs`, `estimator.rs`, `scorer.rs`) owns windowed quota state and
 fair-share scoring. `rust/src/health/` (`health_manager.rs`, `backoff.rs`,
-`circuit_breaker.rs`, `effects.rs`, `quarantine.rs`, `repository.rs`) applies
+`circuit_breaker.rs`, `quarantine.rs`, `repository.rs`) applies
 the narrowest safe effect (pair quarantine vs. account breaker) and persists
 only restart-safety state. The generation build path constructs the health
 repositories, hydrates the generation's health manager and quarantine from the
@@ -632,7 +632,7 @@ cargo tree --manifest-path rust/Cargo.toml --duplicates
 cargo build --manifest-path rust/Cargo.toml --locked --release
 ```
 
-Tooling (from repo root, `uv sync --frozen` for CI parity):
+Tooling (from repo root, `uv sync --locked` for CI parity):
 
 ```bash
 uv run ruff format --check scripts/ tests/tooling/

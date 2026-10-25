@@ -8,7 +8,7 @@ See also the review index in [overview.md](overview.md) (§8).
 
 `rust/src/health/` owns account health, bounded backoff, circuit breaking, narrow effect
 application, per-model quarantine, and restart-safety persistence. Authority files are
-`mod.rs`, `health_manager.rs`, `backoff.rs`, `circuit_breaker.rs`, `effects.rs`,
+`mod.rs`, `health_manager.rs`, `backoff.rs`, `circuit_breaker.rs`,
 `quarantine.rs`, and `repository.rs`. The module never retries requests, chooses
 destinations, or finalizes durable request rows.
 

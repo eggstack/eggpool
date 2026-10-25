@@ -175,7 +175,7 @@ cargo check --manifest-path rust/Cargo.toml --workspace --all-targets --no-defau
 cargo clippy --manifest-path rust/Cargo.toml --workspace --all-targets --no-default-features -- -D warnings
 
 # Local-only extras (not CI steps): locked build, no-default test,
-# dev tooling env (`uv sync --frozen` for CI parity)
+# dev tooling env (`uv sync --locked` for CI parity)
 cargo build --manifest-path rust/Cargo.toml --locked
 cargo test --manifest-path rust/Cargo.toml --workspace --all-targets --no-default-features -- --test-threads=1
 uv sync --dev

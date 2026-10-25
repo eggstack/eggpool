@@ -55,7 +55,7 @@ cargo clippy --manifest-path rust/Cargo.toml --workspace --all-targets -- -D war
 cargo check --manifest-path rust/Cargo.toml --workspace --all-targets --no-default-features
 cargo clippy --manifest-path rust/Cargo.toml --workspace --all-targets --no-default-features -- -D warnings
 cargo test --manifest-path rust/Cargo.toml --workspace --all-targets -- --test-threads=1
-uv sync --frozen
+uv sync --locked
 uv run ruff format --check scripts/ tests/tooling/
 uv run ruff check scripts/ tests/tooling/
 uv run pyright scripts/
@@ -77,7 +77,7 @@ Notes: Rust tests must run serial (`--test-threads=1`). Strict Clippy
 allows only. CI runs no-default only for `check`/`clippy`, never `test` —
 keep the full `--workspace --all-targets -- --test-threads=1` shape when
 running no-default tests locally. `uv sync --dev` for local tooling work,
-`uv sync --frozen` for CI parity. Ruff covers `scripts/` +
+`uv sync --locked` for CI parity. Ruff covers `scripts/` +
 `tests/tooling/`; pyright strict covers `scripts/` only. CI skips docs-only
 changes (`docs/`, `architecture/`, `plans/`, `.opencode/skills/`, `CHANGELOG.md`, `AGENTS.md`).
 

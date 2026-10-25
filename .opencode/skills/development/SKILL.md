@@ -289,7 +289,7 @@ database.
 Python is retained for release/validation scripts and their tests only:
 
 ```bash
-uv sync --frozen # CI parity (`--dev` for local tooling work)
+uv sync --locked # CI parity (`--dev` for local tooling work)
 uv run ruff format --check scripts/ tests/tooling/
 uv run ruff check scripts/ tests/tooling/
 uv run pyright scripts/

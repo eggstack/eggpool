@@ -106,7 +106,7 @@ runtime behavior. The repository-root `pyproject.toml`, `scripts/`, and
   are decomposed under `rust/src/coordinator/streaming/` as `coordinator.rs` (pre-handoff),
   `execution.rs` (post-handoff), `terminal.rs` (terminal classification), `timeout.rs` (policy),
   `types.rs` (contracts), `diagnostics.rs` (bounded observation) behind the `mod.rs` facade.
-- Routing/accounting: `rust/src/routing/` (`router.rs`, `eligibility.rs`, `fairness.rs`, `claim.rs`), `rust/src/accounts/registry.rs`, `rust/src/catalog/` (`cache.rs`, `refresh.rs`), `rust/src/quota/` (`state.rs`, `estimator.rs`, `scorer.rs`), `rust/src/health/` (`health_manager.rs`, `backoff.rs`, `circuit_breaker.rs`, `effects.rs`, `quarantine.rs`, `repository.rs`)
+- Routing/accounting: `rust/src/routing/` (`router.rs`, `eligibility.rs`, `fairness.rs`, `claim.rs`), `rust/src/accounts/registry.rs`, `rust/src/catalog/` (`cache.rs`, `refresh.rs`), `rust/src/quota/` (`state.rs`, `estimator.rs`, `scorer.rs`), `rust/src/health/` (`health_manager.rs`, `backoff.rs`, `circuit_breaker.rs`, `quarantine.rs`, `repository.rs`)
 - Semantic model routing: `rust/crates/eggpool-model-routing/` (neutral policy
   and identity), `rust/src/model_router.rs` (EggPool async affinity)
 - Portable client config: `rust/crates/eggpool-client-config/` (projection,
@@ -121,7 +121,7 @@ runtime behavior. The repository-root `pyproject.toml`, `scripts/`, and
 - Runtime/reload: `rust/src/runtime_lifecycle/` (process, generation, lease, manager, recovery, diagnostics), `rust/src/reload.rs`, `rust/src/config_reload_policy.rs`, `rust/src/operations/lifecycle.rs`, `rust/src/task_supervisor.rs`
 - HTTP adapters: `rust/src/server/mod.rs`, `rust/src/server/middleware.rs`, `rust/src/server/health.rs`, `rust/src/server/inference.rs`, `rust/src/server/dashboard/` (`mod.rs`, `routes.rs`, `api.rs`, `assets.rs`, `theme.rs`, `response.rs`, `format.rs`, `tests.rs`, and the pure `render/` page-family modules)
 - Operations: `rust/src/operations/` (`lifecycle.rs`, `process.rs`, `paths.rs`, `control.rs`, `config_mutation.rs`, `deploy.rs`, `backup.rs`, `update.rs`, `catalog.rs`, `provenance.rs`, `operator.rs`, `status.rs`, `metrics.rs`, `integrations.rs`, `terminal.rs`)
-- Database/assets: `rust/src/db/` (`connection.rs`, `migrations.rs`, `repositories.rs`, `qualification.rs` — feature-gated diagnostics), `rust/assets/db/migrations/` (v1–v54, immutable), `rust/crates/eggpool-model-routing/src/` (`policy.rs`, `identity.rs`, `lib.rs`)
+- Database/assets: `rust/src/db/` (`connection.rs`, `migrations.rs`, `repositories.rs`, `qualification.rs` — feature-gated diagnostics), `rust/assets/db/migrations/` (v1–v64, immutable), `rust/crates/eggpool-model-routing/src/` (`policy.rs`, `identity.rs`, `lib.rs`)
 
 Start routing changes at `architecture/deep-dive-routing.md`, provider/transport
 changes at `architecture/deep-dive-providers.md`, and reload changes at
