@@ -492,6 +492,14 @@ cargo test --manifest-path rust/Cargo.toml --workspace --all-targets \
 ## 12. Documentation updates
 
 - `architecture/overview.md` — the stated migration chain becomes `v1–v64`.
+- `AGENTS.md` — the Layout section's stated migration chain becomes `v1–v64
+  immutable`. The migration-census guard in
+  `tests/tooling/test_architecture_census.py` reads the workflow index's Layout
+  section and fails when it names a chain other than the current one, so this
+  file moves with `architecture/overview.md`.
+- `architecture/deep-dive-database.md` — the embedded-chain description names
+  `0064_*.sql`, versions 1–64, and 64 checksum entries, and records what
+  migration 64 does.
 - `architecture/deep-dive-health.md` — the durable health state description
   gains the skipped-legacy-row behaviour, the NULL-scope uniqueness, and the
   durable authentication-failure suppression.
@@ -501,8 +509,10 @@ cargo test --manifest-path rust/Cargo.toml --workspace --all-targets \
   legacy rows carry no recoverable scope, and the fact that the
   `migration_legacy` provenance promised by migration 0051 is not produced.
 
-No change to `AGENTS.md`, to the release documentation, or to any published
-user-facing documentation.
+No change to the release documentation, to any published user-facing
+documentation, or to `architecture/deep-dive-on-prem-user-access.md`: its
+statement that the subsystem's tables are migrations 55–63 remains true, because
+migration 64 creates no on-prem table.
 
 ## 13. Acceptance criteria
 
