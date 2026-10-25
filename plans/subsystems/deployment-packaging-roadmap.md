@@ -199,6 +199,10 @@ contract under their explicit release tag.
   workflows derive the release version from the same authority `release.yml`
   uses; a reintroduced literal fails validation in ordinary CI.
 - M006 closed. No further milestone is registered in this subsystem.
+- M007 closed. No further milestone is registered in this subsystem.
+- M008 has no dependency. It changes the command that installs the Python
+  environment in the CI and qualification workflows, not the dependencies the
+  lockfile selects, and it touches no other subsystem's milestones.
 
 ## 7. Milestones
 
@@ -533,6 +537,53 @@ Deferred work:
 - Making generated run output inside a retained evidence tree ignored. That
   needs a per-tree ignore rule and is an explicit operator decision.
 
+### Milestone 8 — CI dependency-lock discipline
+
+Class: invariant
+
+Objective:
+
+Make the CI environment be built from the committed lockfile, or fail — and
+never silently re-resolve.
+
+Dependencies:
+
+- None. The change is to the command that installs the Python environment, not
+  to the dependencies it selects.
+
+Deliverable boundary:
+
+- The four CI gates that install the project environment with
+  `uv sync --frozen` use `uv sync --locked` instead.
+- The release-docs guard test runs its validator under the test suite's own
+  interpreter instead of shelling out through `uv`.
+- A guard keeps the workflows on the flag that detects lock drift.
+- `uv.lock` and `pyproject.toml` are unchanged. The release artifact, the
+  publication gate, the action pins, and the release version derivation are
+  unchanged.
+
+User or operator value:
+
+A `pyproject.toml` that has drifted from the committed lockfile fails the CI
+job at the environment-install step, with a message naming the remedy, instead
+of the first `uv run` silently re-resolving and rewriting the lockfile so the
+job qualifies a resolution the repository never committed.
+
+Exit conditions:
+
+- A drifted lockfile is detected by the gate, demonstrated in a sandbox.
+- No workflow installs the project environment with `uv sync --frozen`.
+- A guard fails if any of the four gates regresses to `--frozen`.
+- The committed `uv.lock` and `pyproject.toml` are byte-identical before and
+  after the change.
+- The tooling suite, the linters, and the release-documentation validator pass.
+
+Deferred work:
+
+- Adding a lock flag to the repository's `uv run` invocations. The gate in
+  front of them already guarantees the lockfile is current, so each of them
+  installs the committed resolution.
+
 ## 8. Cross-cutting requirements
 
 Storage/migration: no schema or data migration. Installer state/lock/temp files
@@ -612,7 +663,8 @@ operator documentation have one coherent authority with no Python dependency
 on the normal Rust path and no medium-or-higher unresolved correctness or
 security findings; and when every release-related workflow derives the release
 version from the repository authority, the release workflow contract is checked
-in ordinary CI, and the repository's ignore rules and tracked state agree.
+in ordinary CI, the repository's ignore rules and tracked state agree, and the
+CI environment is built from the committed lockfile or the job fails.
 
 
 ## 12. Milestone status
@@ -626,3 +678,4 @@ in ordinary CI, and the repository's ignore rules and tracked state agree.
 | 5 | closed | `plans/archive/implementation/deployment-packaging/005-active-path-integration-detection-corrective.md` | `plans/closure/deployment-packaging/005-status.md` | none; M004 closed |
 | 6 | closed | `plans/implementation/deployment-packaging/006-release-artifact-version-derivation-and-artifact-hygiene.md` | `plans/closure/deployment-packaging/006-status.md` | none; closed through M007 |
 | 7 | closed | `plans/implementation/deployment-packaging/007-release-action-pin-enforcement-and-guard-correction.md` | `plans/closure/deployment-packaging/007-status.md` | none |
+| 8 | ready | `plans/implementation/deployment-packaging/008-ci-dependency-lock-discipline.md` | — | none |

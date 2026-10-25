@@ -93,7 +93,7 @@ No new runtime, schema or performance claim lands with these plans.
 | Routing selection | active | `plans/subsystems/routing-selection-roadmap.md` | M009 blocked — health effect ownership and terminal-withdrawal producer retirement | Reopened on evidence at baseline `e6822d8f78`: M001–M003 remain closed. M004, M005, and M006 are closed through M007. M008 is registered and is blocked only on the acceptance of `plans/adrs/ADR-0005-durable-health-state-repair-and-authentication-failure-durability.md`. M009 is registered and is blocked on the acceptance of `plans/adrs/ADR-0006-authoritative-terminal-model-withdrawal-ownership.md` and on M008 closed. |
 | Runtime efficiency | closed | `plans/subsystems/runtime-efficiency-roadmap.md` | M001–M003 closed — no successor registered | No M003-dependent plan was unblocked. Persistence M007 has since completed Pi 5/MMC qualification and was rejected on WAL convergence gates; production is unchanged. |
 | Persistence | active | `plans/subsystems/persistence-roadmap.md` | M011 closed — post-M010 roadmap/documentation reconciliation | M009/M010 closures accepted. Documentation/tooling-only corrective; production remains WAL/NORMAL. No technical persistence successor is registered. |
-| Deployment and packaging | active | `plans/subsystems/deployment-packaging-roadmap.md` | M007 closed — release action-pin enforcement and guard correction | Reopened on evidence at baseline `e6822d8f78`: M001–M005 remain closed. M006 is closed through M007; no successor is registered in this subsystem. |
+| Deployment and packaging | active | `plans/subsystems/deployment-packaging-roadmap.md` | M008 ready — CI dependency-lock discipline | Reopened on evidence at baseline `e6822d8f78`: M001–M005 remain closed. M006 is closed through M007. M008 is registered and has no dependency. |
 | Dashboard | closed | `plans/subsystems/dashboard-roadmap.md` | M014 closed — operator surface presentation and accessibility corrective | Reopened on evidence at baseline `e6822d8f78`: M001–M013 remain closed. M014 is closed; the paired browser disposition needs the frozen oracle worktree and a browser, and the stale on-prem browser reference artifact has to be regenerated on hardware. |
 | On-prem user access | closed | `plans/subsystems/on-prem-user-access-roadmap.md` | M024 closed — browser session CSRF delivery and member account surface corrective | Reopened on evidence at baseline `d04ad6831c6e030b7f5fc8a56501fdfecab982bd`: M001–M023 remain closed. `plans/adrs/ADR-0004-browser-session-csrf-delivery-and-account-scoped-sign-in-throttling.md` was accepted on 2026-10-23, and M024 implements that decision; it is closed. |
 | On-prem concurrency performance | active | `plans/subsystems/on-prem-concurrency-performance-roadmap.md` | M002 closed — ordinary-server synthetic baseline recorded | M001's Pi/microSD solo tail attribution stays conditionally closed; M002 authorizes no WAL/SQLite topology change. |
@@ -231,10 +231,34 @@ on M008 closed, because both milestones edit `rust/src/health/` and
 `rust/src/routing/router.rs`. Accepting that ADR is a one-line status change on
 the ADR plus its acceptance note.
 
+`plans/implementation/deployment-packaging/008-ci-dependency-lock-discipline.md`
+is registered as Deployment and Packaging M008 at baseline
+`1929abf5a725cc7faac0f866622afa7af017694a`. The four CI gates that install
+the Python environment use `uv sync --frozen`, which installs the versions the
+lockfile records without checking that the lockfile still satisfies the
+project metadata. Measured against uv 0.11.16 in an isolated project, a
+deliberately drifted lockfile exits 0 under that flag, and the first `uv run`
+that follows then re-resolves, rewrites `uv.lock` in the working tree, and
+still exits 0 — so the job qualifies a resolution the repository never
+committed, and no step reports the substitution. The same drifted tree exits 1
+under `uv sync --locked` with a message naming the lockfile and the remedy.
+The milestone changes the gate, not the lockfile, so it selects no dependency
+and reaches no ADR threshold. The originally flagged line,
+`tests/tooling/test_release_docs.py:29`, does not survive measurement as an
+outlier: the repository has eighty `uv run` invocations across the workflows,
+the scripts, and the tests, and none of them carries a lock flag, so the
+flagged line follows the uniform convention. The milestone replaces that
+subprocess with the interpreter the test suite already runs under, matching the
+existing `tests/tooling/test_installer.py` precedent, and adds a guard that
+keeps the workflows on the flag that detects drift. The committed `uv.lock`
+and `pyproject.toml` are unchanged, and the release workflow's `--no-project`
+isolation is unaffected.
+
 ## Dependency-ready implementation plans
 
 | Subsystem | Milestone | Status | Implementation plan | Dependencies / handoff note |
 |---|---|---|---|---|
+| Deployment and packaging | M008 | ready | `plans/implementation/deployment-packaging/008-ci-dependency-lock-discipline.md` | none |
 
 ## Active implementation plans
 
