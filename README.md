@@ -1,7 +1,7 @@
 [![PyPI version](https://badge.fury.io/py/eggpool.svg)](https://pypi.org/project/eggpool/)
 [![Crates.io version](https://img.shields.io/crates/v/eggpool.svg)](https://crates.io/crates/eggpool)
 [![Rust runtime](https://img.shields.io/badge/runtime-Rust-orange.svg)](https://www.rust-lang.org/)
-[![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
+[![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://github.com/eggstack/eggpool/blob/main/LICENSE)
 [![CI](https://github.com/eggstack/eggpool/actions/workflows/ci.yml/badge.svg)](https://github.com/eggstack/eggpool/actions/workflows/ci.yml)
 [![PyPI Downloads](https://static.pepy.tech/personalized-badge/eggpool?period=total&units=INTERNATIONAL_SYSTEM&left_color=BLACK&right_color=GREEN&left_text=downloads)](https://pepy.tech/projects/eggpool)
 [![Crates.io Downloads](https://img.shields.io/crates/d/eggpool.svg)](https://crates.io/crates/eggpool)
@@ -19,6 +19,7 @@ A lightweight, LAN-hosted proxy that aggregates multiple AI provider accounts be
 - Request, token, latency, error, and cost tracking in SQLite, with a multi-page dashboard
 - Model metadata enrichment from provider catalogs, OpenRouter, Artificial Analysis, and Hugging Face, including thinking/reasoning capability metadata
 - Per-account outbound proxy support, including SSH proxies
+- Managed multi-user access with per-user personal tokens, exact model-access policies, durable per-user and instance budgets, and browser-session admin
 - Live config reload (`eggpool rehash`) for provider/routing changes; host, port, and database changes need `eggpool restart`
 - Designed for lightweight deployments (Raspberry Pi, SBCs)
 
@@ -37,8 +38,8 @@ eggpool onboard
 sudo env "PATH=$PATH" "HOME=$HOME" "$(command -v eggpool)" deploy systemd --install
 ```
 
-See [Deployment](docs/deployment.md) for systemd, cron, and production setup,
-and [standalone binaries](docs/rust-release-deployment.md) for install internals.
+See [Deployment](https://github.com/eggstack/eggpool/blob/main/docs/deployment.md) for systemd, cron, and production setup,
+and [standalone binaries](https://github.com/eggstack/eggpool/blob/main/docs/rust-release-deployment.md) for install internals.
 
 The curl install is binary-first: it fetches the qualified GitHub raw
 executable for your target (SHA-256 verified before execution) and commits it
@@ -56,7 +57,7 @@ bash -o pipefail -c 'export EGGPOOL_INSTALL_BIN_DIR="$HOME/opt/eggpool/bin"; cur
 ```
 
 To update or switch to one exact catalogued release and to roll back, see
-[Upgrading](docs/upgrading.md):
+[Upgrading](https://github.com/eggstack/eggpool/blob/main/docs/upgrading.md):
 
 ```bash
 eggpool update         # latest catalogued release, same owner
@@ -99,7 +100,7 @@ Managed inference and integration requests use the caller's personal token as
 shared server key until migration; it does not grant managed-user access. To pin a provider, qualify
 the model as `model/provider` (e.g. `"gpt-4o/openai"`); `eggpool accounts
 explain --model <id>` shows per-account eligibility. Full endpoint list:
-[API reference](docs/api-reference.md).
+[API reference](https://github.com/eggstack/eggpool/blob/main/docs/api-reference.md).
 
 ## Coding Agents
 
@@ -110,11 +111,11 @@ eggpool configsetup claude-code
 eggpool configremote codex            # secret-free remote profile for other machines
 ```
 
-Generated configs reference `EGGPOOL_API_KEY` without embedding the key. Set it to a personal token from `eggpool users token USER --show-secret`; `eggpool getkey` is only for legacy installs. See [Agent Configuration](docs/agent-configuration.md) for all targets, the managed `--apply`/`--sync`/`--check`/`--remove` lifecycle, remote profiles, and the transactional `eggpool-connect` desktop helper.
+Generated configs reference `EGGPOOL_API_KEY` without embedding the key. Set it to a personal token from `eggpool users token USER --show-secret`; `eggpool getkey` is only for legacy installs. See [Agent Configuration](https://github.com/eggstack/eggpool/blob/main/docs/agent-configuration.md) for all targets, the managed `--apply`/`--sync`/`--check`/`--remove` lifecycle, remote profiles, and the transactional `eggpool-connect` desktop helper.
 
 ## Dashboard & LAN Access
 
-By default EggPool binds `0.0.0.0:11300` and serves a public read-only dashboard at `http://<lan-ip>:11300/`. To share with desktops on your LAN, set `[integrations].advertise_base_url = "http://<lan-ip>:11300/v1"`, run `eggpool rehash` (advertised URL is live-reloadable profile output; it never changes the listen socket), then export a profile with `eggpool configremote codex`. Lock it down with `[server].host = "127.0.0.1"` (local only) or `eggpool dashboard public --off` (key required on the dashboard too). See [Firewall](docs/firewall.md).
+By default EggPool binds `0.0.0.0:11300` and serves a public read-only dashboard at `http://<lan-ip>:11300/`. To share with desktops on your LAN, set `[integrations].advertise_base_url = "http://<lan-ip>:11300/v1"`, run `eggpool rehash` (advertised URL is live-reloadable profile output; it never changes the listen socket), then export a profile with `eggpool configremote codex`. Lock it down with `[server].host = "127.0.0.1"` (local only) or `eggpool dashboard public --off` (key required on the dashboard too). See [Firewall](https://github.com/eggstack/eggpool/blob/main/docs/firewall.md).
 
 Browser password sign-in is shown only over loopback or trusted HTTPS proxy
 transport. A remote plaintext HTTP visit to `/login` receives an explanation
@@ -136,32 +137,32 @@ VPN. LAN inference tokens remain a separate API transport choice.
 | `eggpool backup` / `recover` | Create / restore timestamped backups |
 | `eggpool update [VERSION]` | Install the latest or one exact catalogued release |
 
-Full command list: [CLI reference](docs/cli-reference.md).
+Full command list: [CLI reference](https://github.com/eggstack/eggpool/blob/main/docs/cli-reference.md).
 
 ## Configuration
 
-One TOML file (`--config` > `$EGGPOOL_CONFIG` > `~/.config/eggpool/config.toml` > `./config.toml`). Provider/upstream API keys come from environment variables or `.env`, never the file; the EggPool server key itself lives under `[server]` (`api_key`, or `api_key_env` to own it via environment — `eggpool newkey` rotates it). Prefer `eggpool connect` over hand-editing; the commented [config.example.toml](rust/config.example.toml) (plus [config.sbc.example.toml](rust/config.sbc.example.toml) for SBCs) documents every section. Config changes are validated before apply and classified as live-reloadable (`rehash`) or restart-required — see [Live Configuration Rehash](docs/live-config-rehash.md) and [Providers](docs/providers.md).
+One TOML file (`--config` > `$EGGPOOL_CONFIG` > `~/.config/eggpool/config.toml` > `./config.toml`). Provider/upstream API keys come from environment variables or `.env`, never the file; the EggPool server key itself lives under `[server]` (`api_key`, or `api_key_env` to own it via environment — `eggpool newkey` rotates it). Prefer `eggpool connect` over hand-editing; the commented [config.example.toml](https://github.com/eggstack/eggpool/blob/main/rust/config.example.toml) (plus [config.sbc.example.toml](https://github.com/eggstack/eggpool/blob/main/rust/config.sbc.example.toml) for SBCs) documents every section. Config changes are validated before apply and classified as live-reloadable (`rehash`) or restart-required — see [Live Configuration Rehash](https://github.com/eggstack/eggpool/blob/main/docs/live-config-rehash.md) and [Providers](https://github.com/eggstack/eggpool/blob/main/docs/providers.md).
 
 ## Documentation
 
 | Guide | Link |
 |-------|------|
-| Deployment (systemd, cron, production) | [docs/deployment.md](docs/deployment.md) |
-| Provider catalog & configuration | [docs/providers.md](docs/providers.md) |
-| Agent configuration | [docs/agent-configuration.md](docs/agent-configuration.md) |
-| API endpoints | [docs/api-reference.md](docs/api-reference.md) |
-| Stateless Responses | [docs/stateless-responses.md](docs/stateless-responses.md) |
-| Protocol transcoding | [docs/transcoding.md](docs/transcoding.md) |
-| Semantic model routing | [docs/model-routing.md](docs/model-routing.md) |
-| Backup & restore | [docs/backup-restore.md](docs/backup-restore.md) |
-| Upgrading & rollback | [docs/upgrading.md](docs/upgrading.md) |
-| Per-account outbound proxy | [docs/proxy.md](docs/proxy.md) |
-| Thinking & reasoning | [docs/thinking.md](docs/thinking.md) |
-| Raspberry Pi setup | [docs/raspberry-pi.md](docs/raspberry-pi.md) |
-| Live Configuration Rehash | [docs/live-config-rehash.md](docs/live-config-rehash.md) |
-| Filesystem layout | [docs/filesystem-layout.md](docs/filesystem-layout.md) |
+| Deployment (systemd, cron, production) | [docs/deployment.md](https://github.com/eggstack/eggpool/blob/main/docs/deployment.md) |
+| Provider catalog & configuration | [docs/providers.md](https://github.com/eggstack/eggpool/blob/main/docs/providers.md) |
+| Agent configuration | [docs/agent-configuration.md](https://github.com/eggstack/eggpool/blob/main/docs/agent-configuration.md) |
+| API endpoints | [docs/api-reference.md](https://github.com/eggstack/eggpool/blob/main/docs/api-reference.md) |
+| Stateless Responses | [docs/stateless-responses.md](https://github.com/eggstack/eggpool/blob/main/docs/stateless-responses.md) |
+| Protocol transcoding | [docs/transcoding.md](https://github.com/eggstack/eggpool/blob/main/docs/transcoding.md) |
+| Semantic model routing | [docs/model-routing.md](https://github.com/eggstack/eggpool/blob/main/docs/model-routing.md) |
+| Backup & restore | [docs/backup-restore.md](https://github.com/eggstack/eggpool/blob/main/docs/backup-restore.md) |
+| Upgrading & rollback | [docs/upgrading.md](https://github.com/eggstack/eggpool/blob/main/docs/upgrading.md) |
+| Per-account outbound proxy | [docs/proxy.md](https://github.com/eggstack/eggpool/blob/main/docs/proxy.md) |
+| Thinking & reasoning | [docs/thinking.md](https://github.com/eggstack/eggpool/blob/main/docs/thinking.md) |
+| Raspberry Pi setup | [docs/raspberry-pi.md](https://github.com/eggstack/eggpool/blob/main/docs/raspberry-pi.md) |
+| Live Configuration Rehash | [docs/live-config-rehash.md](https://github.com/eggstack/eggpool/blob/main/docs/live-config-rehash.md) |
+| Filesystem layout | [docs/filesystem-layout.md](https://github.com/eggstack/eggpool/blob/main/docs/filesystem-layout.md) |
 
-More guides: [configuration reference](docs/configuration.md), [model context limits](docs/model-limits.md), [firewall](docs/firewall.md), [performance profiles](docs/deployment.md#performance-profiles), [network diagnostics](docs/network-diagnostics.md), [OpenCode stream stability](docs/opencode-stream-stability.md), [model-info OpenRouter debugging](docs/model-info-openrouter-debug.md), [live wire-surface verification](docs/live-wire-e2e.md), [Codex compatibility smoke](docs/codex-compatibility-smoke.md), [standalone binaries](docs/rust-release-deployment.md), [release procedure](docs/releasing.md), [dashboard qualification](docs/rust-dashboard-qualification.md), [migration history](docs/migration-history.md), [database recovery](docs/runbooks/database-recovery.md), [architecture overview](architecture/README.md).
+More guides: [configuration reference](https://github.com/eggstack/eggpool/blob/main/docs/configuration.md), [model context limits](https://github.com/eggstack/eggpool/blob/main/docs/model-limits.md), [firewall](https://github.com/eggstack/eggpool/blob/main/docs/firewall.md), [performance profiles](https://github.com/eggstack/eggpool/blob/main/docs/deployment.md#performance-profiles), [network diagnostics](https://github.com/eggstack/eggpool/blob/main/docs/network-diagnostics.md), [OpenCode stream stability](https://github.com/eggstack/eggpool/blob/main/docs/opencode-stream-stability.md), [model-info OpenRouter debugging](https://github.com/eggstack/eggpool/blob/main/docs/model-info-openrouter-debug.md), [live wire-surface verification](https://github.com/eggstack/eggpool/blob/main/docs/live-wire-e2e.md), [Codex compatibility smoke](https://github.com/eggstack/eggpool/blob/main/docs/codex-compatibility-smoke.md), [standalone binaries](https://github.com/eggstack/eggpool/blob/main/docs/rust-release-deployment.md), [release procedure](https://github.com/eggstack/eggpool/blob/main/docs/releasing.md), [dashboard qualification](https://github.com/eggstack/eggpool/blob/main/docs/rust-dashboard-qualification.md), [migration history](https://github.com/eggstack/eggpool/blob/main/docs/migration-history.md), [database recovery](https://github.com/eggstack/eggpool/blob/main/docs/runbooks/database-recovery.md), [architecture overview](https://github.com/eggstack/eggpool/blob/main/architecture/README.md).
 
 ## Development
 

@@ -40,7 +40,7 @@
       "path": "catalog/installable-releases.json",
       "category": "release-catalog",
       "source": "rust/assets/catalog/installable-releases.json",
-      "sha256": "a44ef846511327376c967757957a1714c9837fb93ee777d036183e53fbe56520",
+      "sha256": "ecc82003d83c57f64768dfe44b602f36bd7aefb856aaefc0e46fed8627b7824e",
       "identity": "exact"
     },
     {

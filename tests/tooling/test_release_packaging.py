@@ -64,8 +64,9 @@ def test_publication_manifest_is_a_pinned_binary_wheel_definition() -> None:
         "name": "eggpool",
         "dynamic": ["version"],
         "description": (
-            "A lightweight proxy that aggregates multiple LLM provider accounts "
-            "behind an OpenAI Chat Completions-compatible endpoint"
+            "A lightweight native proxy that aggregates multiple LLM provider "
+            "accounts behind OpenAI and Anthropic-compatible APIs with managed "
+            "multi-user access"
         ),
         "readme": "README.md",
         "requires-python": ">=3.11",
@@ -126,7 +127,7 @@ def test_root_project_is_tooling_only_and_not_publishable() -> None:
         "historical_artifacts": "immutable-external-pypi",
         "requires_python_semantics": "package-manager-compatibility-only",
     }
-    assert cargo_project["version"] == "0.8.2"
+    assert cargo_project["version"] == "0.8.3"
 
 
 def test_inspector_accepts_a_native_platform_wheel(tmp_path: Path) -> None:

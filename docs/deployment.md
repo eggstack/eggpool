@@ -110,10 +110,10 @@ or writer. See [model limits](model-limits.md#instance-budget-ceilings).
 
 ```bash
 eggpool update          # install the newest published release when newer
-eggpool update 0.8.2    # exact current Rust release
+eggpool update 0.8.3    # exact current Rust release
 eggpool update 0.7.4    # exact supported Python-era rollback
 eggpool update v0.7.4   # equivalent spelling
-eggpool update 0.8.2 --check
+eggpool update 0.8.3 --check
 ```
 
 Exact updates are pinned and can intentionally downgrade. The command uses the
@@ -685,7 +685,7 @@ sudo chmod 755 /etc/eggpool
 # 2. Install the native wheel through the system-owned pipx authority
 # (pin the version you qualified; see docs/rust-release-deployment.md)
 sudo env PIPX_HOME=/var/lib/eggpool/pipx PIPX_BIN_DIR=/usr/local/bin \
-  pipx install --force 'eggpool==0.8.2'
+  pipx install --force 'eggpool==0.8.3'
 
 # 3. Configure
 sudo /usr/local/bin/eggpool init-config /etc/eggpool/config.toml

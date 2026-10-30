@@ -40,18 +40,18 @@ def test_frozen_catalog_is_complete_and_current() -> None:
 
     assert summary == {
         "catalog_version": "release-catalog.v1",
-        "native_release_version": "0.8.2",
-        "release_count": 59,
+        "native_release_version": "0.8.3",
+        "release_count": 60,
         "rollback_count": 8,
     }
     assert value["official_inventory"]["missing_pypi_versions"] == []
     assert all(
         expanded_release(value, release)["implementation_era"] == "python"
-        for release in releases(value)[:-3]
+        for release in releases(value)[:-4]
     )
     assert all(
         expanded_release(value, release)["implementation_era"] == "rust"
-        for release in releases(value)[-3:]
+        for release in releases(value)[-4:]
     )
     assert {
         release["version"]
@@ -115,10 +115,19 @@ def test_rust_release_requires_wheels_after_artifact_stage_activation() -> None:
 def test_published_native_release_has_immutable_source_and_public_artifact() -> None:
     value = catalog()
     authority = value["version_authority"]
-    assert authority["publication_status"] == "published"
-    assert authority["native_release_source_commit"]
-    assert authority["rust_cargo_version"] == authority["native_release_version"]
+    assert authority["publication_status"] == "candidate"
+    assert "native_release_source_commit" not in authority
+    assert (
+        authority["rust_cargo_version"]
+        == authority["native_release_version"]
+        == "0.8.3"
+    )
     versions = {release["version"] for release in releases(value)}
     assert authority["native_release_version"] in versions
     assert releases(value)[-1]["implementation_era"] == "rust"
-    assert len(releases(value)[-1]["pypi_files"]) == 3
+    assert releases(value)[-1]["public_release_status"] == "unavailable"
+    assert releases(value)[-1].get("pypi_presence") is False
+    # The latest published native release keeps its immutable public artifacts.
+    assert releases(value)[-2]["version"] == "0.8.2"
+    assert releases(value)[-2]["implementation_era"] == "rust"
+    assert len(releases(value)[-2]["pypi_files"]) == 3

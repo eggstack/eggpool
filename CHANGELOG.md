@@ -5,6 +5,32 @@ All notable changes to EggPool are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.8.3] - 2026-10-30
+
+### Changed
+
+- **Release documentation now reflects the shipped managed runtime.** The
+  canonical `README.md` documents managed multi-user access (per-user personal
+  tokens, exact model-access policies, durable per-user and instance budgets,
+  browser-session admin) alongside the existing Chat Completions, stateless
+  Responses, and Anthropic Messages paths. All documentation links in the
+  canonical readme use absolute
+  `https://github.com/eggstack/eggpool/blob/main/...` targets so the same
+  readme renders correctly on GitHub, crates.io, and PyPI.
+- **PyPI and crates.io user-facing documentation now track the canonical
+  readme.** `packaging/pypi/README.md` carries the full canonical readme
+  (previously a short standalone summary), and the published crate readme is
+  the repository-root readme (the 0.8.2 crates.io rendering predated the
+  `readme = "../README.md"` pointer and showed development artifacts). Crate
+  and wheel descriptions now name the OpenAI/Anthropic-compatible surfaces
+  with managed multi-user access.
+- **Use guides describe the managed identity cutover consistently.**
+  `README.md`, deployment, agent configuration, API, and CLI references agree:
+  new databases create the initial administrator during `onboard`, members
+  authenticate inference with per-user personal tokens, the shared server key
+  is legacy-only and stops working after identity initialization, and browser
+  sessions own the dashboard/admin surface.
+
 ## [0.8.2] - 2026-10-09
 
 ### Fixed

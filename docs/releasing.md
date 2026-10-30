@@ -21,7 +21,7 @@ uv run python scripts/validate_runtime_package_boundary.py
 git diff --check
 ~~~
 
-The checks must agree on the release catalog's native version (0.8.2 for the current public
+The checks must agree on the release catalog's native version (0.8.3 for the current candidate
 release), Cargo version, package metadata, supported targets, changelog
 heading, and source commit. The root `pyproject.toml` is tooling-only and
 cannot be built or uploaded as an EggPool release. `Requires-Python >=3.11` on
@@ -62,7 +62,7 @@ unchanged). Published crates, in dependency order:
   `eggpool-client-config 0.1.0` (neutral library crates);
 - `eggpool-provider-profile 0.1.0` (secret-free provider-profile contract;
   depends on `eggpool-wire`);
-- `eggpool 0.8.2` (the proxy binary; depends on the four libraries above).
+- `eggpool 0.8.3` (the proxy binary; depends on the four libraries above).
 
 ```bash
 cargo publish --manifest-path rust/crates/eggpool-wire/Cargo.toml

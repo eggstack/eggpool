@@ -17,10 +17,10 @@ def test_public_metadata_and_docs_are_consistent() -> None:
 
     assert result == {
         "status": "pass",
-        "version": "0.8.2",
+        "version": "0.8.3",
         "targets": ["linux-aarch64", "linux-x86_64", "macos-arm64"],
         "docs_checked": 7,
-        "production_release": "published 0.8.2",
+        "production_release": "guarded until publication",
         "python_reference": "historical external artifacts",
     }
 
@@ -37,7 +37,7 @@ def test_guard_is_machine_readable_and_rejects_root_release_builds() -> None:
     assert completed.returncode == 0, completed.stderr
     report = json.loads(completed.stdout)
     assert report["status"] == "pass"
-    assert report["production_release"] == "published 0.8.2"
+    assert report["production_release"] == "guarded until publication"
     workflow = (ROOT / ".github/workflows/release.yml").read_text(encoding="utf-8")
     assert "uv build" not in workflow
     assert "uv publish" not in workflow

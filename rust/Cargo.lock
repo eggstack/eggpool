@@ -987,7 +987,7 @@ dependencies = [
 
 [[package]]
 name = "eggpool"
-version = "0.8.2"
+version = "0.8.3"
 dependencies = [
  "arc-swap",
  "argon2 0.5.3",
