@@ -146,7 +146,7 @@ def test_publication_verifier_accepts_exact_manifest_bytes() -> None:
     result = verify_publication(_manifest(), pypi, github)
     assert result == {
         "status": "pass",
-        "version": "0.8.2",
+        "version": "0.8.3",
         "wheels": 3,
         "raw_assets": 3,
         "connect_assets": 6,

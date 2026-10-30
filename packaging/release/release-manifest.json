@@ -6,7 +6,7 @@
         "macos_deployment_target": null,
         "tool_versions": {
           "maturin": "maturin 1.14.1",
-          "rust": "rustc 1.99.0 (b940084d7 2026-09-28)"
+          "rust": "rustc 1.99.1 (58cf8f9c3 2026-10-13)"
         }
       },
       "kind": "eggpool",
@@ -15,23 +15,23 @@
         "result": "pass"
       },
       "raw": {
-        "filename": "eggpool-0.8.2-linux-aarch64",
-        "sha256": "385f0653a65a110b2be2366e0528235c176aaf2efb95b74cfc9a4e5860bac156",
-        "size": 24373688
+        "filename": "eggpool-0.8.3-linux-aarch64",
+        "sha256": "e3f4c640c76050065b00913ffdf6b63269406952823700783d11734a18d4aef1",
+        "size": 26983600
       },
       "rust_target": "aarch64-unknown-linux-gnu",
       "wheel": {
-        "executable_member": "eggpool-0.8.2.data/scripts/eggpool",
-        "executable_sha256": "385f0653a65a110b2be2366e0528235c176aaf2efb95b74cfc9a4e5860bac156",
-        "executable_size": 24373688,
-        "filename": "eggpool-0.8.2-py3-none-manylinux_2_17_aarch64.manylinux2014_aarch64.whl",
+        "executable_member": "eggpool-0.8.3.data/scripts/eggpool",
+        "executable_sha256": "e3f4c640c76050065b00913ffdf6b63269406952823700783d11734a18d4aef1",
+        "executable_size": 26983600,
+        "filename": "eggpool-0.8.3-py3-none-manylinux_2_17_aarch64.manylinux2014_aarch64.whl",
         "platform_tags": [
           "py3-none-manylinux_2_17_aarch64",
           "py3-none-manylinux2014_aarch64"
         ],
         "requires_python": ">=3.11",
-        "sha256": "b78b5345d34a87ef66e0fe44f43e07d39ab7049d995a90dd28e239743c0d83cb",
-        "size": 10993164
+        "sha256": "d30a3b3265b302e7499843b8f8ceca66480060f0bcdadb51c5d36f95acdd993f",
+        "size": 12099479
       }
     },
     {
@@ -40,7 +40,7 @@
         "macos_deployment_target": null,
         "tool_versions": {
           "maturin": "maturin 1.14.1",
-          "rust": "rustc 1.99.0 (b940084d7 2026-09-28)"
+          "rust": "rustc 1.99.1 (58cf8f9c3 2026-10-13)"
         }
       },
       "kind": "eggpool",
@@ -49,23 +49,23 @@
         "result": "pass"
       },
       "raw": {
-        "filename": "eggpool-0.8.2-linux-x86_64",
-        "sha256": "580918302b44e8d467cc1064ac2b35bd9a46cd327d0d9c48783d91ce40c45e44",
-        "size": 28149600
+        "filename": "eggpool-0.8.3-linux-x86_64",
+        "sha256": "8477068b2a06a083574eb6b16ac5bf82c53df4bf6980b5850dbd25b297cea2fd",
+        "size": 31200096
       },
       "rust_target": "x86_64-unknown-linux-gnu",
       "wheel": {
-        "executable_member": "eggpool-0.8.2.data/scripts/eggpool",
-        "executable_sha256": "580918302b44e8d467cc1064ac2b35bd9a46cd327d0d9c48783d91ce40c45e44",
-        "executable_size": 28149600,
-        "filename": "eggpool-0.8.2-py3-none-manylinux_2_17_x86_64.manylinux2014_x86_64.whl",
+        "executable_member": "eggpool-0.8.3.data/scripts/eggpool",
+        "executable_sha256": "8477068b2a06a083574eb6b16ac5bf82c53df4bf6980b5850dbd25b297cea2fd",
+        "executable_size": 31200096,
+        "filename": "eggpool-0.8.3-py3-none-manylinux_2_17_x86_64.manylinux2014_x86_64.whl",
         "platform_tags": [
           "py3-none-manylinux_2_17_x86_64",
           "py3-none-manylinux2014_x86_64"
         ],
         "requires_python": ">=3.11",
-        "sha256": "c23b06420814066ea7fc3e8f82a6f54f6904f5166333e5689dfb692bbf5b58f4",
-        "size": 11580882
+        "sha256": "5680185034a6086da16ef2ae0830133d691eafc8b6a4c7371a625077d3788894",
+        "size": 12707943
       }
     },
     {
@@ -74,7 +74,7 @@
         "macos_deployment_target": "11.0",
         "tool_versions": {
           "maturin": "maturin 1.14.1",
-          "rust": "rustc 1.99.0 (b940084d7 2026-09-28)"
+          "rust": "rustc 1.99.1 (58cf8f9c3 2026-10-13)"
         }
       },
       "kind": "eggpool",
@@ -83,62 +83,62 @@
         "result": "pass"
       },
       "raw": {
-        "filename": "eggpool-0.8.2-macos-aarch64",
-        "sha256": "041dc8c61c236aff8befa7ff1d96f35d9000668db0cb264d1bdba4a84bbcaf7e",
-        "size": 28759872
+        "filename": "eggpool-0.8.3-macos-aarch64",
+        "sha256": "3e501d19561e62c892b95ff069905ae98d007edf40bd271cbf2b3c2f5de19b7e",
+        "size": 31922864
       },
       "rust_target": "aarch64-apple-darwin",
       "wheel": {
-        "executable_member": "eggpool-0.8.2.data/scripts/eggpool",
-        "executable_sha256": "041dc8c61c236aff8befa7ff1d96f35d9000668db0cb264d1bdba4a84bbcaf7e",
-        "executable_size": 28759872,
-        "filename": "eggpool-0.8.2-py3-none-macosx_11_0_arm64.whl",
+        "executable_member": "eggpool-0.8.3.data/scripts/eggpool",
+        "executable_sha256": "3e501d19561e62c892b95ff069905ae98d007edf40bd271cbf2b3c2f5de19b7e",
+        "executable_size": 31922864,
+        "filename": "eggpool-0.8.3-py3-none-macosx_11_0_arm64.whl",
         "platform_tags": [
           "py3-none-macosx_11_0_arm64"
         ],
         "requires_python": ">=3.11",
-        "sha256": "409e9dca4f468f4b102a0b9a7eec5ee82415a7ce8134d8b1505ac3b5490f15eb",
-        "size": 12000989
+        "sha256": "b136f2ce4bd97086ed29f3c52480b45cca182532bb7ee2c19c2f97e2e6b1e40a",
+        "size": 13235406
       }
     }
   ],
-  "cargo_lock_sha256": "91c162e896e6d296a45e40877627d6f584369bd1c740ed979cb7f0c17f0004fb",
+  "cargo_lock_sha256": "3719149299492d5b16c92e166c6d32aeb64f7352652d803557acbbcd5c6f1282",
   "connect_artifacts": [
     {
       "executable": true,
-      "filename": "eggpool-connect-0.8.2-linux-aarch64",
+      "filename": "eggpool-connect-0.8.3-linux-aarch64",
       "kind": "eggpool-connect",
       "product_target": "connect-linux-aarch64",
       "rust_target": "aarch64-unknown-linux-gnu",
-      "sha256": "b2294976cee3e64c6369d5f197e5bf60077373fec6fe7712c2c9a8d2b9c5796f",
-      "size": 5914056
+      "sha256": "350cd062072f1d649ab4a11b875c20a92f04ecadce5e7607b4929d0121c5bee1",
+      "size": 5851072
     },
     {
       "executable": true,
-      "filename": "eggpool-connect-0.8.2-linux-x86_64",
+      "filename": "eggpool-connect-0.8.3-linux-x86_64",
       "kind": "eggpool-connect",
       "product_target": "connect-linux-x86_64",
       "rust_target": "x86_64-unknown-linux-gnu",
-      "sha256": "37a428b486953aeb8eb9a278b8549489e13ade6129caa93b405808c027f06947",
-      "size": 5984672
+      "sha256": "c6d34fbbbfdb1761ad9f678aff38892987325aa8057a2b41dc00778d0cc5e9a2",
+      "size": 6009304
     },
     {
       "executable": true,
-      "filename": "eggpool-connect-0.8.2-macos-aarch64",
+      "filename": "eggpool-connect-0.8.3-macos-aarch64",
       "kind": "eggpool-connect",
       "product_target": "connect-macos-arm64",
       "rust_target": "aarch64-apple-darwin",
-      "sha256": "c3d8a91fe606e6131f96cd5e175d0e233af02ff25fdc0ab2445a2a049a8753d0",
-      "size": 5120528
+      "sha256": "903cc631e6a2e97485b439350ca1efcc0dc01131ab691d260b365ee45e256d22",
+      "size": 5121088
     },
     {
       "executable": true,
-      "filename": "eggpool-connect-0.8.2-windows-x86_64.exe",
+      "filename": "eggpool-connect-0.8.3-windows-x86_64.exe",
       "kind": "eggpool-connect",
       "product_target": "connect-windows-x86_64",
       "rust_target": "x86_64-pc-windows-msvc",
-      "sha256": "6c3d99511a9ea57f40e76b43916a1f35456d863490d2fffefef3a981541c0b6c",
-      "size": 4851712
+      "sha256": "017a5e8d9f32680791f91ed35ffde6d21aa6f847bd3ff5e6ee60c22ba42dbb94",
+      "size": 4858368
     },
     {
       "executable": false,
@@ -157,9 +157,9 @@
   ],
   "historical_backfill_candidates": [],
   "manifest_version": "release-manifest.v1",
-  "packaging_manifest_sha256": "babfd03d5b477bbc2c61ee25024f0ac35bf1bbc723f12199594e612366bfc869",
+  "packaging_manifest_sha256": "29f03e028c72cc9c966aa008b49a00fc3cdc458a5fbe5094080140ebb9b22e43",
   "qualification_result": "pass",
-  "release_version": "0.8.2",
+  "release_version": "0.8.3",
   "requires_python": ">=3.11",
-  "source_commit": "990f7d8bbebd58dff5ebf293349f6eb1b2f85b30"
+  "source_commit": "04a5902658cb9f1795ec280907cfe4ab6254246b"
 }
