@@ -21,6 +21,11 @@ from inspect_release_wheel import WheelInspectionError, inspect_wheel
 
 ROOT = Path(__file__).resolve().parents[1]
 TIMEOUT = 90
+# Fresh databases are `fresh_uninitialized`: since the on-prem identity
+# cutover, `serve` refuses to start until one administrator exists. The wheel
+# qualifier therefore bootstraps a synthetic administrator before serving.
+# The password never leaves this process boundary and no token is printed.
+SYNTHETIC_BOOTSTRAP_PASSWORD = "release wheel synthetic bootstrap password 123"
 
 
 class QualificationError(RuntimeError):
@@ -39,12 +44,19 @@ def _prefix(target_class: str) -> list[str]:
     return []
 
 
-def _run(command: list[str], *, env: dict[str, str], cwd: Path | None = None) -> None:
+def _run(
+    command: list[str],
+    *,
+    env: dict[str, str],
+    cwd: Path | None = None,
+    input_text: str | None = None,
+) -> None:
     try:
         result = subprocess.run(
             command,
             cwd=cwd,
             env=env,
+            input=input_text,
             capture_output=True,
             text=True,
             timeout=TIMEOUT,
@@ -53,7 +65,10 @@ def _run(command: list[str], *, env: dict[str, str], cwd: Path | None = None) ->
     except (OSError, subprocess.TimeoutExpired) as error:
         raise QualificationError("bounded subprocess execution failed") from error
     if result.returncode:
-        raise QualificationError(f"subprocess failed ({result.returncode})")
+        detail = (result.stderr or result.stdout or "").strip().splitlines()
+        raise QualificationError(
+            f"subprocess failed ({result.returncode}): " + " ".join(detail[-3:])[:300]
+        )
 
 
 def _free_port() -> int:
@@ -86,6 +101,21 @@ def _check_config_and_health(
     )
     command = prefix + [str(executable), "--config", str(config), "check-config"]
     _run(command, env=env, cwd=root)
+    _run(
+        prefix
+        + [
+            str(executable),
+            "--config",
+            str(config),
+            "users",
+            "bootstrap",
+            "release-admin",
+            "--password-stdin",
+        ],
+        env=env,
+        cwd=root,
+        input_text=f"{SYNTHETIC_BOOTSTRAP_PASSWORD}\n",
+    )
     port = next(
         int(line.split("=", 1)[1].strip())
         for line in config.read_text(encoding="utf-8").splitlines()
