@@ -154,7 +154,7 @@ jobs:
   build-wheel-macos-arm64:
     name: build macOS arm64 wheel/raw pair
     needs: validate-release
-    runs-on: macos-14
+    runs-on: macos-15
     timeout-minutes: 45
     permissions:
       contents: read
@@ -251,7 +251,7 @@ jobs:
   build-connect-macos-arm64:
     name: build helper macOS arm64
     needs: validate-release
-    runs-on: macos-14
+    runs-on: macos-15
     timeout-minutes: 30
     permissions:
       contents: read

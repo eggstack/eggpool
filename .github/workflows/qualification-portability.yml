@@ -27,7 +27,7 @@ jobs:
             runner: ubuntu-24.04-arm
           - target_id: macos-arm64
             rust_target: aarch64-apple-darwin
-            runner: macos-14
+            runner: macos-15
     steps:
       - uses: actions/checkout@v4
       - uses: astral-sh/setup-uv@v4
