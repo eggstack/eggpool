@@ -8,9 +8,9 @@ Decision owners: EggPool maintainers
 
 Related specification sections:
 
-- plans/000-long-term-specification.md ``1–5
+- plans/000-long-term-specification.md §§1–5
 - plans/001-terminology-and-domain-model.md
-- plans/002-long-term-roadmap.md ``1, 4–5
+- plans/002-long-term-roadmap.md §§1, 4–5
 - plans/003-planning-process.md `2.2
 
 Affected subsystem roadmaps:
