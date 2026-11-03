@@ -1,6 +1,6 @@
 # Tool Integration M004 — Explicit finite hosted tool orchestration
 
-Status: blocked
+Status: ready
 
 Repository baseline: `0e021c1ffe55803aff5f325033e65313dca9f1dc` (planning, 2026-11-03)
 
@@ -19,6 +19,20 @@ Add an explicitly opted-in, finite, stateless model→approved tool→model oper
 ## 2. Readiness and dependencies
 
 **Hard:** M003 authenticated MCP gateway closed and ADR-0007 accepted. **Interface:** stable completed tool-call IR and tool definitions, GenerationLease / execute_endpoint_attributed path, principal/request attribution, hard cost/token admission, and M003 bounded tool-invocation API. A deterministic test model and local Eggsearch fixture are operational inputs. Do not build a second retry owner or start on an unclosed gateway.
+
+Readiness audit (2026-11-03): M003 is conditionally closed with its software
+capability, live Eggsearch route, and per-user authorization qualified; its
+remaining condition is physical SBC footprint/contention only. ADR-0007 is
+accepted. The current stable interfaces are
+`eggpool_wire::CanonicalToolCallAccumulator` / `CompletedToolCall`,
+`GenerationLease`, `execute_endpoint_attributed`, and
+`AuthenticatedPrincipal::request_attribution`. The M003 gateway will first
+extract a crate-private bounded invocation service from the HTTP adapter so
+orchestration will not call the public MCP route. That is an M004 work-package
+change within the accepted ownership boundary, not a blocker to the milestone
+handoff. Local Eggsearch 0.4.3 and Ollama models are available for live
+qualification; deterministic model behavior remains an implementation test
+fixture requirement.
 
 ## 3. Current evidence
 
