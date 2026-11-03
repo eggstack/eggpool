@@ -89,7 +89,7 @@ No new runtime, schema or performance claim lands with these plans.
 | Subsystem | Status | Roadmap | Current milestone | Dependencies or blockers |
 |---|---|---|---|---|
 | Optional tool integration | active | [tool integration roadmap](subsystems/tool-integration-roadmap.md) | M001–M002 and corrective M005 closed; M003 ready; M004 blocked | ADR-0007 accepted; M003's Eggsearch 0.4.3 initialize/list/call interface is qualified. |
-| Embedding routing | active | [embedding routing roadmap](subsystems/embedding-routing-roadmap.md) | E001 ready | ADR-0008 accepted; Ollama 0.17.7 `nomic-embed-text:latest` live embeddings contract qualified. |
+| Embedding routing | active | [embedding routing roadmap](subsystems/embedding-routing-roadmap.md) | E001 active | E001 implementation in progress; local Ollama contract qualified. |
 | Retrieval interoperability | proposed | [retrieval interoperability roadmap](subsystems/retrieval-interoperability-roadmap.md) | R001 blocked | Tool Integration M003 closed plus a backend-enforced document ACL/delegation contract; EggPool embeddings optional interface. |
 | Provider transport | closed | `plans/subsystems/provider-transport-roadmap.md` | M006 closed — Eggress 1.0.12 dependency refresh and requalification | M001–M006 closed; no successor registered. |
 | Provider profile metadata corrective | closed | `plans/subsystems/provider-profile-metadata-corrective-roadmap.md` | M001 closed — provider template endpoint/source reconciliation | M001 terminal; no successor registered. |
@@ -307,13 +307,13 @@ record is `plans/closure/deployment-packaging/008-status.md`.
 
 | Subsystem | Milestone | Status | Implementation plan | Dependencies / handoff note |
 |---|---|---|---|---|
-| Embedding routing | E001 — OpenAI-compatible embeddings | ready | [E001 embeddings route](implementation/embedding-routing/001-openai-compatible-embeddings.md) | ADR-0008 accepted; local Ollama 0.17.7 `nomic-embed-text` request returned two ordered finite 768-dimensional vectors. |
 
 ## Active implementation plans
 
 | Subsystem | Milestone | Status | Implementation plan | Handoff note |
 |---|---|---|---|---|
 | Optional tool integration | M003 — Authenticated MCP gateway | active | [M003 MCP gateway](implementation/tool-integration/003-authenticated-mcp-gateway.md) | Eggsearch 0.4.3 initialize/list/call contract qualified; implement disabled-by-default authenticated gateway. |
+| Embedding routing | E001 — OpenAI-compatible embeddings | active | [E001 embeddings route](implementation/embedding-routing/001-openai-compatible-embeddings.md) | Implement the bounded route using the qualified Ollama 0.17.7 `nomic-embed-text` contract. |
 
 
 ## Blocked work
@@ -894,3 +894,8 @@ finite 768-dimensional vectors and usage. This supplies the plan's live
 provider/model contract gate, not EggPool implementation evidence. E001 moves
 from blocked to ready; its roadmap moves from proposed to active. The tool
 integration and retrieval plans have no hard dependency on E001.
+
+Embedding Routing E001 activation audit: E001 is the only registered plan in
+its subsystem and its hard ADR-0008 and live-provider gates are satisfied.
+It moves from ready to active to implement the public endpoint; no dependency
+of the tool-integration or retrieval workstreams is changed.
