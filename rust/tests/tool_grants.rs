@@ -134,6 +134,19 @@ async fn grants_scopes_precedence_and_revocation_fail_closed() {
         .await
         .unwrap()
         .unwrap();
+    let admin_token = identity::issue_api_token_with_tool_scopes(
+        &database,
+        "admin",
+        "admin without grant",
+        true,
+        true,
+    )
+    .await
+    .unwrap();
+    let admin = identity::verify_api_token_principal(&database, &admin_token.token)
+        .await
+        .unwrap()
+        .unwrap();
     let discovery = identity::verify_api_token_principal(&database, &discovery.token)
         .await
         .unwrap()
@@ -150,6 +163,24 @@ async fn grants_scopes_precedence_and_revocation_fail_closed() {
         .await
         .unwrap()
         .unwrap();
+
+    assert!(
+        !policy
+            .authorize_tool(&admin, "eggsearch", "web_search", ToolAction::Invoke)
+            .await
+            .unwrap()
+    );
+    assert!(
+        !policy
+            .authorize_tool(
+                &identity::AuthenticatedPrincipal::legacy_shared_key(),
+                "eggsearch",
+                "web_search",
+                ToolAction::Invoke
+            )
+            .await
+            .unwrap()
+    );
 
     policy
         .set_profile_rule(
