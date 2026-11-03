@@ -33,7 +33,7 @@ No vector DB, embedding cache, ingestion, hosted files, audio/image embeddings, 
 
 ## 4. Current state
 
-rust/src/server/mod.rs exposes only Chat/Responses/Messages inference and compact. docs/api-reference.md has no embeddings path. rust/src/wire/ir.rs re-exports dialogue IR; rust/src/catalog/ and rust/src/providers/ own model/endpoint data. Managed-model filtering and budgets already exist; they must be reused rather than recreated.
+`rust/src/server/mod.rs` exposes Chat/Responses/Messages, compact, and the additive `/v1/embeddings` route. `rust/src/request/embeddings.rs` owns bounded decoding and response validation; the existing catalog, provider, policy, and coordinator authorities own eligibility and execution. Managed-model filtering and budgets are reused rather than recreated. E001's implementation and conditions are recorded in `plans/closure/embedding-routing/001-status.md`.
 
 ## 5. Target architecture
 
@@ -42,7 +42,7 @@ A typed bounded embedding operation enters through the ordinary authenticated in
 ## 6. Dependency graph
 
 - E001: hard accepted ADR-0008; interface stable current managed identity/budget and coordinator contracts; operational one reachable local embedding backend for live qualification.
-- Tool Integration T001–T004: no hard dependency either way.
+- Tool Integration M001–M004: no hard dependency either way.
 - Retrieval Interoperability R001: soft/interface embedding support; external retrieval service may provide embeddings elsewhere.
 - CodeGG or PrivateGPT adoption is downstream qualification, not an upstream product contract.
 
