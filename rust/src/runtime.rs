@@ -96,6 +96,9 @@ pub async fn run(cli: Cli) -> Result<(), BootstrapError> {
         }
         Some(Command::Modelinfo(command)) => modelinfo(&config_path, command).await?,
         Some(Command::Stats(command)) => stats(&config_path, command).await?,
+        Some(Command::Tools(crate::cli::ToolsCommand::Doctor { json })) => {
+            tools_doctor(&config_path, json).await?
+        }
         Some(Command::Deploy(args)) => deploy(&config_path, args).await?,
         Some(Command::Uninstall(args)) => uninstall(&config_path, args).await?,
         None => {
@@ -103,6 +106,26 @@ pub async fn run(cli: Cli) -> Result<(), BootstrapError> {
             println!("\nConfig file: {}", config_path.display());
         }
         Some(Command::Help) => println!("{}", crate::cli::help_text()),
+    }
+    Ok(())
+}
+
+async fn tools_doctor(path: &Path, json_output: bool) -> Result<(), BootstrapError> {
+    let config = crate::config::Config::from_toml(path).map_err(BootstrapError::from)?;
+    let diagnostic = crate::operations::tools::doctor(&config).await;
+    if json_output {
+        println!(
+            "{}",
+            serde_json::to_string(&diagnostic).unwrap_or_else(|_| "{}".into())
+        );
+    } else {
+        println!("Eggsearch backend: {:?}", diagnostic.status);
+        if let Some(version) = diagnostic.service_version {
+            println!("Service version: {version}");
+        }
+        if let Some(count) = diagnostic.tool_count {
+            println!("Validated tools: {count}");
+        }
     }
     Ok(())
 }

@@ -894,11 +894,11 @@ const FIELD_DISPOSITIONS: &[(&str, ReloadDisposition)] = &[
         "routing.wire_negotiation.rejection_cooldown_s",
         ReloadDisposition::Live,
     ),
-    ("security.allowed_hosts", ReloadDisposition::RestartRequired),
     (
         "security.allow_insecure_web_auth",
         ReloadDisposition::RestartRequired,
     ),
+    ("security.allowed_hosts", ReloadDisposition::RestartRequired),
     ("security.cors_origins", ReloadDisposition::RestartRequired),
     (
         "security.persist_redacted_error_detail",
@@ -920,6 +920,9 @@ const FIELD_DISPOSITIONS: &[(&str, ReloadDisposition)] = &[
     ("server.max_request_body_bytes", ReloadDisposition::Live),
     ("server.port", ReloadDisposition::RestartRequired),
     ("server.threads", ReloadDisposition::RestartRequired),
+    // Operator-only diagnostic connection. It is read by a short-lived CLI
+    // command and is absent from runtime generations.
+    ("tools", ReloadDisposition::Ignored),
     ("transcoder", ReloadDisposition::Live),
     ("update_checker.enabled", ReloadDisposition::RestartRequired),
     ("upstream.base_url", ReloadDisposition::RestartRequired),
@@ -992,6 +995,7 @@ const SCHEMA_COLLAPSE: &[&str] = &[
     "providers",
     "proxies",
     "transcoder",
+    "tools",
 ];
 
 /// Return the stable leaf projection used by the schema-coverage guard.

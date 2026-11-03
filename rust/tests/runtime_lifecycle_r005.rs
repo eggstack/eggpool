@@ -86,7 +86,7 @@ fn exact_r001_field_dispositions_are_ported() {
         .map(|(path, disposition)| ((*path).to_owned(), disposition.to_string()))
         .collect::<Vec<_>>();
     assert_eq!(actual, expected);
-    assert_eq!(actual.len(), 158);
+    assert_eq!(actual.len(), 159);
     assert_eq!(
         actual
             .iter()
@@ -100,6 +100,13 @@ fn exact_r001_field_dispositions_are_ported() {
             .filter(|(_, disposition)| disposition == "restart_required")
             .count(),
         94
+    );
+    assert_eq!(
+        actual
+            .iter()
+            .filter(|(_, disposition)| disposition == "ignored")
+            .count(),
+        1
     );
 }
 
@@ -219,6 +226,22 @@ fn advertised_endpoint_change_is_live_and_noop_is_empty() {
     assert!(transition.restart_required().is_empty());
     assert!(!transition.has_restart_required());
     assert_eq!(transition.changed_sections(), vec!["integrations"]);
+}
+
+#[test]
+fn operator_tool_backend_config_is_ignored_by_runtime_reload() {
+    let old = Config::default();
+    let mut new = old.clone();
+    new.tools.enabled = true;
+    new.tools.base_url = "http://127.0.0.1:11320/mcp".to_owned();
+    let transition = classify_transition(&old, &new).expect("tools config transition");
+    assert_eq!(transition.diff().changes.len(), 1);
+    assert_eq!(transition.diff().changes[0].path, "tools");
+    assert_eq!(
+        transition.diff().changes[0].disposition,
+        ReloadDisposition::Ignored
+    );
+    assert!(!transition.has_restart_required());
 }
 
 #[test]

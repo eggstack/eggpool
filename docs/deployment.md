@@ -1145,3 +1145,34 @@ probe before readiness is reopened.
 | `eggpool uninstall --deploy-artifacts` | Also remove systemd unit, logrotate config, watchdog + backup cron blocks, backup script |
 | `eggpool croncheck` | Check if server is running (exit 0/1) — fast-path, no heavy imports |
 | `eggpool ensure-running` | Atomically check-and-start the server; no-op when already alive — fast-path, no heavy imports |
+# Optional Eggsearch service
+
+EggPool can diagnose one operator-configured local Eggsearch Streamable HTTP
+service. This integration is disabled by default and is not part of model
+inference. Install and supervise Eggsearch using its own release and service
+instructions. For a foreground qualification run, Eggsearch documents:
+
+```sh
+eggsearch mcp serve --bind 127.0.0.1:11320 --path /mcp
+```
+
+Then opt in to the connection in EggPool's TOML:
+
+```toml
+[tools]
+enabled = true
+base_url = "http://127.0.0.1:11320/mcp"
+connect_timeout_s = 2.0
+read_timeout_s = 3.0
+```
+
+Run `eggpool tools doctor --json` to check service identity, negotiated MCP
+version, and the expected tool names. The command is read-only, short-lived,
+bounded to a 1 MiB response, and reports no tool schemas, arguments, or
+results. Only literal `127.0.0.1` or `::1` HTTP URLs with an explicit port
+and `/mcp` path are accepted. EggPool does not start Eggsearch, register a
+system service, expose an MCP route, or use tools during inference. A missing
+or incompatible backend therefore leaves normal model routing unchanged.
+
+See the upstream [Eggsearch deployment guide](https://github.com/eggstack/eggsearch/blob/main/docs/deployment.md)
+for its current install and service lifecycle.

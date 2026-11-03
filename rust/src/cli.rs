@@ -50,6 +50,8 @@ pub enum Command {
     #[command(subcommand)]
     Stats(StatsCommand),
     #[command(subcommand)]
+    Tools(ToolsCommand),
+    #[command(subcommand)]
     Users(UsersCommand),
     Onboard(OnboardArgs),
     Croncheck,
@@ -96,6 +98,16 @@ pub enum Command {
         output_dir: Option<PathBuf>,
     },
     Version,
+}
+
+#[derive(Debug, Subcommand)]
+pub enum ToolsCommand {
+    /// Explicitly probe the configured local Eggsearch MCP service.
+    Doctor {
+        /// Emit the stable machine-readable status object.
+        #[arg(long)]
+        json: bool,
+    },
 }
 
 #[derive(Debug, clap::Args)]
@@ -697,6 +709,7 @@ impl Command {
             Self::Models(_) => "models",
             Self::Modelinfo(_) => "modelinfo",
             Self::Stats(_) => "stats",
+            Self::Tools(_) => "tools",
             Self::Users(_) => "users",
             Self::Onboard(_) => "onboard",
             Self::Croncheck => "croncheck",

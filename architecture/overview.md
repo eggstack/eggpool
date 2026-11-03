@@ -98,7 +98,7 @@ Deep dive: [Core](deep-dive-core.md).
 `rust/src/config.rs` is the typed TOML contract (`Config`, `ServerConfig`,
 `UpstreamConfig`, `DatabaseConfig`, `RoutingConfig`, `ModelsConfig`,
 `ProviderConfig`, `DashboardConfig`, `SecurityConfig`, `MetricsConfig`,
-`BackupConfig`, `ModelRouterConfig`, `IntegrationsConfig` (`[integrations].advertise_base_url`),
+`BackupConfig`, `ModelRouterConfig`, `IntegrationsConfig` (`[integrations].advertise_base_url`), `ToolBackendConfig` (`[tools]`, explicit operator diagnostics only),
 transcoder/model-info policies) with
 `from_toml`/`validate` and proxy/model-router compilation. Resolution order is
 explicit `--config` > `$EGGPOOL_CONFIG` > `$XDG_CONFIG_HOME`-aware

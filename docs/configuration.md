@@ -60,3 +60,13 @@ Remote `configremote` profiles use `[integrations].advertise_base_url`, not
 `[server].host`. See [Agent Configuration](agent-configuration.md#remote-setup-configremote)
 for the bind-vs-advertised contract, validation (`http(s)://.../v1`, no
 credentials/fragment/query), live-reload behavior, and LAN-fallback rules.
+
+## Optional local tools backend
+
+`[tools]` is disabled by default. When enabled, its `base_url` must be a
+literal loopback HTTP address with an explicit port and the exact `/mcp` path
+(for example `http://127.0.0.1:11320/mcp`). Timeouts are bounded. EggPool
+does not install or start Eggsearch, and ordinary inference never probes it.
+`eggpool tools doctor` explicitly checks `/healthz`, negotiates MCP, and
+validates the expected Eggsearch tool catalog. See
+[deployment](deployment.md#optional-eggsearch-service).

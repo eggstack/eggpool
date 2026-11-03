@@ -101,3 +101,11 @@ retain_count = 7
 # not the listen socket. Live-reloadable via `eggpool rehash`.
 # [integrations]
 # advertise_base_url = "http://<pi-lan-ip>:11300/v1"
+
+# Optional local Eggsearch endpoint. It is not started by EggPool and does
+# not participate in inference. Enable only when Eggsearch is installed.
+# [tools]
+# enabled = true
+# base_url = "http://127.0.0.1:11320/mcp"
+# connect_timeout_s = 2.0
+# read_timeout_s = 3.0

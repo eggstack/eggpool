@@ -46,6 +46,16 @@ Command list verified against `eggpool help` (0.8.3).
 | `eggpool stats recompute-costs` | Recompute `cost_microdollars` on historical requests |
 | `eggpool stats explain-dashboard` | Show EXPLAIN QUERY PLAN for dashboard queries |
 
+## Optional tools service
+
+| Command | Description |
+|---------|-------------|
+| `eggpool tools doctor [--json]` | Explicitly check the configured loopback Eggsearch service identity, MCP initialization, and tool catalog |
+
+The probe is disabled unless `[tools].enabled = true`; EggPool never starts
+Eggsearch. See [deployment](deployment.md#optional-eggsearch-service) for
+configuration and the upstream service lifecycle.
+
 ## Config & keys
 
 | Command | Description |

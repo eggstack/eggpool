@@ -966,6 +966,28 @@ pub struct IntegrationsConfig {
     pub advertise_base_url: Option<String>,
 }
 
+/// Optional operator-owned Eggsearch MCP connection. Merely configuring this
+/// value never starts or probes Eggsearch; only `eggpool tools doctor` uses it.
+#[derive(Debug, Clone, Deserialize, Serialize)]
+#[serde(deny_unknown_fields, default)]
+pub struct ToolBackendConfig {
+    pub enabled: bool,
+    pub base_url: String,
+    pub connect_timeout_s: f64,
+    pub read_timeout_s: f64,
+}
+
+impl Default for ToolBackendConfig {
+    fn default() -> Self {
+        Self {
+            enabled: false,
+            base_url: "http://127.0.0.1:11320/mcp".into(),
+            connect_timeout_s: 2.0,
+            read_timeout_s: 3.0,
+        }
+    }
+}
+
 /// Maximum advertised integration URL bytes (matches portable profile bound).
 pub const MAX_ADVERTISE_BASE_URL_BYTES: usize = 2048;
 
@@ -1468,6 +1490,7 @@ pub struct Config {
     pub model_info: ModelInfoConfig,
     pub update_checker: UpdateCheckerConfig,
     pub integrations: IntegrationsConfig,
+    pub tools: ToolBackendConfig,
 }
 
 pub type AppConfig = Config;
@@ -1848,6 +1871,7 @@ impl Config {
             let normalized = normalize_advertise_base_url(&raw)?;
             self.integrations.advertise_base_url = Some(normalized);
         }
+        validate_tool_backend(&self.tools)?;
         Ok(())
     }
 
@@ -1913,6 +1937,47 @@ impl Config {
             .map(|value| value.trim().to_owned())
             .filter(|value| !value.is_empty())
     }
+}
+
+fn validate_tool_backend(backend: &ToolBackendConfig) -> Result<(), ConfigError> {
+    if !backend.connect_timeout_s.is_finite()
+        || !(0.1..=10.0).contains(&backend.connect_timeout_s)
+        || !backend.read_timeout_s.is_finite()
+        || !(0.1..=30.0).contains(&backend.read_timeout_s)
+    {
+        return Err(ConfigError::validation(
+            "tools timeouts must be finite and within their supported bounds",
+        ));
+    }
+    if backend.base_url.len() > 512
+        || backend
+            .base_url
+            .chars()
+            .any(|c| c.is_whitespace() || c.is_control())
+    {
+        return Err(ConfigError::validation("tools.base_url is invalid"));
+    }
+    let uri = backend.base_url.parse::<http::Uri>().map_err(|_| {
+        ConfigError::validation("tools.base_url must be an absolute loopback HTTP MCP URL")
+    })?;
+    let authority = uri.authority().ok_or_else(|| {
+        ConfigError::validation("tools.base_url must include a loopback authority")
+    })?;
+    let host = authority.host().trim_matches(['[', ']']);
+    if uri.scheme_str() != Some("http")
+        || !matches!(host, "127.0.0.1" | "::1")
+        || authority.port_u16().is_none()
+        || authority.port_u16() == Some(0)
+        || uri.path() != "/mcp"
+        || uri.query().is_some()
+        || backend.base_url.contains('#')
+        || backend.base_url.contains('@')
+    {
+        return Err(ConfigError::validation(
+            "tools.base_url must use HTTP, a literal 127.0.0.1 or ::1 address, an explicit port, and the exact /mcp path",
+        ));
+    }
+    Ok(())
 }
 
 fn validate_positive_pair(
@@ -2813,5 +2878,34 @@ mod tests {
         let mut bad = Config::default();
         bad.integrations.advertise_base_url = Some("https://pool.example/custom".to_owned());
         assert!(bad.validate().is_err());
+    }
+
+    #[test]
+    fn tool_backend_config_is_loopback_only_bounded_and_disabled_by_default() {
+        let mut config = Config::default();
+        assert!(!config.tools.enabled);
+        config.validate().expect("default tool config validates");
+        for url in [
+            "https://127.0.0.1:11320/mcp",
+            "http://localhost:11320/mcp",
+            "http://127.0.0.2:11320/mcp",
+            "http://192.168.1.10:11320/mcp",
+            "http://127.0.0.1/mcp",
+            "http://127.0.0.1:11320/other",
+            "http://user:pass@127.0.0.1:11320/mcp",
+            "http://127.0.0.1:11320/mcp?x=1",
+            "http://127.0.0.1:11320/mcp#frag",
+        ] {
+            let mut invalid = Config::default();
+            invalid.tools.base_url = url.to_owned();
+            invalid.tools.enabled = true;
+            assert!(invalid.validate().is_err(), "accepted {url}");
+        }
+        let mut invalid_timeout = Config::default();
+        invalid_timeout.tools.connect_timeout_s = f64::NAN;
+        assert!(invalid_timeout.validate().is_err());
+        let mut invalid_read = Config::default();
+        invalid_read.tools.read_timeout_s = 31.0;
+        assert!(invalid_read.validate().is_err());
     }
 }
