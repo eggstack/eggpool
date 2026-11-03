@@ -88,7 +88,7 @@ No new runtime, schema or performance claim lands with these plans.
 
 | Subsystem | Status | Roadmap | Current milestone | Dependencies or blockers |
 |---|---|---|---|---|
-| Optional tool integration | active | [tool integration roadmap](subsystems/tool-integration-roadmap.md) | M001–M002 closed; M003–M004 blocked; corrective M005 ready | ADR-0007 accepted; M003 awaits M005 and supported Eggsearch live tools/call qualification. |
+| Optional tool integration | active | [tool integration roadmap](subsystems/tool-integration-roadmap.md) | M001–M002 closed; M003–M004 blocked; corrective M005 active | ADR-0007 accepted; M003 awaits M005 and supported Eggsearch live tools/call qualification. |
 | Embedding routing | proposed | [embedding routing roadmap](subsystems/embedding-routing-roadmap.md) | E001 blocked | ADR-0008 accepted; qualified provider/model contract and live local backend required before publishing POST /v1/embeddings. |
 | Retrieval interoperability | proposed | [retrieval interoperability roadmap](subsystems/retrieval-interoperability-roadmap.md) | R001 blocked | Tool Integration M003 closed plus a backend-enforced document ACL/delegation contract; EggPool embeddings optional interface. |
 | Provider transport | closed | `plans/subsystems/provider-transport-roadmap.md` | M006 closed — Eggress 1.0.12 dependency refresh and requalification | M001–M006 closed; no successor registered. |
@@ -307,12 +307,12 @@ record is `plans/closure/deployment-packaging/008-status.md`.
 
 | Subsystem | Milestone | Status | Implementation plan | Dependencies / handoff note |
 |---|---|---|---|---|
-| Optional tool integration | M005 — Canonical tool identity correction | ready | [M005 corrective plan](implementation/tool-integration/005-canonical-tool-identity-correction.md) | M002 closed; align grant identity with M001's verified catalog before M003. |
 
 ## Active implementation plans
 
 | Subsystem | Milestone | Status | Implementation plan | Handoff note |
 |---|---|---|---|---|
+| Optional tool integration | M005 — Canonical tool identity correction | active | [M005 corrective plan](implementation/tool-integration/005-canonical-tool-identity-correction.md) | Align grant identity with M001's verified Eggsearch catalog before M003. |
 
 
 ## Blocked work

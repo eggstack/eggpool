@@ -1,6 +1,6 @@
 # Tool Integration M005 — Canonical tool identity correction
 
-Status: ready
+Status: active
 
 Repository baseline: `3fcbd712` (M002 closure)
 
