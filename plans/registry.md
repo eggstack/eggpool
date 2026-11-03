@@ -12,7 +12,7 @@ Canonical direction:
 - `plans/002-long-term-roadmap.md`
 - `plans/003-planning-process.md`
 
-New optional application-interoperability planning (2026-11-03): [ADR-0007](adrs/ADR-0007-optional-tool-authority-and-hosted-execution-boundary.md) and [ADR-0008](adrs/ADR-0008-embedding-inference-surface-boundary.md) are **proposed**, not accepted. The three new roadmaps and six implementation plans are planning-only; no runtime feature is shipped. M001 alone is dependency-ready because it changes only operator configuration and diagnostics. Solo/SBC inference remains the default. No existing milestone is reopened or declared newly complete.
+New optional application-interoperability planning (2026-11-03): [ADR-0007](adrs/ADR-0007-optional-tool-authority-and-hosted-execution-boundary.md) is accepted; [ADR-0008](adrs/ADR-0008-embedding-inference-surface-boundary.md) remains proposed. The three roadmaps and six implementation plans are staged behind their individual dependency and closure gates. M001 is closed; M002 is being promoted after its sole ADR gate was accepted. Solo/SBC inference remains the default. No unrelated milestone is reopened.
 
 Legacy archive (pre-251, immutable, top level): `plans/001-*` through
 `plans/250-*` plus `python_hotpath_dispatch_compression_optimization.md`.

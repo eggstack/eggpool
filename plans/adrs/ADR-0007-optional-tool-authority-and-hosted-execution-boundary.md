@@ -1,6 +1,6 @@
 # ADR-0007: Optional tool authority, MCP gateway, and hosted execution boundary
 
-Status: proposed
+Status: accepted
 
 Date: 2026-11-03
 
@@ -89,3 +89,14 @@ Require protocol conformance against the installed supported Eggsearch version, 
 ## Supersession
 
 None.
+
+## Acceptance record
+
+Accepted 2026-11-03 to authorize the staged, opt-in tool boundary described
+above. M001 is closed with bounded local readiness evidence. M002 remains
+default-deny and adds no invocation route; M003 remains a narrow negotiated
+tools-only gateway; M004 remains separately versioned, finite, and dependent
+on the existing coordinator. The acceptance does not authorize arbitrary
+MCP tunneling, remote backends, implicit tool execution, or changes to
+ordinary inference behavior. Each implementation milestone retains its own
+closure gates and operational evidence requirements.
