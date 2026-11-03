@@ -12,7 +12,7 @@ Canonical direction:
 - `plans/002-long-term-roadmap.md`
 - `plans/003-planning-process.md`
 
-New optional application-interoperability planning (2026-11-03): [ADR-0007](adrs/ADR-0007-optional-tool-authority-and-hosted-execution-boundary.md) and [ADR-0008](adrs/ADR-0008-embedding-inference-surface-boundary.md) are accepted. M001, M002, and corrective M005 are closed; M003 is ready after supported Eggsearch 0.4.3 initialize/list/call qualification; M004 is conditionally closed with a live hosted-execution qualification still outstanding; R001 remains blocked on its declared contracts; E001 remains blocked pending live embedding qualification. Solo/SBC inference remains the default. No unrelated milestone is reopened.
+New optional application-interoperability planning (2026-11-03): [ADR-0007](adrs/ADR-0007-optional-tool-authority-and-hosted-execution-boundary.md) and [ADR-0008](adrs/ADR-0008-embedding-inference-surface-boundary.md) are accepted. M001, M002, and corrective M005 are closed; M003 is conditionally closed after supported Eggsearch 0.4.3 initialize/list/call qualification; M004 is conditionally closed with a live hosted-execution qualification still outstanding; R001 remains blocked on its declared contracts; E001 remains blocked pending live embedding qualification. Solo/SBC inference remains the default. No unrelated milestone is reopened.
 
 Legacy archive (pre-251, immutable, top level): `plans/001-*` through
 `plans/250-*` plus `python_hotpath_dispatch_compression_optimization.md`.
@@ -88,7 +88,7 @@ No new runtime, schema or performance claim lands with these plans.
 
 | Subsystem | Status | Roadmap | Current milestone | Dependencies or blockers |
 |---|---|---|---|---|
-| Optional tool integration | active | [tool integration roadmap](subsystems/tool-integration-roadmap.md) | M001–M003 and corrective M005 closed; M004 conditionally closed | M003 and M004 physical SBC footprint evidence remains; M004 also requires a successful live hosted-execution trace. |
+| Optional tool integration | active | [tool integration roadmap](subsystems/tool-integration-roadmap.md) | M001, M002 and corrective M005 closed; M003 and M004 conditionally closed | M003 and M004 physical SBC footprint evidence remains; M004 also requires a successful live hosted-execution trace. |
 | Embedding routing | active | [embedding routing roadmap](subsystems/embedding-routing-roadmap.md) | E001 active | E001 implementation in progress; local Ollama contract qualified. |
 | Retrieval interoperability | proposed | [retrieval interoperability roadmap](subsystems/retrieval-interoperability-roadmap.md) | R001 blocked | Tool Integration M003 closed plus a backend-enforced document ACL/delegation contract; EggPool embeddings optional interface. |
 | Provider transport | closed | `plans/subsystems/provider-transport-roadmap.md` | M006 closed — Eggress 1.0.12 dependency refresh and requalification | M001–M006 closed; no successor registered. |
