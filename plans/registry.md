@@ -12,7 +12,7 @@ Canonical direction:
 - `plans/002-long-term-roadmap.md`
 - `plans/003-planning-process.md`
 
-New optional application-interoperability planning (2026-11-03): [ADR-0007](adrs/ADR-0007-optional-tool-authority-and-hosted-execution-boundary.md) and [ADR-0008](adrs/ADR-0008-embedding-inference-surface-boundary.md) are accepted. M001, M002, and corrective M005 are closed; M003 is conditionally closed after supported Eggsearch 0.4.3 initialize/list/call qualification; M004 is conditionally closed with a live hosted-execution qualification still outstanding; R001 remains blocked on its declared contracts; E001 is conditionally closed after live Ollama qualification. Solo/SBC inference remains the default. No unrelated milestone is reopened.
+New optional application-interoperability planning (2026-11-03): [ADR-0007](adrs/ADR-0007-optional-tool-authority-and-hosted-execution-boundary.md) and [ADR-0008](adrs/ADR-0008-embedding-inference-surface-boundary.md) are accepted. M001, M002, and corrective M005 are closed; M003 is conditionally closed after supported Eggsearch 0.4.3 initialize/list/call qualification; M004 is conditionally closed with a live hosted-execution qualification still outstanding; R001 remains blocked on PrivateGPT ingest/admission and secure document-delegation contracts; E001 is conditionally closed after live Ollama qualification. Solo/SBC inference remains the default. No unrelated milestone is reopened.
 
 Legacy archive (pre-251, immutable, top level): `plans/001-*` through
 `plans/250-*` plus `python_hotpath_dispatch_compression_optimization.md`.
@@ -913,7 +913,8 @@ model behavior will be supplied by M004's test fixture. M004 moves from
 blocked to ready. The SBC operational condition does not change the M003
 software interface used by M004.
 
-Tool Integration M004 activation audit: M004 is the only remaining active
-milestone in its subsystem. Its hard M003 software dependency and ADR-0007
-decision are satisfied, and coordinator/IR attribution interfaces are audited.
-It moves from ready to active to implement the opt-in finite hosted route.
+Historical Tool Integration M004 activation audit: M004 was the remaining
+active milestone after its M003 software dependency and ADR-0007 decision were
+satisfied. It is now conditionally closed; see
+`plans/closure/tool-integration/004-status.md` for implementation and live
+qualification evidence.
