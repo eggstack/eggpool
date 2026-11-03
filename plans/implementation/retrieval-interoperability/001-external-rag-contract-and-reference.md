@@ -6,7 +6,7 @@ Repository baseline: `0e021c1ffe55803aff5f325033e65313dca9f1dc` (planning, 2026-
 
 Source roadmap: plans/subsystems/retrieval-interoperability-roadmap.md#7-milestones
 
-Long-term requirements: plans/000-long-term-specification.md ``1–6; plans/001-terminology-and-domain-model.md; plans/002-long-term-roadmap.md ``4–5; plans/003-planning-process.md
+Long-term requirements: plans/000-long-term-specification.md §§1–6; plans/001-terminology-and-domain-model.md; plans/002-long-term-roadmap.md §§4–5; plans/003-planning-process.md
 
 Applicable ADRs: plans/adrs/ADR-0007-optional-tool-authority-and-hosted-execution-boundary.md (proposed); plans/adrs/ADR-0008-embedding-inference-surface-boundary.md (proposed; interface only for EggPool embedding route)
 
