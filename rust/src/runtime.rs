@@ -820,10 +820,15 @@ async fn users(path: &Path, command: crate::cli::UsersCommand) -> Result<(), Boo
             );
         }
         crate::cli::UsersCommand::Token(args) => {
-            let credential =
-                crate::identity::issue_api_token(&database, &args.username, &args.label)
-                    .await
-                    .map_err(|error| command_error(EXIT_VALIDATION, error.to_string()))?;
+            let credential = crate::identity::issue_api_token_with_tool_scopes(
+                &database,
+                &args.username,
+                &args.label,
+                args.tool_discovery,
+                args.tool_invocation,
+            )
+            .await
+            .map_err(|error| command_error(EXIT_VALIDATION, error.to_string()))?;
             println!("Personal API credential for {} created.", args.username);
             print_one_time_secret(&credential.token, args.show_secret);
         }
@@ -874,6 +879,78 @@ async fn users(path: &Path, command: crate::cli::UsersCommand) -> Result<(), Boo
                         .await
                         .map_err(|error| command_error(EXIT_VALIDATION, error.to_string()))?;
                     println!("Preferred model updated for {}.", args.profile_id);
+                }
+            }
+        }
+        crate::cli::UsersCommand::ToolPolicy(command) => {
+            use crate::cli::UsersToolPolicyCommand as ToolPolicy;
+            let service = crate::tool_policy::ToolPolicyService::new(database.clone());
+            match command {
+                ToolPolicy::ProfileRule(args) => {
+                    let actor = policy_actor_id(&database, &args.actor).await?;
+                    let effect = match args.effect.as_str() {
+                        "allow" => Some(crate::tool_policy::GrantEffect::Allow),
+                        "deny" => Some(crate::tool_policy::GrantEffect::Deny),
+                        _ => None,
+                    };
+                    service
+                        .set_profile_rule(
+                            &args.profile_id,
+                            &args.tool,
+                            effect,
+                            args.expected_version,
+                            &actor,
+                        )
+                        .await
+                        .map_err(|error| command_error(EXIT_VALIDATION, error.to_string()))?;
+                    println!("Tool policy rule updated for profile {}.", args.profile_id);
+                }
+                ToolPolicy::UserRule(args) => {
+                    let actor = policy_actor_id(&database, &args.actor).await?;
+                    let effect = match args.effect.as_str() {
+                        "allow" => Some(crate::tool_policy::GrantEffect::Allow),
+                        "deny" => Some(crate::tool_policy::GrantEffect::Deny),
+                        _ => None,
+                    };
+                    service
+                        .set_user_rule(&args.username, &args.tool, effect, &actor)
+                        .await
+                        .map_err(|error| command_error(EXIT_VALIDATION, error.to_string()))?;
+                    println!("Tool policy override updated for {}.", args.username);
+                }
+                ToolPolicy::InstanceDeny(args) => {
+                    let actor = policy_actor_id(&database, &args.actor).await?;
+                    service
+                        .set_instance_denial(&args.tool, true, &actor)
+                        .await
+                        .map_err(|error| command_error(EXIT_VALIDATION, error.to_string()))?;
+                    println!("Instance tool policy updated for {}.", args.tool);
+                }
+                ToolPolicy::InstanceAllow(args) => {
+                    let actor = policy_actor_id(&database, &args.actor).await?;
+                    service
+                        .set_instance_denial(&args.tool, false, &actor)
+                        .await
+                        .map_err(|error| command_error(EXIT_VALIDATION, error.to_string()))?;
+                    println!("Instance tool policy updated for {}.", args.tool);
+                }
+                ToolPolicy::Show(args) => {
+                    let tools = service
+                        .effective_tools_for_user(&args.username)
+                        .await
+                        .map_err(|error| command_error(EXIT_VALIDATION, error.to_string()))?;
+                    let profile = service
+                        .assigned_profile_version(&args.username)
+                        .await
+                        .map_err(|error| command_error(EXIT_VALIDATION, error.to_string()))?;
+                    println!("effective_tool_grants: {}", tools.join(","));
+                    if let Some((profile_id, version)) = profile {
+                        println!("assigned_profile: {profile_id}");
+                        println!("profile_version: {version}");
+                    } else {
+                        println!("assigned_profile: none");
+                    }
+                    println!("credential_scopes_included: false");
                 }
             }
         }

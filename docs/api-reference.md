@@ -147,6 +147,12 @@ enforces the same rules even when a client submits a hidden model manually.
 The integration profile's ETag includes the policy revision so client caches
 refresh after an administrator changes model access.
 
+Personal credentials may be issued with separate `tools:discover:eggsearch`
+and `tools:invoke:eggsearch` scopes. Existing credentials keep their original
+scopes, and no tool gateway or public tool invocation route is provided by this
+release. Tool grants are independently default-deny and do not affect model
+authorization.
+
 `GET /api/user-budget` is available to personal tokens and browser sessions.
 Members can read only their own rules and rollups; an active admin may select a
 target with `user_id`. The response identifies UTC calendar windows and reports

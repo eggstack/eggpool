@@ -347,7 +347,7 @@ is the only persistence boundary. `db/` owns only the `backup_to` snapshot
 primitive; backup orchestration lives in `operations/backup.rs` and crash
 repair in `runtime_lifecycle/recovery.rs` plus coordinator reconciliation.
 Migrations (`rust/assets/db/migrations/`,
-currently v1–v64 with `checksums.json`) are embedded and immutable; commit or
+currently v1–v65 with `checksums.json`) are embedded and immutable; commit or
 ownership ambiguity fails closed; startup reconciliation repairs only covered
 states. Repositories accept no unbounded diagnostic content and never store
 credentials, prompts, raw bodies, or cache keys.
@@ -501,8 +501,9 @@ observability JSON (`/api/stats/transcoding`, `/api/stats/cache-observability`,
 observational only.
 - On-prem user access: local downstream identities with Argon2id passwords and
 revocable per-user agent tokens (`eggpool users …`), browser login behind a
-session/CSRF boundary, versioned per-user model policy, and per-user plus
-instance-global daily/monthly budgets; the admin and member surfaces are the
+session/CSRF boundary, versioned per-user model policy, default-deny Eggsearch
+tool grants and explicit per-token tool scopes (authorization only; no public
+tool route yet), and per-user plus instance-global daily/monthly budgets; the admin and member surfaces are the
 `/admin/*`, `/users`, `/profiles`, `/account*`, `/my-account*`, and `/usage`
 routes; see [On-prem user access](deep-dive-on-prem-user-access.md).
 - CLI: full command tree in §1 (`status` is the concise provider health
