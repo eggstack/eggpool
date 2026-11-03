@@ -39,13 +39,39 @@ const MAX_SCHEMA_BYTES: usize = 64 * 1024;
 const MAX_ARGUMENT_BYTES: usize = 32 * 1024;
 const MAX_JSON_DEPTH: usize = 32;
 const MAX_SESSIONS: usize = 1024;
+const MAX_HOSTED_USERS: usize = 1024;
+const MAX_HOSTED_PER_USER: usize = 2;
 const SESSION_TTL: Duration = Duration::from_secs(30 * 60);
 
 #[derive(Clone)]
-pub(super) struct Gateway {
+pub(crate) struct Gateway {
     backend: ToolBackendConfig,
     sessions: Arc<Mutex<HashMap<String, GatewaySession>>>,
     permits: Arc<Semaphore>,
+    hosted_permits: Arc<Semaphore>,
+    hosted_users: Arc<Mutex<HashMap<String, usize>>>,
+}
+
+pub(super) struct HostedExecutionPermit {
+    _global: tokio::sync::OwnedSemaphorePermit,
+    gateway: Gateway,
+    user_id: String,
+}
+
+impl Drop for HostedExecutionPermit {
+    fn drop(&mut self) {
+        let mut users = self
+            .gateway
+            .hosted_users
+            .lock()
+            .unwrap_or_else(|error| error.into_inner());
+        if let Some(active) = users.get_mut(&self.user_id) {
+            *active = active.saturating_sub(1);
+            if *active == 0 {
+                users.remove(&self.user_id);
+            }
+        }
+    }
 }
 
 #[derive(Clone)]
@@ -66,10 +92,13 @@ struct BackendSession {
 }
 
 #[derive(Debug)]
-enum GatewayError {
+pub(crate) enum GatewayError {
     Unavailable,
     Incompatible,
     Malformed,
+    Unauthorized,
+    InvalidArguments,
+    CatalogChanged,
 }
 
 impl Gateway {
@@ -78,11 +107,56 @@ impl Gateway {
             backend,
             sessions: Arc::new(Mutex::new(HashMap::new())),
             permits: Arc::new(Semaphore::new(16)),
+            hosted_permits: Arc::new(Semaphore::new(8)),
+            hosted_users: Arc::new(Mutex::new(HashMap::new())),
         }
     }
 
     pub(super) fn enabled(&self) -> bool {
         self.backend.enabled && self.backend.gateway_enabled
+    }
+
+    pub(super) fn hosted_execution_enabled(&self) -> bool {
+        self.backend.enabled && self.backend.hosted_execution_enabled
+    }
+
+    pub(super) fn hosted_model_qualified(&self, model: &str) -> bool {
+        self.backend
+            .hosted_models
+            .iter()
+            .any(|candidate| candidate == model)
+    }
+
+    pub(super) fn try_acquire_hosted(&self, user_id: &str) -> Option<HostedExecutionPermit> {
+        {
+            let mut users = self
+                .hosted_users
+                .lock()
+                .unwrap_or_else(|error| error.into_inner());
+            let active = users.get(user_id).copied().unwrap_or_default();
+            if active >= MAX_HOSTED_PER_USER || (active == 0 && users.len() >= MAX_HOSTED_USERS) {
+                return None;
+            }
+            users.insert(user_id.to_owned(), active + 1);
+        }
+        let Some(global) = Arc::clone(&self.hosted_permits).try_acquire_owned().ok() else {
+            let mut users = self
+                .hosted_users
+                .lock()
+                .unwrap_or_else(|error| error.into_inner());
+            if let Some(active) = users.get_mut(user_id) {
+                *active = active.saturating_sub(1);
+                if *active == 0 {
+                    users.remove(user_id);
+                }
+            }
+            return None;
+        };
+        Some(HostedExecutionPermit {
+            _global: global,
+            gateway: self.clone(),
+            user_id: user_id.to_owned(),
+        })
     }
 
     async fn handle(
@@ -389,35 +463,82 @@ impl Gateway {
         {
             return json_rpc_error(id, -32602, "Invalid tool arguments");
         }
+        let arguments = Value::Object(arguments.clone());
+        match self
+            .invoke(
+                database,
+                &principal,
+                name,
+                arguments,
+                Some(&session_id),
+                None,
+            )
+            .await
+        {
+            Ok(result) => json_response(json!({"jsonrpc":"2.0","id":id,"result":result})),
+            Err(GatewayError::Unauthorized) => json_rpc_error(id, -32003, "Tool is not authorized"),
+            Err(GatewayError::InvalidArguments) => {
+                json_rpc_error(id, -32602, "Tool arguments do not match the current schema")
+            }
+            Err(GatewayError::CatalogChanged) => {
+                json_rpc_error(id, -32001, "Tool catalog changed; refresh discovery")
+            }
+            Err(error) => protocol_error(id, error),
+        }
+    }
+
+    /// Invoke one currently authorized Eggsearch operation without traversing
+    /// the public MCP adapter. Authorization and the backend schema are
+    /// rechecked for every invocation, including hosted orchestration calls.
+    pub(crate) async fn invoke(
+        &self,
+        database: crate::db::Database,
+        principal: &AuthenticatedPrincipal,
+        name: &str,
+        arguments: Value,
+        expected_session: Option<&str>,
+        expected_catalog_fingerprint: Option<&str>,
+    ) -> Result<Value, GatewayError> {
+        if !self.backend.enabled || !KNOWN_TOOLS.contains(&name) {
+            return Err(GatewayError::Unavailable);
+        }
+        let Some(arguments) = arguments.as_object() else {
+            return Err(GatewayError::InvalidArguments);
+        };
+        if serde_json::to_vec(arguments).map_or(true, |bytes| bytes.len() > MAX_ARGUMENT_BYTES)
+            || !json_depth_within(&Value::Object(arguments.clone()), MAX_JSON_DEPTH)
+        {
+            return Err(GatewayError::InvalidArguments);
+        }
         let policy = ToolPolicyService::new(database);
         match policy
-            .authorize_tool(&principal, BACKEND_ID, name, ToolAction::Invoke)
+            .authorize_tool(principal, BACKEND_ID, name, ToolAction::Invoke)
             .await
         {
             Ok(true) => {}
-            Ok(false) => return json_rpc_error(id, -32003, "Tool is not authorized"),
-            Err(_) => return json_rpc_error(id, -32000, "Tool authorization unavailable"),
+            Ok(false) => return Err(GatewayError::Unauthorized),
+            Err(_) => return Err(GatewayError::Unavailable),
         }
         let Ok(_permit) = Arc::clone(&self.permits).acquire_owned().await else {
-            return json_rpc_error(id, -32000, "Tool backend unavailable");
+            return Err(GatewayError::Unavailable);
         };
         let mut upstream = match self.open_backend().await {
             Ok(upstream) => upstream,
-            Err(error) => return protocol_error(id, error),
+            Err(error) => return Err(error),
         };
         let catalog = match upstream.list().await {
             Ok(catalog) => catalog,
-            Err(error) => return protocol_error(id, error),
+            Err(error) => return Err(error),
         };
         let Some(tool) = catalog
             .tools
             .iter()
             .find(|tool| tool.get("name").and_then(Value::as_str) == Some(name))
         else {
-            return json_rpc_error(id, -32602, "Unknown tool");
+            return Err(GatewayError::InvalidArguments);
         };
         let Some(schema) = tool.get("inputSchema") else {
-            return json_rpc_error(id, -32603, "Invalid tool catalog");
+            return Err(GatewayError::Malformed);
         };
         let mut call_arguments = Value::Object(arguments.clone());
         let supports_compact_detail = schema
@@ -439,16 +560,92 @@ impl Gateway {
             || !json_depth_within(&call_arguments, MAX_JSON_DEPTH)
             || !schema_accepts(schema, &call_arguments, 0)
         {
-            return json_rpc_error(id, -32602, "Tool arguments do not match the current schema");
+            return Err(GatewayError::InvalidArguments);
         }
-        if self.catalog_changed(&session_id, &catalog.fingerprint) {
-            return json_rpc_error(id, -32001, "Tool catalog changed; refresh discovery");
+        if expected_session
+            .is_some_and(|session_id| self.catalog_changed(session_id, &catalog.fingerprint))
+            || expected_catalog_fingerprint
+                .is_some_and(|fingerprint| fingerprint != catalog.fingerprint)
+        {
+            return Err(GatewayError::CatalogChanged);
         }
-        let result = match upstream.call(name, call_arguments).await {
-            Ok(result) => result,
-            Err(error) => return protocol_error(id, error),
+        match upstream.call(name, call_arguments).await {
+            Ok(result) => Ok(result),
+            Err(error) => Err(error),
+        }
+    }
+
+    /// Build the exact finite function-tool surface requested by the hosted
+    /// operation, intersected with the current backend catalog and the
+    /// caller's current discovery and invocation grants.
+    pub(crate) async fn orchestration_tools(
+        &self,
+        database: crate::db::Database,
+        principal: &AuthenticatedPrincipal,
+        requested: &[String],
+    ) -> Result<(Vec<Value>, String), GatewayError> {
+        if requested.is_empty() {
+            return Ok((Vec::new(), String::new()));
+        }
+        if !self.backend.enabled
+            || requested.len() > KNOWN_TOOLS.len()
+            || requested
+                .iter()
+                .any(|name| !KNOWN_TOOLS.contains(&name.as_str()))
+        {
+            return Err(GatewayError::InvalidArguments);
+        }
+        let unique = requested.iter().collect::<std::collections::BTreeSet<_>>();
+        if unique.len() != requested.len() {
+            return Err(GatewayError::InvalidArguments);
+        }
+        let policy = ToolPolicyService::new(database.clone());
+        for name in requested {
+            for action in [ToolAction::Discover, ToolAction::Invoke] {
+                match policy
+                    .authorize_tool(principal, BACKEND_ID, name, action)
+                    .await
+                {
+                    Ok(true) => {}
+                    Ok(false) => return Err(GatewayError::Unauthorized),
+                    Err(_) => return Err(GatewayError::Unavailable),
+                }
+            }
+        }
+        let Ok(_permit) = Arc::clone(&self.permits).acquire_owned().await else {
+            return Err(GatewayError::Unavailable);
         };
-        json_response(json!({"jsonrpc":"2.0","id":id,"result":result}))
+        let catalog = self.fetch_catalog().await?;
+        let mut tools = Vec::with_capacity(requested.len());
+        for name in requested {
+            let Some(tool) = catalog
+                .tools
+                .iter()
+                .find(|tool| tool.get("name").and_then(Value::as_str) == Some(name))
+            else {
+                return Err(GatewayError::InvalidArguments);
+            };
+            let schema = tool
+                .get("inputSchema")
+                .filter(|schema| {
+                    serde_json::to_vec(schema).is_ok_and(|bytes| bytes.len() <= MAX_SCHEMA_BYTES)
+                })
+                .ok_or(GatewayError::Malformed)?;
+            let function = json!({
+                "type": "function",
+                "function": {
+                    "name": name,
+                    "description": tool.get("description").and_then(Value::as_str).unwrap_or_default(),
+                    "parameters": schema,
+                    "strict": false
+                }
+            });
+            if serde_json::to_vec(&function).map_or(true, |bytes| bytes.len() > MAX_SCHEMA_BYTES) {
+                return Err(GatewayError::Malformed);
+            }
+            tools.push(function);
+        }
+        Ok((tools, catalog.fingerprint))
     }
 
     fn remember_catalog(&self, session_id: &str, fingerprint: &str) -> bool {
@@ -767,6 +964,9 @@ fn protocol_error(id: Value, error: GatewayError) -> Response {
         GatewayError::Unavailable => (-32000, "Tool backend unavailable"),
         GatewayError::Incompatible => (-32002, "Tool backend protocol or catalog is incompatible"),
         GatewayError::Malformed => (-32603, "Invalid tool backend response"),
+        GatewayError::Unauthorized => (-32003, "Tool is not authorized"),
+        GatewayError::InvalidArguments => (-32602, "Invalid tool arguments"),
+        GatewayError::CatalogChanged => (-32001, "Tool catalog changed; refresh discovery"),
     };
     json_rpc_error(id, code, message)
 }
@@ -915,4 +1115,36 @@ fn valid_origin_host(headers: &HeaderMap) -> bool {
 
 fn hex(bytes: &[u8]) -> String {
     bytes.iter().map(|byte| format!("{byte:02x}")).collect()
+}
+
+#[cfg(test)]
+mod hosted_capacity_tests {
+    use super::*;
+
+    #[test]
+    fn hosted_capacity_is_bounded_globally_and_per_user() {
+        let gateway = Gateway::new(ToolBackendConfig {
+            enabled: true,
+            hosted_execution_enabled: true,
+            ..ToolBackendConfig::default()
+        });
+        let user_one_a = gateway.try_acquire_hosted("user-one").unwrap();
+        let user_one_b = gateway.try_acquire_hosted("user-one").unwrap();
+        assert!(gateway.try_acquire_hosted("user-one").is_none());
+        let other_users = (0..6)
+            .map(|index| gateway.try_acquire_hosted(&format!("user-{index}")))
+            .collect::<Vec<_>>();
+        assert!(other_users.iter().all(Option::is_some));
+        assert!(gateway.try_acquire_hosted("last-user").is_none());
+        drop(user_one_a);
+        let user_one_replacement = gateway.try_acquire_hosted("user-one").unwrap();
+        assert!(gateway.try_acquire_hosted("last-user").is_none());
+        drop(user_one_b);
+        let user_one_second_replacement = gateway.try_acquire_hosted("user-one").unwrap();
+        assert!(gateway.try_acquire_hosted("last-user").is_none());
+        drop(user_one_second_replacement);
+        drop(user_one_replacement);
+        assert!(gateway.try_acquire_hosted("user-one").is_some());
+        drop(other_users);
+    }
 }

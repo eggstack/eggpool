@@ -203,6 +203,15 @@ impl RequestAttribution {
             ..self.clone()
         }
     }
+
+    /// Attribute one finite hosted-orchestration inference turn to its
+    /// initiating user while linking it to a content-free operation ID.
+    pub fn hosted_tool_child(&self, orchestration_id: &str) -> Self {
+        Self {
+            parent_proxy_request_id: Some(orchestration_id.to_owned()),
+            ..self.clone()
+        }
+    }
 }
 
 impl AuthenticatedPrincipal {

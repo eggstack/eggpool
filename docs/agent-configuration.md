@@ -20,6 +20,16 @@ that require downstream GET/SSE streams, resources, prompts, or resumable
 sessions are not supported. Ordinary inference tool declarations remain
 client-executed. See the [gateway security and protocol guide](tool-gateway.md).
 
+## Optional finite hosted execution
+
+`POST /api/agent/v1/run` is a distinct EggPool-specific finite operation, not
+part of the generated Codex/OpenCode provider profile. It runs only when the
+operator enables hosted execution and lists an exact qualified model ID. The
+request chooses an explicit subset of Eggsearch tools, and the managed token
+needs inference plus current per-user tool scopes and grants. It has no
+conversation persistence or streaming/resume support. See the
+[hosted orchestration guide](hosted-tool-orchestration.md).
+
 ## Supported Targets
 
 For hard token budgets, clients must send an explicit output cap supported by

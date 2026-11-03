@@ -388,7 +388,7 @@ pub(super) fn surface_for_path(path: &str) -> ClientSurface {
 
 /// Incoming headers forwarded toward provider selection, minus credentials
 /// and hop-by-hop framing. The session header is hashed, never forwarded.
-pub(super) fn filtered_incoming_headers(headers: &HeaderMap) -> HeaderMap {
+pub(crate) fn filtered_incoming_headers(headers: &HeaderMap) -> HeaderMap {
     const BLOCKED: [&str; 10] = [
         "authorization",
         "proxy-authorization",

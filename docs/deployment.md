@@ -1162,6 +1162,8 @@ Then opt in to the connection in EggPool's TOML:
 [tools]
 enabled = true
 gateway_enabled = true
+hosted_execution_enabled = false
+hosted_models = []
 base_url = "http://127.0.0.1:11320/mcp"
 connect_timeout_s = 2.0
 read_timeout_s = 3.0
@@ -1186,3 +1188,9 @@ routing unchanged.
 See the upstream [Eggsearch deployment guide](https://github.com/eggstack/eggsearch/blob/main/docs/deployment.md)
 for its current install and service lifecycle. See the [EggPool MCP gateway
 guide](tool-gateway.md) for supported methods, authorization, and trust rules.
+The separate `POST /api/agent/v1/run` route is disabled unless
+`hosted_execution_enabled = true` and `hosted_models` lists exact operator-
+qualified model IDs. It composes finite coordinator calls with per-user
+authorized Eggsearch operations. See the
+[hosted orchestration guide](hosted-tool-orchestration.md) for its request,
+limits, and firewall implications.

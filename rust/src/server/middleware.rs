@@ -167,6 +167,7 @@ fn personal_credential_allowed(path: &str) -> bool {
     (path.starts_with("/v1/") && path != "/v1/healthz" && path != "/v1/readyz")
         || path == "/api/integrations/v1/profile"
         || path == "/api/tools/v1/mcp"
+        || path == "/api/agent/v1/run"
         || path == "/api/user-budget"
 }
 
@@ -494,7 +495,11 @@ pub(super) async fn admit_inference_body(
 pub(super) fn is_inference_path(path: &str) -> bool {
     matches!(
         path,
-        "/v1/chat/completions" | "/v1/messages" | "/v1/responses" | "/v1/responses/compact"
+        "/v1/chat/completions"
+            | "/v1/messages"
+            | "/v1/responses"
+            | "/v1/responses/compact"
+            | "/api/agent/v1/run"
     )
 }
 
@@ -683,6 +688,7 @@ mod tests {
             "/v1/responses/compact",
             "/v1/models",
             "/api/integrations/v1/profile",
+            "/api/agent/v1/run",
         ] {
             assert!(personal_credential_allowed(path), "{path}");
         }

@@ -9,9 +9,11 @@
 mod auth;
 mod dashboard;
 mod health;
+mod hosted;
 mod inference;
+pub(crate) use inference::filtered_incoming_headers;
 mod middleware;
-mod tools;
+pub(crate) mod tools;
 
 use auth::{
     account_page, login_page, login_submit, logout_submit, member_landing_page, password_change,
@@ -688,6 +690,10 @@ pub struct ServerState {
 }
 
 impl ServerState {
+    fn hosted_execution_enabled(&self) -> bool {
+        self.tool_gateway.hosted_execution_enabled()
+    }
+
     fn from_config(config: &Config) -> Self {
         Self {
             api_key: config.resolved_server_api_key(),
@@ -1198,6 +1204,14 @@ pub fn build_router(state: AppState) -> Router {
             post(tools::gateway).layer(tools::request_limit()),
         );
     }
+    if state.server.hosted_execution_enabled() {
+        router = router.route(
+            hosted::PATH,
+            post(hosted::run).layer(axum::extract::DefaultBodyLimit::max(
+                hosted::MAX_REQUEST_BYTES,
+            )),
+        );
+    }
 
     router = router
         .route("/login", get(login_page).post(login_submit))
@@ -1366,7 +1380,9 @@ mod tests {
             "/v1/messages",
             "/v1/responses",
             "/v1/responses/compact",
+            hosted::PATH,
             "/api/integrations/v1/profile",
+            hosted::PATH,
             "/api/user-budget",
             "/api/stats/runtime",
             "/api/stats/update",

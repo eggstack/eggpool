@@ -164,6 +164,15 @@ Only the configured loopback Eggsearch 0.4.3 service is contacted. Credentials
 are never forwarded; trust labels and structured tool results are preserved.
 See the [MCP gateway guide](tool-gateway.md) for the security model and setup.
 
+With `[tools].enabled = true` and `[tools].hosted_execution_enabled = true`,
+managed agent tokens may use the finite EggPool-specific
+`POST /api/agent/v1/run` operation. It requires an operator-qualified exact
+model ID and current per-user Eggsearch invocation grants. The endpoint is
+stateless, non-streaming, and bounded; it does not alter client-executed tool
+calls on the standard inference APIs. See the
+[hosted orchestration guide](hosted-tool-orchestration.md) for its DTO,
+resource caps, and configuration.
+
 `GET /api/user-budget` is available to personal tokens and browser sessions.
 Members can read only their own rules and rollups; an active admin may select a
 target with `user_id`. The response identifies UTC calendar windows and reports

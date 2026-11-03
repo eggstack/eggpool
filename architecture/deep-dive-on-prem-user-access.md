@@ -22,6 +22,7 @@ The subsystem is six flat runtime modules plus two HTTP adapter surfaces:
 | `rust/src/model_policy.rs` | Versioned, user-specific model authorization (profiles, exact rules, per-user overrides, instance denials) |
 | `rust/src/tool_policy.rs` | Default-deny Eggsearch discovery/invocation authorization, explicit credential scopes, exact profile/user rules, instance denials, and content-free audit mutations |
 | `rust/src/server/tools.rs` | Disabled-by-default authenticated MCP JSON POST gateway; bounded backend operations, per-request grant rechecks, and user-bound downstream sessions |
+| `rust/src/server/hosted.rs` | Disabled-by-default finite hosted operation; bounded model/tool sequencing, content-free parent attribution, and grant/catalog rechecks |
 | `rust/src/user_budget.rs` | Durable per-user budget rules, admission holds, attempt usage, and settled usage windows |
 | `rust/src/instance_budget.rs` | The instance-global budget scope intersected with the per-user rules |
 | `rust/src/server/auth.rs` | Browser login, session cookies, CSRF forms, and forwarded-HTTPS validation |
@@ -33,8 +34,9 @@ The boundary is deliberately narrow:
   the embedded migration chain. The subsystem owns no schema of its own and
   opens no second writer; every read and write goes through `Database`.
 - `rust/src/coordinator/` owns request admission, durable publication, and
-  terminal settlement. The subsystem supplies the *facts* (an authenticated
-  principal, a policy snapshot, budget limits) and never dispatches upstream.
+  terminal settlement. Hosted model turns enter through its ordinary
+  attributed endpoint. The hosted controller does not add retry, provider
+  selection, or finalization ownership.
 - `rust/src/routing/`, `rust/src/quota/`, and `rust/src/health/` keep owning
   upstream provider accounts, provider quota, and provider health. Downstream
   user budgets are independent of provider quota and never share a counter.

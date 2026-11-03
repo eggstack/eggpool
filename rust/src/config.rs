@@ -974,6 +974,8 @@ pub struct IntegrationsConfig {
 pub struct ToolBackendConfig {
     pub enabled: bool,
     pub gateway_enabled: bool,
+    pub hosted_execution_enabled: bool,
+    pub hosted_models: Vec<String>,
     pub base_url: String,
     pub connect_timeout_s: f64,
     pub read_timeout_s: f64,
@@ -984,6 +986,8 @@ impl Default for ToolBackendConfig {
         Self {
             enabled: false,
             gateway_enabled: false,
+            hosted_execution_enabled: false,
+            hosted_models: Vec::new(),
             base_url: "http://127.0.0.1:11320/mcp".into(),
             connect_timeout_s: 2.0,
             read_timeout_s: 3.0,
@@ -1948,6 +1952,35 @@ fn validate_tool_backend(backend: &ToolBackendConfig) -> Result<(), ConfigError>
             "tools.gateway_enabled requires tools.enabled",
         ));
     }
+    if backend.hosted_execution_enabled && !backend.enabled {
+        return Err(ConfigError::validation(
+            "tools.hosted_execution_enabled requires tools.enabled",
+        ));
+    }
+    if backend.hosted_execution_enabled && backend.hosted_models.is_empty() {
+        return Err(ConfigError::validation(
+            "tools.hosted_execution_enabled requires at least one qualified hosted model",
+        ));
+    }
+    if backend.hosted_models.len() > 128 {
+        return Err(ConfigError::validation(
+            "tools.hosted_models exceeds its supported limit",
+        ));
+    }
+    let mut hosted_models = BTreeSet::new();
+    if backend.hosted_models.iter().any(|model| {
+        model.is_empty()
+            || model.len() > 256
+            || model.chars().any(|character| {
+                !(character.is_ascii_alphanumeric()
+                    || matches!(character, '.' | '_' | ':' | '/' | '-'))
+            })
+            || !hosted_models.insert(model)
+    }) {
+        return Err(ConfigError::validation(
+            "tools.hosted_models must contain unique bounded model identifiers",
+        ));
+    }
     if !backend.connect_timeout_s.is_finite()
         || !(0.1..=10.0).contains(&backend.connect_timeout_s)
         || !backend.read_timeout_s.is_finite()
@@ -2892,6 +2925,7 @@ mod tests {
     fn tool_backend_config_is_loopback_only_bounded_and_disabled_by_default() {
         let mut config = Config::default();
         assert!(!config.tools.enabled);
+        assert!(!config.tools.hosted_execution_enabled);
         config.validate().expect("default tool config validates");
         for url in [
             "https://127.0.0.1:11320/mcp",
@@ -2918,5 +2952,16 @@ mod tests {
         let mut gateway_without_backend = Config::default();
         gateway_without_backend.tools.gateway_enabled = true;
         assert!(gateway_without_backend.validate().is_err());
+        let mut hosted_without_backend = Config::default();
+        hosted_without_backend.tools.hosted_execution_enabled = true;
+        assert!(hosted_without_backend.validate().is_err());
+        let mut hosted_without_models = Config::default();
+        hosted_without_models.tools.enabled = true;
+        hosted_without_models.tools.hosted_execution_enabled = true;
+        assert!(hosted_without_models.validate().is_err());
+        let mut invalid_hosted_models = Config::default();
+        invalid_hosted_models.tools.hosted_models =
+            vec!["model-a".to_owned(), "model-a".to_owned()];
+        assert!(invalid_hosted_models.validate().is_err());
     }
 }

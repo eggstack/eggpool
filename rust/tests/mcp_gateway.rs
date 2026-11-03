@@ -15,8 +15,13 @@ use axum::{
 };
 use eggpool::{
     Config,
-    db::{Database, DatabaseConfig, MigrationRunner},
+    config::{AccountConfig, ProviderAuthConfig, ProviderConfig, ProviderStaticModelConfig},
+    db::{
+        AccountConfig as DbAccountConfig, AccountRepository, Database, DatabaseConfig,
+        MigrationRunner,
+    },
     identity,
+    model_policy::ModelPolicyService,
     runtime_lifecycle::{ProcessRuntime, RuntimeGenerationFactory, RuntimeManager},
     server::{ServerRuntime, ShutdownReason},
     tool_policy::{GrantEffect, KNOWN_TOOLS, ToolPolicyService},
@@ -42,6 +47,12 @@ struct Fixture {
 
 struct CallDropSignal(Arc<Notify>);
 
+#[derive(Clone)]
+struct ChatFixture {
+    turns: Arc<AtomicUsize>,
+    requests: Arc<std::sync::Mutex<Vec<Value>>>,
+}
+
 impl Drop for CallDropSignal {
     fn drop(&mut self) {
         self.0.notify_one();
@@ -52,6 +63,35 @@ async fn health() -> Json<Value> {
     Json(
         json!({"service":"eggsearch","status":"ready","version":"0.4.3","protocol":"streamable-http"}),
     )
+}
+
+async fn hosted_chat(
+    State(fixture): State<ChatFixture>,
+    Json(request): Json<Value>,
+) -> Json<Value> {
+    fixture
+        .requests
+        .lock()
+        .unwrap_or_else(|error| error.into_inner())
+        .push(request);
+    let turn = fixture.turns.fetch_add(1, Ordering::SeqCst);
+    if turn == 0 {
+        Json(json!({
+            "id":"fixture-turn-1",
+            "object":"chat.completion",
+            "model":"fixture-model",
+            "choices":[{"index":0,"message":{"role":"assistant","content":null,"tool_calls":[{"id":"call-1","type":"function","function":{"name":"web_search","arguments":"{\"query\":\"test\"}"}}]},"finish_reason":"tool_calls"}],
+            "usage":{"prompt_tokens":10,"completion_tokens":2,"total_tokens":12}
+        }))
+    } else {
+        Json(json!({
+            "id":"fixture-turn-2",
+            "object":"chat.completion",
+            "model":"fixture-model",
+            "choices":[{"index":0,"message":{"role":"assistant","content":"The fixture result is available."},"finish_reason":"stop"}],
+            "usage":{"prompt_tokens":20,"completion_tokens":7,"total_tokens":27}
+        }))
+    }
 }
 
 async fn mcp(
@@ -185,6 +225,8 @@ async fn runtime_fixture(
     backend_url: &str,
     grant_tool: &str,
     gateway_enabled: bool,
+    hosted_execution_enabled: bool,
+    provider: Option<(&str, &str)>,
 ) -> (tempfile::TempDir, Database, ServerRuntime, Vec<String>) {
     let directory = tempfile::tempdir().unwrap();
     let database = Database::open(DatabaseConfig {
@@ -206,7 +248,7 @@ async fn runtime_fixture(
     identity::enable_managed(&database, &admin.id)
         .await
         .unwrap();
-    identity::create_member_without_profile(
+    let allowed_user = identity::create_member_without_profile(
         &database,
         &admin.id,
         "allowed",
@@ -244,7 +286,66 @@ async fn runtime_fixture(
     config.server.api_key = Some("gateway-test-server-key".to_owned());
     config.tools.enabled = true;
     config.tools.gateway_enabled = gateway_enabled;
+    config.tools.hosted_execution_enabled = hosted_execution_enabled;
+    let model_id = provider.map_or_else(
+        || "fixture-model".to_owned(),
+        |(_, model_id)| model_id.to_owned(),
+    );
+    if hosted_execution_enabled {
+        config.tools.hosted_models = vec![model_id.clone()];
+    }
     config.tools.base_url = backend_url.to_owned();
+    if let Some((provider_url, provider_model_id)) = provider {
+        config.models.startup_refresh = false;
+        config.providers.insert(
+            "fixture".to_owned(),
+            ProviderConfig {
+                id: "fixture".to_owned(),
+                base_url: provider_url.to_owned(),
+                protocols: vec!["openai".to_owned()],
+                auth: ProviderAuthConfig {
+                    mode: "none".to_owned(),
+                    ..ProviderAuthConfig::default()
+                },
+                accounts: vec![AccountConfig {
+                    name: "fixture-account".to_owned(),
+                    ..AccountConfig::default()
+                }],
+                static_models: vec![ProviderStaticModelConfig {
+                    id: provider_model_id.to_owned(),
+                    protocol: Some("openai".to_owned()),
+                    ..ProviderStaticModelConfig::default()
+                }],
+                ..ProviderConfig::default()
+            },
+        );
+        AccountRepository::new(&database)
+            .sync_from_config(vec![DbAccountConfig {
+                name: "fixture-account".to_owned(),
+                api_key_env: String::new(),
+                enabled: true,
+                weight: 1.0,
+                provider_id: "fixture".to_owned(),
+            }])
+            .await
+            .unwrap();
+        let provider_model_id = provider_model_id.to_owned();
+        database
+            .call(move |connection| {
+                connection.execute(
+                    "INSERT INTO models (model_id, protocol, provider_id, resolution_status) \
+                     VALUES (?1, 'openai', 'fixture', 'resolved')",
+                    [provider_model_id],
+                )?;
+                Ok(())
+            })
+            .await
+            .unwrap();
+        ModelPolicyService::new(database.clone())
+            .set_user_override(&allowed_user.id, &model_id, "allow", &admin.id)
+            .await
+            .unwrap();
+    }
     let process = ProcessRuntime::new(database.clone()).unwrap();
     let candidate = RuntimeGenerationFactory::prepare(
         &process,
@@ -320,6 +421,22 @@ async fn raw_health_request(address: std::net::SocketAddr) -> String {
     String::from_utf8(response).unwrap()
 }
 
+async fn raw_hosted_request(address: std::net::SocketAddr, token: &str, body: &str) -> String {
+    let mut stream = TcpStream::connect(address).await.unwrap();
+    let request = format!(
+        "POST /api/agent/v1/run HTTP/1.1\r\nHost: 127.0.0.1:{}\r\nAuthorization: Bearer {token}\r\nContent-Type: application/json\r\nAccept: application/json\r\nConnection: close\r\nContent-Length: {}\r\n\r\n{body}",
+        address.port(),
+        body.len()
+    );
+    stream.write_all(request.as_bytes()).await.unwrap();
+    let mut response = Vec::new();
+    tokio::time::timeout(Duration::from_secs(150), stream.read_to_end(&mut response))
+        .await
+        .unwrap()
+        .unwrap();
+    String::from_utf8(response).unwrap()
+}
+
 fn response_body(response: &str) -> &str {
     response
         .split_once("\r\n\r\n")
@@ -344,7 +461,7 @@ async fn mcp_sessions_filter_per_user_and_reauthorize_direct_calls() {
         fixture_server().await;
     let backend_url = format!("http://127.0.0.1:{}/mcp", backend.port());
     let (_directory, database, runtime, tokens) =
-        runtime_fixture(&backend_url, "web_search", true).await;
+        runtime_fixture(&backend_url, "web_search", true, false, None).await;
     let handle = runtime.handle();
     let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
     let address = listener.local_addr().unwrap();
@@ -657,7 +774,7 @@ async fn disabled_gateway_route_is_not_registered() {
     let (backend, backend_task, calls, _, _, _, _) = fixture_server().await;
     let backend_url = format!("http://127.0.0.1:{}/mcp", backend.port());
     let (_directory, database, runtime, tokens) =
-        runtime_fixture(&backend_url, "web_search", false).await;
+        runtime_fixture(&backend_url, "web_search", false, false, None).await;
     let handle = runtime.handle();
     let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
     let address = listener.local_addr().unwrap();
@@ -672,8 +789,297 @@ async fn disabled_gateway_route_is_not_registered() {
     )
     .await;
     assert!(response.starts_with("HTTP/1.1 404"), "{response}");
+    let hosted = raw_hosted_request(
+        address,
+        &tokens[0],
+        r#"{"mode":"eggsearch","model":"fixture-model","input":"question","tools":[]}"#,
+    )
+    .await;
+    assert!(hosted.starts_with("HTTP/1.1 404"), "{hosted}");
     assert_eq!(calls.load(Ordering::SeqCst), 0);
 
+    handle.request_shutdown(ShutdownReason::Requested);
+    tokio::time::timeout(Duration::from_secs(6), server_task)
+        .await
+        .unwrap()
+        .unwrap()
+        .unwrap();
+    backend_task.abort();
+    database.close().await.unwrap();
+}
+
+#[tokio::test]
+async fn hosted_endpoint_completes_finite_model_tool_model_flow() {
+    let (backend, backend_task, calls, _, _, _, _) = fixture_server().await;
+    let backend_url = format!("http://127.0.0.1:{}/mcp", backend.port());
+    let provider_listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let provider_address = provider_listener.local_addr().unwrap();
+    let turns = Arc::new(AtomicUsize::new(0));
+    let requests = Arc::new(std::sync::Mutex::new(Vec::new()));
+    let provider_state = ChatFixture {
+        turns: turns.clone(),
+        requests: requests.clone(),
+    };
+    let provider_task = tokio::spawn(async move {
+        axum::serve(
+            provider_listener,
+            Router::new()
+                .fallback(hosted_chat)
+                .with_state(provider_state),
+        )
+        .await
+        .unwrap();
+    });
+    let provider_url = format!("http://{provider_address}");
+    let (_directory, database, runtime, tokens) = runtime_fixture(
+        &backend_url,
+        "web_search",
+        false,
+        true,
+        Some((&provider_url, "fixture-model")),
+    )
+    .await;
+    let handle = runtime.handle();
+    let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let address = listener.local_addr().unwrap();
+    let server_task = tokio::spawn(async move { runtime.serve_listener(listener).await });
+
+    let response = raw_hosted_request(
+        address,
+        &tokens[0],
+        r#"{"mode":"eggsearch","model":"fixture-model","input":"summarize the evidence","tools":["web_search"]}"#,
+    )
+    .await;
+    assert!(response.starts_with("HTTP/1.1 200"), "{response}");
+    let result: Value = serde_json::from_str(response_body(&response)).unwrap();
+    assert_eq!(result["mode"], "eggsearch");
+    assert_eq!(result["iterations"], 2);
+    assert_eq!(result["tool_calls"], 1);
+    assert_eq!(result["answer"], "The fixture result is available.");
+    let orchestration_id = result["id"].as_str().unwrap().to_owned();
+    assert_eq!(turns.load(Ordering::SeqCst), 2);
+    assert_eq!(calls.load(Ordering::SeqCst), 1);
+    {
+        let requests = requests.lock().unwrap_or_else(|error| error.into_inner());
+        assert_eq!(requests.len(), 2);
+        assert!(requests[0]["tools"][0]["function"]["name"] == "web_search");
+        assert!(
+            requests[1]["messages"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .any(|message| {
+                    message["role"] == "tool"
+                        && message["content"]
+                            .as_str()
+                            .is_some_and(|content| content.contains("external_untrusted"))
+                })
+        );
+    }
+    let linked_requests = database
+        .call(move |connection| {
+            connection.query_row(
+                "SELECT COUNT(*), COUNT(DISTINCT user_id), COUNT(DISTINCT request_kind), \
+                        COUNT(DISTINCT parent_proxy_request_id) \
+                 FROM requests WHERE parent_proxy_request_id = ?1",
+                [orchestration_id],
+                |row| {
+                    Ok((
+                        row.get::<_, i64>(0)?,
+                        row.get::<_, i64>(1)?,
+                        row.get::<_, i64>(2)?,
+                        row.get::<_, i64>(3)?,
+                    ))
+                },
+            )
+        })
+        .await
+        .unwrap();
+    assert_eq!(linked_requests, (2, 1, 1, 1));
+
+    let zero_tool_response = raw_hosted_request(
+        address,
+        &tokens[0],
+        r#"{"mode":"eggsearch","model":"fixture-model","input":"answer directly","tools":[]}"#,
+    )
+    .await;
+    assert!(
+        zero_tool_response.starts_with("HTTP/1.1 200"),
+        "{zero_tool_response}"
+    );
+    let zero_tool_result: Value = serde_json::from_str(response_body(&zero_tool_response)).unwrap();
+    assert_eq!(zero_tool_result["iterations"], 1);
+    assert_eq!(zero_tool_result["tool_calls"], 0);
+    assert_eq!(turns.load(Ordering::SeqCst), 3);
+    assert_eq!(calls.load(Ordering::SeqCst), 1);
+
+    handle.request_shutdown(ShutdownReason::Requested);
+    tokio::time::timeout(Duration::from_secs(6), server_task)
+        .await
+        .unwrap()
+        .unwrap()
+        .unwrap();
+    backend_task.abort();
+    provider_task.abort();
+    database.close().await.unwrap();
+}
+
+#[tokio::test]
+#[ignore = "requires Ollama qwen3.5:4b and Eggsearch 0.4.3 at EGGPOOL_TEST_EGGSEARCH_URL"]
+async fn live_ollama_eggsearch_hosted_orchestration() {
+    let backend_url = std::env::var("EGGPOOL_TEST_EGGSEARCH_URL")
+        .expect("set EGGPOOL_TEST_EGGSEARCH_URL to the qualified loopback Eggsearch endpoint");
+    let provider_url = "http://127.0.0.1:11434/v1";
+    let (_directory, database, runtime, tokens) = runtime_fixture(
+        &backend_url,
+        "web_search",
+        false,
+        true,
+        Some((provider_url, "qwen3.5:4b")),
+    )
+    .await;
+    let handle = runtime.handle();
+    let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let address = listener.local_addr().unwrap();
+    let server_task = tokio::spawn(async move { runtime.serve_listener(listener).await });
+    let response = raw_hosted_request(
+        address,
+        &tokens[0],
+        r#"{"mode":"eggsearch","model":"qwen3.5:4b","input":"Use web_search once with the query EggPool GitHub and summarize the result.","tools":["web_search"],"max_iterations":2,"max_tool_calls":1}"#,
+    )
+    .await;
+    assert!(response.starts_with("HTTP/1.1 200"), "{response}");
+    let result: Value = serde_json::from_str(response_body(&response)).unwrap();
+    assert_eq!(result["mode"], "eggsearch");
+    assert!(result["iterations"].as_u64().unwrap() >= 2);
+    assert!(result["tool_calls"].as_u64().unwrap() >= 1);
+    assert!(
+        result["answer"]
+            .as_str()
+            .is_some_and(|answer| !answer.is_empty())
+    );
+
+    handle.request_shutdown(ShutdownReason::Requested);
+    tokio::time::timeout(Duration::from_secs(6), server_task)
+        .await
+        .unwrap()
+        .unwrap()
+        .unwrap();
+    database.close().await.unwrap();
+}
+
+#[tokio::test]
+async fn hosted_client_disconnect_cancels_in_flight_tool_call() {
+    let (backend, backend_task, calls, _, response_mode, call_started, call_dropped) =
+        fixture_server().await;
+    response_mode.store(3, Ordering::SeqCst);
+    let backend_url = format!("http://127.0.0.1:{}/mcp", backend.port());
+    let provider_listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let provider_address = provider_listener.local_addr().unwrap();
+    let provider_state = ChatFixture {
+        turns: Arc::new(AtomicUsize::new(0)),
+        requests: Arc::new(std::sync::Mutex::new(Vec::new())),
+    };
+    let provider_task = tokio::spawn(async move {
+        axum::serve(
+            provider_listener,
+            Router::new()
+                .fallback(hosted_chat)
+                .with_state(provider_state),
+        )
+        .await
+        .unwrap();
+    });
+    let provider_url = format!("http://{provider_address}");
+    let (_directory, database, runtime, tokens) = runtime_fixture(
+        &backend_url,
+        "web_search",
+        false,
+        true,
+        Some((&provider_url, "fixture-model")),
+    )
+    .await;
+    let handle = runtime.handle();
+    let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let address = listener.local_addr().unwrap();
+    let server_task = tokio::spawn(async move { runtime.serve_listener(listener).await });
+
+    let mut client = TcpStream::connect(address).await.unwrap();
+    let body =
+        r#"{"mode":"eggsearch","model":"fixture-model","input":"search","tools":["web_search"]}"#;
+    let request = format!(
+        "POST /api/agent/v1/run HTTP/1.1\r\nHost: 127.0.0.1:{}\r\nAuthorization: Bearer {}\r\nContent-Type: application/json\r\nAccept: application/json\r\nConnection: close\r\nContent-Length: {}\r\n\r\n{body}",
+        address.port(),
+        tokens[0],
+        body.len()
+    );
+    client.write_all(request.as_bytes()).await.unwrap();
+    tokio::time::timeout(Duration::from_secs(15), call_started.notified())
+        .await
+        .expect("tool invocation reaches the fixture boundary");
+    let dropped = call_dropped.notified();
+    tokio::pin!(dropped);
+    drop(client);
+    tokio::time::timeout(Duration::from_secs(5), &mut dropped)
+        .await
+        .expect("downstream disconnect drops the backend call future");
+    assert_eq!(calls.load(Ordering::SeqCst), 0);
+
+    handle.request_shutdown(ShutdownReason::Requested);
+    tokio::time::timeout(Duration::from_secs(6), server_task)
+        .await
+        .unwrap()
+        .unwrap()
+        .unwrap();
+    backend_task.abort();
+    provider_task.abort();
+    database.close().await.unwrap();
+}
+
+#[tokio::test]
+async fn hosted_endpoint_rejects_unsupported_grammar_and_unauthorized_tools() {
+    let (backend, backend_task, calls, _, _, _, _) = fixture_server().await;
+    let backend_url = format!("http://127.0.0.1:{}/mcp", backend.port());
+    let (_directory, database, runtime, tokens) =
+        runtime_fixture(&backend_url, "web_search", false, true, None).await;
+    let handle = runtime.handle();
+    let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let address = listener.local_addr().unwrap();
+    let server_task = tokio::spawn(async move { runtime.serve_listener(listener).await });
+
+    let unsupported = raw_hosted_request(
+        address,
+        &tokens[0],
+        r#"{"mode":"eggsearch","model":"fixture-model","input":"question","tools":[],"stream":true}"#,
+    )
+    .await;
+    assert!(unsupported.starts_with("HTTP/1.1 400"), "{unsupported}");
+
+    let denied = raw_hosted_request(
+        address,
+        &tokens[1],
+        r#"{"mode":"eggsearch","model":"fixture-model","input":"question","tools":["web_search"]}"#,
+    )
+    .await;
+    assert!(denied.starts_with("HTTP/1.1 403"), "{denied}");
+    let alias = raw_hosted_request(
+        address,
+        &tokens[0],
+        r#"{"mode":"eggsearch","model":"unqualified-alias","input":"question","tools":["web_search"]}"#,
+    )
+    .await;
+    assert!(alias.starts_with("HTTP/1.1 403"), "{alias}");
+    assert_eq!(
+        calls.load(Ordering::SeqCst),
+        0,
+        "denied requests do not contact Eggsearch"
+    );
+
+    assert!(
+        raw_health_request(address)
+            .await
+            .starts_with("HTTP/1.1 200")
+    );
     handle.request_shutdown(ShutdownReason::Requested);
     tokio::time::timeout(Duration::from_secs(6), server_task)
         .await
@@ -690,7 +1096,7 @@ async fn unavailable_backend_is_isolated_from_model_health() {
     let backend_url = format!("http://127.0.0.1:{}/mcp", backend.port());
     backend_task.abort();
     let (_directory, database, runtime, tokens) =
-        runtime_fixture(&backend_url, "web_search", true).await;
+        runtime_fixture(&backend_url, "web_search", true, false, None).await;
     let handle = runtime.handle();
     let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
     let address = listener.local_addr().unwrap();
@@ -735,7 +1141,7 @@ async fn live_eggsearch_gateway_initialize_list_and_call() {
     let backend_url = std::env::var("EGGPOOL_TEST_EGGSEARCH_URL")
         .expect("set EGGPOOL_TEST_EGGSEARCH_URL to the qualified loopback Eggsearch endpoint");
     let (_directory, database, runtime, tokens) =
-        runtime_fixture(&backend_url, "provider_status", true).await;
+        runtime_fixture(&backend_url, "provider_status", true, false, None).await;
     let handle = runtime.handle();
     let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
     let address = listener.local_addr().unwrap();

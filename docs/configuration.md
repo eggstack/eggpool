@@ -76,3 +76,9 @@ well as `enabled = true`. Enabling either tools setting requires a server
 restart. The authenticated `POST /api/tools/v1/mcp` route accepts MCP
 `2025-03-26` `initialize`, `notifications/initialized`, `tools/list`, and
 `tools/call`; it exposes only per-user grants and does not affect inference.
+Finite hosted orchestration is a separate opt-in through
+`hosted_execution_enabled = true` and an explicit `hosted_models` list. This
+list contains exact model IDs the operator has qualified for finite function
+calls; it is empty by default. See the
+[hosted orchestration guide](hosted-tool-orchestration.md) for the request
+contract and limits.
