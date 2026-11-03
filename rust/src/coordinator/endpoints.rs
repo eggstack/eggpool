@@ -47,7 +47,7 @@ use crate::{
         admit_parsed_request, canonical_request_from_object, parse_request_body,
         validate_responses_stateless_policy,
     },
-    routing::{DurableHealth, EligibilityPolicy, RoutingRouter},
+    routing::{DurableHealth, EligibilityPolicy, RoutingRequestFacts, RoutingRouter},
     wire::{
         ConfiguredWireProfile, WireCodecId, WireProfileDefinition, WireProfileRegistry,
         WireRuntime, WireSurface, configured_profiles, ir::ClientSurface,
@@ -78,6 +78,7 @@ pub enum InferenceOperation {
     #[default]
     Generate,
     Compact,
+    Embedding,
 }
 
 impl InferenceOperation {
@@ -86,6 +87,7 @@ impl InferenceOperation {
         match self {
             Self::Generate => "generate",
             Self::Compact => "compact",
+            Self::Embedding => "embedding",
         }
     }
 }
@@ -109,6 +111,8 @@ pub enum EndpointError {
         "Remote compaction is not supported by any eligible provider surface; set supports_remote_compaction_v1 and compact_path_template on the provider wire surface"
     )]
     RemoteCompactionUnsupported,
+    #[error("no provider explicitly qualifies for embeddings on this model")]
+    EmbeddingsUnsupported,
     #[error("Unknown provider {provider_id:?}")]
     MissingProvider { provider_id: String },
     #[error("No configured wire profile for provider {provider_id:?}")]
@@ -121,6 +125,8 @@ pub enum EndpointError {
     PrincipalChanged,
     #[error("Model is not authorized")]
     ModelForbidden,
+    #[error("embedding model aliases are not supported")]
+    EmbeddingAliasUnsupported,
     #[error("User budget limit reached")]
     BudgetExceeded,
     #[error(
@@ -187,7 +193,8 @@ impl EndpointError {
             | Self::MissingModel
             | Self::StatelessViolation(_)
             | Self::InvalidStream
-            | Self::Admission => StatusCode::BAD_REQUEST,
+            | Self::Admission
+            | Self::EmbeddingAliasUnsupported => StatusCode::BAD_REQUEST,
             Self::BodyTooLarge => StatusCode::PAYLOAD_TOO_LARGE,
             Self::PrincipalChanged => StatusCode::UNAUTHORIZED,
             Self::ModelForbidden => StatusCode::FORBIDDEN,
@@ -198,6 +205,7 @@ impl EndpointError {
             // capability, not a temporarily unavailable route, so it carries
             // its own status instead of the generic 503.
             Self::RemoteCompactionUnsupported => StatusCode::NOT_IMPLEMENTED,
+            Self::EmbeddingsUnsupported => StatusCode::NOT_IMPLEMENTED,
             Self::Claim | Self::Finalization => StatusCode::INTERNAL_SERVER_ERROR,
             Self::MissingProvider { .. } | Self::MissingWireProfile { .. } | Self::Internal => {
                 StatusCode::INTERNAL_SERVER_ERROR
@@ -244,6 +252,10 @@ pub fn endpoint_error_body_for(surface: ClientSurface, error: &EndpointError) ->
         EndpointError::RemoteCompactionUnsupported => Some((
             "remote_compaction_unsupported",
             "Remote compaction is not supported by any eligible provider surface; set supports_remote_compaction_v1 and compact_path_template on the provider wire surface",
+        )),
+        EndpointError::EmbeddingsUnsupported => Some((
+            "embeddings_unsupported",
+            "No provider has an explicitly qualified embeddings model and endpoint",
         )),
         _ => None,
     };
@@ -590,6 +602,7 @@ fn map_finite_error(error: super::FiniteCoordinatorError) -> EndpointError {
         Finite::Admission(_) | Finite::InvalidFacts => EndpointError::Admission,
         Finite::NoEligibleRoute => EndpointError::NoEligibleRoute,
         Finite::RemoteCompactionUnsupported => EndpointError::RemoteCompactionUnsupported,
+        Finite::EmbeddingsUnsupported => EndpointError::EmbeddingsUnsupported,
         Finite::MissingProvider { provider_id } => EndpointError::MissingProvider { provider_id },
         Finite::MissingWireProfile { provider_id } => {
             EndpointError::MissingWireProfile { provider_id }
@@ -998,6 +1011,92 @@ pub async fn execute_finite(
         }
         EndpointExecution::Stream(_, _) => Err(EndpointError::Admission),
     }
+}
+
+/// Parse, classify, resolve, admit, and execute one inference request.  This
+/// is the only production entry point that decides finite versus streaming.
+pub(crate) async fn execute_embeddings_attributed(
+    state: &InferenceState,
+    raw_body: Bytes,
+    incoming_headers: HeaderMap,
+    proxy_request_id: String,
+    attribution: Option<crate::identity::RequestAttribution>,
+) -> Result<FiniteExecution, EndpointError> {
+    use crate::request::embeddings::{
+        EmbeddingRequest, EmbeddingRequestError, MAX_EMBEDDING_BODY_BYTES,
+    };
+
+    let body_limit = state.max_body_bytes.min(MAX_EMBEDDING_BODY_BYTES);
+    let parsed =
+        crate::request::parse_request_body(raw_body.clone(), body_limit).map_err(|error| {
+            match error {
+                AdmissionError::BodyTooLarge { .. } => EndpointError::BodyTooLarge,
+                AdmissionError::InvalidJson(_) | AdmissionError::TopLevelNotObject => {
+                    EndpointError::InvalidJson
+                }
+                _ => EndpointError::Admission,
+            }
+        })?;
+    let mut embedding = EmbeddingRequest::parse_value(&Value::Object(
+        parsed.object().map_err(EndpointError::from)?.clone(),
+    ))
+    .map_err(|error| match error {
+        EmbeddingRequestError::BodyTooLarge | EmbeddingRequestError::InputTooLarge => {
+            EndpointError::BodyTooLarge
+        }
+        EmbeddingRequestError::InvalidJson => EndpointError::InvalidJson,
+        EmbeddingRequestError::InvalidModel => EndpointError::MissingModel,
+        _ => EndpointError::Admission,
+    })?;
+    if state.registry.get(embedding.model.trim()).is_some() {
+        return Err(EndpointError::EmbeddingAliasUnsupported);
+    }
+    let resolved = resolve_concrete(
+        state,
+        ClientSurface::ChatCompletions,
+        parsed,
+        None,
+        &proxy_request_id,
+        attribution.as_ref(),
+    )
+    .await?;
+    if resolved.virtual_resolution.is_some() {
+        return Err(EndpointError::EmbeddingAliasUnsupported);
+    }
+    embedding.model = resolved.concrete_model;
+    let static_facts = state.routing_inputs(ClientSurface::ChatCompletions);
+    let mut routing_facts =
+        RoutingRequestFacts::from_model_id(&embedding.model, &state.known_providers);
+    routing_facts.provider_id = resolved.provider_id;
+    routing_facts.requested_protocol = Some("openai".into());
+    routing_facts.client_protocol = Some("openai_embeddings".into());
+    // Routing still selects an OpenAI-compatible account. The operation label
+    // remains separate so persisted request and usage projections distinguish
+    // embeddings from chat completions.
+    routing_facts.request_surface = ClientSurface::ChatCompletions.as_str().into();
+    routing_facts.transcode_protocols = static_facts.transcode_protocols.clone();
+    routing_facts.catalog_stale_after_s = static_facts.catalog_stale_after_s;
+    routing_facts.capability_policy = static_facts.capability_policy.clone();
+    routing_facts.now = crate::routing::epoch_seconds();
+    let input_bytes = i64::try_from(embedding.input_bytes()).unwrap_or(i64::MAX);
+    routing_facts.projected_tokens = input_bytes;
+    // UTF-8 byte length conservatively bounds tokenizer output. Embeddings do
+    // not generate completion tokens, but hard-budget admission requires a
+    // positive output proof, so reserve one harmless token above the exact 0.
+    routing_facts.budget_input_worst_case_tokens = input_bytes;
+    routing_facts.budget_requested_output_tokens = Some(1);
+    state
+        .finite
+        .execute_embedding_admitted(
+            proxy_request_id,
+            raw_body,
+            incoming_headers,
+            embedding,
+            routing_facts,
+            attribution,
+        )
+        .await
+        .map_err(map_finite_error)
 }
 
 /// Parse, classify, resolve, admit, and execute one inference request.  This

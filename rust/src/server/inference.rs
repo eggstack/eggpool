@@ -63,6 +63,38 @@ pub(super) async fn responses(
     .await
 }
 
+pub(super) async fn embeddings(
+    State(state): State<AppState>,
+    Extension(lease): Extension<Arc<GenerationLease>>,
+    Extension(_raw_body_reservation): Extension<
+        Arc<crate::request::resource_budget::RawBodyReservation>,
+    >,
+    Extension(principal): Extension<crate::identity::AuthenticatedPrincipal>,
+    headers: HeaderMap,
+    body: Bytes,
+) -> Response {
+    let proxy_request_id = crate::coordinator::new_proxy_request_id();
+    match crate::coordinator::execute_embeddings_attributed(
+        lease.generation().inference(),
+        body,
+        filtered_incoming_headers(&headers),
+        proxy_request_id,
+        Some(principal.request_attribution()),
+    )
+    .await
+    {
+        Ok(execution) => {
+            finish_finite_execution(state, ClientSurface::ChatCompletions, execution).await
+        }
+        Err(error) => {
+            let status = error.status();
+            let detail =
+                crate::coordinator::endpoint_error_body_for(ClientSurface::ChatCompletions, &error);
+            error_body_response(status, ClientSurface::ChatCompletions, detail)
+        }
+    }
+}
+
 /// Historical remote-compaction endpoint (`POST /v1/responses/compact`).
 ///
 /// A thin adapter only: bounded compact admission, one compact coordinator

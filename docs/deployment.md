@@ -1194,3 +1194,16 @@ qualified model IDs. It composes finite coordinator calls with per-user
 authorized Eggsearch operations. See the
 [hosted orchestration guide](hosted-tool-orchestration.md) for its request,
 limits, and firewall implications.
+# Embedding deployment
+
+Embeddings are disabled by default. To enable them, configure a reachable
+OpenAI-compatible text embedding endpoint on a provider using a fixed
+`embeddings_path` and exact `embedding_models` allowlist. The model must also
+be present in the ordinary model catalog. The operator owns model installation,
+availability, and qualification; EggPool does not download weights or store
+input text/vectors. Missing or ineligible embedding providers do not affect
+normal inference. See [provider configuration](providers.md) and the
+[API reference](api-reference.md) for the finite contract and limits.
+For a solo PrivateGPT-style application, see
+[external retrieval interoperability](retrieval-interoperability.md); its
+document store and access controls remain in that application.

@@ -496,6 +496,7 @@ pub(super) fn is_inference_path(path: &str) -> bool {
     matches!(
         path,
         "/v1/chat/completions"
+            | "/v1/embeddings"
             | "/v1/messages"
             | "/v1/responses"
             | "/v1/responses/compact"

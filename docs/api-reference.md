@@ -9,6 +9,7 @@ EggPool exposes OpenAI Chat Completions- and Anthropic Messages-compatible paths
 | `GET` | `/v1/models` | List models visible to the authenticated principal; managed users see only models allowed by their effective policy |
 | `GET` | `/api/user-budget` | Authenticated user rules and bounded usage; admins may add `?user_id=<id>` to inspect one user |
 | `POST` | `/v1/chat/completions` | OpenAI Chat Completions-compatible requests |
+| `POST` | `/v1/embeddings` | Bounded OpenAI-compatible text embeddings for explicitly qualified provider/model pairs |
 | `POST` | `/v1/responses` | Stateless OpenAI Responses-compatible requests; canonical adaptation is allowed to eligible upstream surfaces |
 | `POST` | `/v1/responses/compact` | Bounded remote-compaction operation returning replacement history/checkpoint material; native compact-capable upstreams only, otherwise rejected before submission with `501` and the code `remote_compaction_unsupported` |
 | `POST` | `/v1/messages` | Anthropic Messages-compatible requests |
@@ -22,6 +23,24 @@ plus a `compact_path_template` are eligible; without a qualified native
 target the request fails before upstream submission. There is no translated
 compaction fallback. Current Codex custom providers default to local
 compaction, so remote compaction is not required for normal Codex operation.
+
+`POST /v1/embeddings` accepts a non-empty `input` string or array of strings,
+an exact concrete `model`, optional positive `dimensions` (maximum 8192), and
+optional `encoding_format: "float"`. Requests are capped at 64 KiB, 32 inputs,
+16 KiB per item, and 64 KiB total UTF-8 input. The response is finite JSON with
+one finite float vector per input, contiguous zero-based indices, and a
+consistent vector size. EggPool sorts rows by index and returns the requested
+client model ID. `base64`, token-ID inputs, extra request fields, virtual model
+aliases, image inputs, streaming, and guessed provider routes are unsupported.
+
+An operator must configure both `embedding_models` (an exact model-ID
+allowlist) and `embeddings_path` on a provider. Chat support alone never
+qualifies a model. Without an eligible configured pair, the request fails with
+`501 embeddings_unsupported` before any provider attempt. Normal authentication,
+model policy, hard budgets, health, quota, and request finalization still apply.
+Input and vector content are not persisted or logged. Upstream usage is passed
+through when valid; if absent, it stays absent and usage counters remain
+unknown. See [providers](providers.md) for the operator configuration example.
 
 **Capability requirement.** Remote compaction is an operator-configured
 provider wire surface fact, not a bundled one. A provider qualifies only when

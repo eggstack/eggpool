@@ -738,6 +738,13 @@ pub struct ProviderConfig {
     pub headers: Vec<ProviderStaticHeaderConfig>,
     pub models_endpoint: Option<ProviderModelsEndpointConfig>,
     pub static_models: Vec<ProviderStaticModelConfig>,
+    /// Exact downstream model identifiers whose upstream embedding endpoint
+    /// and response behavior have been operator-qualified. This is a strict
+    /// allowlist; chat capability never implies embedding support.
+    pub embedding_models: BTreeSet<String>,
+    /// Explicit OpenAI-compatible embeddings route, for example
+    /// `/v1/embeddings`. No route is guessed from the chat path.
+    pub embeddings_path: Option<String>,
     pub verify: ProviderVerifyConfig,
     pub budget: ProviderBudgetConfig,
 }
@@ -772,6 +779,8 @@ impl Default for ProviderConfig {
             headers: Vec::new(),
             models_endpoint: None,
             static_models: Vec::new(),
+            embedding_models: BTreeSet::new(),
+            embeddings_path: None,
             verify: ProviderVerifyConfig::default(),
             budget: ProviderBudgetConfig::default(),
         }
@@ -2046,6 +2055,32 @@ fn validate_enum(value: &str, allowed: &[&str], field: &str) -> Result<(), Confi
     Ok(())
 }
 
+fn validate_embedding_provider_config(provider: &ProviderConfig) -> Result<(), ConfigError> {
+    match provider.embeddings_path.as_deref() {
+        Some(path)
+            if !provider.embedding_models.is_empty()
+                && path.starts_with('/')
+                && !path
+                    .chars()
+                    .any(|character| matches!(character, '?' | '#' | '{' | '}'))
+                && path.len() <= 256 => {}
+        None if provider.embedding_models.is_empty() => {}
+        _ => {
+            return Err(ConfigError::validation(
+                "provider embeddings_path and embedding_models must be configured together with a fixed absolute path",
+            ));
+        }
+    }
+    if provider.embedding_models.iter().any(|model| {
+        model.trim().is_empty() || model.len() > 256 || model.chars().any(char::is_whitespace)
+    }) {
+        return Err(ConfigError::validation(
+            "provider embedding model identifiers must be bounded exact identifiers",
+        ));
+    }
+    Ok(())
+}
+
 fn validate_provider(
     provider: &mut ProviderConfig,
     proxies: &BTreeMap<String, ProxyConfig>,
@@ -2092,6 +2127,7 @@ fn validate_provider(
             "Provider protocols must contain only openai or anthropic",
         ));
     }
+    validate_embedding_provider_config(provider)?;
     validate_positive_pair(provider.max_keepalive, provider.max_connections, "provider")?;
     for value in [
         provider.connect_timeout_s,
@@ -2603,6 +2639,23 @@ mod tests {
             config.admission_fairness.requests_per_minute_per_principal,
             None
         );
+    }
+
+    #[test]
+    fn embeddings_require_an_explicit_fixed_route_and_model_allowlist() {
+        let mut provider = ProviderConfig::default();
+        assert!(validate_embedding_provider_config(&provider).is_ok());
+        provider.embedding_models.insert("embed-model".into());
+        assert!(validate_embedding_provider_config(&provider).is_err());
+        provider.embeddings_path = Some("/v1/embeddings".into());
+        assert!(validate_embedding_provider_config(&provider).is_ok());
+        for path in ["relative", "/v1/{model}", "/v1/embeddings?x=1"] {
+            provider.embeddings_path = Some(path.into());
+            assert!(validate_embedding_provider_config(&provider).is_err());
+        }
+        provider.embeddings_path = Some("/v1/embeddings".into());
+        provider.embedding_models.insert("bad model".into());
+        assert!(validate_embedding_provider_config(&provider).is_err());
     }
 
     #[test]

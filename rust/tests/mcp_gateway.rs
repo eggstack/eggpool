@@ -932,7 +932,7 @@ async fn live_ollama_eggsearch_hosted_orchestration() {
     let provider_url = "http://127.0.0.1:11434/v1";
     let (_directory, database, runtime, tokens) = runtime_fixture(
         &backend_url,
-        "web_search",
+        "web_fetch",
         false,
         true,
         Some((provider_url, "qwen3.5:4b")),
@@ -945,7 +945,7 @@ async fn live_ollama_eggsearch_hosted_orchestration() {
     let response = raw_hosted_request(
         address,
         &tokens[0],
-        r#"{"mode":"eggsearch","model":"qwen3.5:4b","input":"Use web_search once with the query EggPool GitHub and summarize the result.","tools":["web_search"],"max_iterations":2,"max_tool_calls":1}"#,
+        r#"{"mode":"eggsearch","model":"qwen3.5:4b","input":"Fetch https://example.com with a compact result limited to 1200 characters, then summarize the fetched page in one sentence.","tools":["web_fetch"],"max_iterations":2,"max_tool_calls":1}"#,
     )
     .await;
     assert!(response.starts_with("HTTP/1.1 200"), "{response}");

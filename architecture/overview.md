@@ -184,6 +184,11 @@ token estimates + routing facts). `body.rs` owns deterministic compact JSON
 encoding; `limits.rs` owns overflow-safe media/token/reservation estimators
 and surface-aware output-token resolution; `resource_budget.rs` owns the
 effective body ceiling (`max(64 MiB, live limit)`, capped at 256 MiB).
+The finite `/v1/embeddings` operation uses `request/embeddings.rs` for a
+separate text/vector contract and never enters the dialogue IR. Its endpoint
+reuses principal/model-policy admission, while provider selection requires an
+exact operator-qualified model and fixed embeddings path. Text/vector content
+is not logged or persisted; missing upstream usage remains unknown.
 
 Deep dives: [Request lifecycle](deep-dive-request-lifecycle.md),
 [Transcoding](deep-dive-transcoder.md).

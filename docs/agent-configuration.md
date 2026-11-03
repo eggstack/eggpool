@@ -279,3 +279,15 @@ they explicitly migrate away from the legacy shared server key.
 Managed OpenCode installation touches only the owned `eggpool` entry (plus its narrowly scoped parent key when EggPool creates it), preserving JSONC comments, trailing commas, indentation, ordering, unrelated providers, and nested settings byte-for-byte. A pre-existing `eggpool` entry is captured on first apply and restored exactly on `--remove`; an emptied parent key is removed only when it holds no comments. Global config lives at `~/.config/opencode/opencode.json` (`OPENCODE_CONFIG` overrides; Windows uses `%APPDATA%\opencode\opencode.json`). Ambiguous documents (both `provider` and `providers` present) and invalid JSONC fail closed with a bounded line/column location instead of a lossy rewrite.
 
 Provider-scoped model IDs are used when `models.collapse_models = false` (the default), so OpenCode can disambiguate providers serving the same upstream model.
+# Embeddings API
+
+Agent clients can use `POST /v1/embeddings` with an authorized exact concrete
+model ID and either one non-empty text string or an array of text strings.
+The endpoint is finite and accepts optional `dimensions` and
+`encoding_format: "float"`. Virtual model aliases are not supported on this
+operation. Managed-user model policy applies to the submitted model exactly as
+it does to other inference routes; a permitted chat model is not necessarily
+embedding-enabled. The operator must explicitly qualify that model/provider
+pair as described in [providers](providers.md).
+For the PrivateGPT-style deployment pattern and its user-isolation limits, see
+[external retrieval interoperability](retrieval-interoperability.md).

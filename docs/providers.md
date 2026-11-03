@@ -643,3 +643,43 @@ stream_timeouts = { first_byte_timeout_s = 1800, idle_timeout_s = 1800 }
   workers creates multiple EggPool processes that each open their own
   provider connection pool, which multiplies the connection budget and can push you
   past upstream per-IP rate limits.
+# Embeddings
+
+EggPool supports a narrow finite OpenAI-compatible text embeddings contract.
+Embedding eligibility is operator-owned and separate from chat capability.
+Set both an exact `embedding_models` allowlist and a fixed absolute
+`embeddings_path` on a provider. EggPool never guesses `/embeddings` from a
+chat path and never infers embedding support from a model name or chat profile.
+
+For a locally qualified Ollama OpenAI-compatible endpoint, configure the
+provider route according to its actual base URL (Ollama commonly serves
+`/v1/embeddings`) and list only model IDs that have passed an operator
+qualification request. The model must also exist in EggPool's ordinary model
+catalog. For example:
+
+```toml
+[providers.local-ollama]
+id = "local-ollama"
+base_url = "http://127.0.0.1:11434/v1"
+protocols = ["openai"]
+embeddings_path = "/embeddings"
+embedding_models = ["nomic-embed-text:latest"]
+
+[providers.local-ollama.auth]
+mode = "none"
+
+[[providers.local-ollama.accounts]]
+name = "ollama-local"
+```
+
+The example intentionally has no upstream API key. Keep the allowlist and route
+paired: both omitted disables embeddings; setting only one is a configuration
+error. The supported downstream encoding is float JSON. Optional dimensions
+are forwarded and enforced against every returned vector. Input and response
+bounds and response validation are documented in the [API reference](api-reference.md).
+
+Ollama 0.17.7 with `nomic-embed-text:latest` was used to qualify the initial
+local wire shape (single/array text input, ordered finite vectors, usage). That
+does not guarantee other Ollama versions, models, third-party OpenAI-compatible
+servers, or dimensions behavior. Qualify the exact server/model pair before
+adding it to the allowlist. EggPool does not download model weights.

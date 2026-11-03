@@ -230,3 +230,19 @@ admin-visible only.
 Default member profiles do not create or copy budget rules. Configure user and
 instance ceilings separately; changing the default model profile leaves all
 existing budget rules and usage unchanged.
+# Embedding request limits
+
+The `/v1/embeddings` route has independent hard caps: 64 KiB request body,
+32 text inputs, 16 KiB per text, 64 KiB aggregate UTF-8 text, 8192 requested
+or returned dimensions, and 8 MiB provider response body. Inputs must be
+non-empty strings. Only finite float vectors are accepted; the vector count
+must equal the input count, indices must be unique and contiguous, and all
+vectors must have equal length. If `dimensions` was requested, each vector
+must have exactly that length. Base64 vectors and token-ID inputs are not
+supported.
+
+These limits do not alter the normal chat context/input/output limits. Hard
+token budgets use UTF-8 input bytes as a conservative pre-dispatch upper bound;
+embeddings generate no completion tokens. Hard USD budgets still require an
+operator tariff, following the ordinary hard-budget rule. Missing provider
+usage remains unreported rather than being estimated from returned vectors.

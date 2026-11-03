@@ -6,6 +6,7 @@
 pub mod admission;
 pub(crate) mod admission_fairness;
 pub mod body;
+pub mod embeddings;
 pub mod limits;
 pub(crate) mod resource_budget;
 

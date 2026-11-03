@@ -36,7 +36,7 @@ use health::{
     healthz, integration_profile, models_api, readyz, runtime_status, status_api, update_status,
     user_budget_api,
 };
-use inference::{chat_completions, messages, responses, responses_compact};
+use inference::{chat_completions, embeddings, messages, responses, responses_compact};
 use middleware::{
     admit_inference_body, authenticate, is_loopback_host, map_generation_error,
     validate_server_access, validate_server_key,
@@ -1189,6 +1189,12 @@ pub fn build_router(state: AppState) -> Router {
         .route("/api/status", get(status_api))
         .route("/api/user-budget", get(user_budget_api))
         .route("/v1/chat/completions", post(chat_completions))
+        .route(
+            "/v1/embeddings",
+            post(embeddings).layer(axum::extract::DefaultBodyLimit::max(
+                crate::request::embeddings::MAX_EMBEDDING_BODY_BYTES,
+            )),
+        )
         .route("/v1/messages", post(messages))
         .route("/v1/responses", post(responses))
         .route("/v1/responses/compact", post(responses_compact))
@@ -1435,6 +1441,7 @@ mod tests {
     fn inference_path_classification_covers_all_public_inference_routes() {
         for path in [
             "/v1/chat/completions",
+            "/v1/embeddings",
             "/v1/messages",
             "/v1/responses",
             "/v1/responses/compact",

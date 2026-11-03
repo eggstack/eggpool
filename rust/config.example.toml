@@ -507,6 +507,10 @@ enabled = false
 # id = "opencode-go"
 # base_url = "https://opencode.ai/zen/go/v1"
 # protocols = ["openai", "anthropic"]
+# Optional embeddings qualification is independent of chat support. Set both
+# values only after testing the exact provider/model pair:
+# embeddings_path = "/embeddings"
+# embedding_models = ["nomic-embed-text:latest"]
 # routing_priority = 0  # higher = preferred; default 0 means "load balance
 #                       # within this provider using the existing scorer".
 # [providers.opencode-go.stream_timeouts]
