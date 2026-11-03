@@ -86,6 +86,6 @@ Four distinct milestones receive closure evidence under plans/closure/tool-integ
 |---|---|---|---|---|
 | M001 backend config/readiness | closed | plans/implementation/tool-integration/001-eggsearch-backend-config-and-readiness.md | plans/closure/tool-integration/001-status.md | none |
 | M002 tool policy/scopes | closed | plans/implementation/tool-integration/002-tool-grants-and-credential-scopes.md | plans/closure/tool-integration/002-status.md | none |
-| M003 MCP gateway | blocked | plans/implementation/tool-integration/003-authenticated-mcp-gateway.md | pending | M005 canonical identity correction; live Eggsearch MCP session/transport and tools/call qualification |
+| M003 MCP gateway | ready | plans/implementation/tool-integration/003-authenticated-mcp-gateway.md | pending | M005 closed; Eggsearch 0.4.3 initialize/list/call contract qualified |
 | M004 hosted execution | blocked | plans/implementation/tool-integration/004-finite-hosted-tool-orchestration.md | pending | M003; current coordinator/IR interface qualification |
-| M005 canonical tool identity correction | active | plans/implementation/tool-integration/005-canonical-tool-identity-correction.md | pending | M002 closed; M001 catalog contract |
+| M005 canonical tool identity correction | closed | plans/implementation/tool-integration/005-canonical-tool-identity-correction.md | plans/closure/tool-integration/005-status.md | Exact shared identity list matches Eggsearch 0.4.3; M003 promoted to ready |

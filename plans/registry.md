@@ -12,7 +12,7 @@ Canonical direction:
 - `plans/002-long-term-roadmap.md`
 - `plans/003-planning-process.md`
 
-New optional application-interoperability planning (2026-11-03): [ADR-0007](adrs/ADR-0007-optional-tool-authority-and-hosted-execution-boundary.md) and [ADR-0008](adrs/ADR-0008-embedding-inference-surface-boundary.md) are accepted. The three roadmaps and six implementation plans remain staged behind their individual dependency and closure gates. M001–M002 are closed; M003–M004 and R001 remain blocked on their declared contracts; E001 remains blocked pending live provider qualification. Solo/SBC inference remains the default. No unrelated milestone is reopened.
+New optional application-interoperability planning (2026-11-03): [ADR-0007](adrs/ADR-0007-optional-tool-authority-and-hosted-execution-boundary.md) and [ADR-0008](adrs/ADR-0008-embedding-inference-surface-boundary.md) are accepted. M001, M002, and corrective M005 are closed; M003 is ready after supported Eggsearch 0.4.3 initialize/list/call qualification; M004 and R001 remain blocked on their declared contracts; E001 remains blocked pending live embedding qualification. Solo/SBC inference remains the default. No unrelated milestone is reopened.
 
 Legacy archive (pre-251, immutable, top level): `plans/001-*` through
 `plans/250-*` plus `python_hotpath_dispatch_compression_optimization.md`.
@@ -88,7 +88,7 @@ No new runtime, schema or performance claim lands with these plans.
 
 | Subsystem | Status | Roadmap | Current milestone | Dependencies or blockers |
 |---|---|---|---|---|
-| Optional tool integration | active | [tool integration roadmap](subsystems/tool-integration-roadmap.md) | M001–M002 closed; M003–M004 blocked; corrective M005 active | ADR-0007 accepted; M003 awaits M005 and supported Eggsearch live tools/call qualification. |
+| Optional tool integration | active | [tool integration roadmap](subsystems/tool-integration-roadmap.md) | M001–M002 and corrective M005 closed; M003 ready; M004 blocked | ADR-0007 accepted; M003's Eggsearch 0.4.3 initialize/list/call interface is qualified. |
 | Embedding routing | proposed | [embedding routing roadmap](subsystems/embedding-routing-roadmap.md) | E001 blocked | ADR-0008 accepted; qualified provider/model contract and live local backend required before publishing POST /v1/embeddings. |
 | Retrieval interoperability | proposed | [retrieval interoperability roadmap](subsystems/retrieval-interoperability-roadmap.md) | R001 blocked | Tool Integration M003 closed plus a backend-enforced document ACL/delegation contract; EggPool embeddings optional interface. |
 | Provider transport | closed | `plans/subsystems/provider-transport-roadmap.md` | M006 closed — Eggress 1.0.12 dependency refresh and requalification | M001–M006 closed; no successor registered. |
@@ -307,19 +307,18 @@ record is `plans/closure/deployment-packaging/008-status.md`.
 
 | Subsystem | Milestone | Status | Implementation plan | Dependencies / handoff note |
 |---|---|---|---|---|
+| Optional tool integration | M003 — Authenticated MCP gateway | ready | [M003 MCP gateway](implementation/tool-integration/003-authenticated-mcp-gateway.md) | M005 closed; Eggsearch 0.4.3 initialize/list/call contract qualified. |
 
 ## Active implementation plans
 
 | Subsystem | Milestone | Status | Implementation plan | Handoff note |
 |---|---|---|---|---|
-| Optional tool integration | M005 — Canonical tool identity correction | active | [M005 corrective plan](implementation/tool-integration/005-canonical-tool-identity-correction.md) | Align grant identity with M001's verified Eggsearch catalog before M003. |
 
 
 ## Blocked work
 
 | Subsystem | Milestone | Blocker |
 |---|---|---|
-| Optional tool integration | [M003 MCP gateway](implementation/tool-integration/003-authenticated-mcp-gateway.md) | M005 closure; supported Eggsearch MCP session/transport and live tools/call qualification. |
 | Optional tool integration | [M004 hosted orchestration](implementation/tool-integration/004-finite-hosted-tool-orchestration.md) | M003 closure and current coordinator/IR interface qualification; ADR-0007 accepted. |
 | Embedding routing | [E001 embeddings route](implementation/embedding-routing/001-openai-compatible-embeddings.md) | Accepted ADR-0008; qualified provider/model contract and live local backend. |
 | Retrieval interoperability | [R001 external RAG reference](implementation/retrieval-interoperability/001-external-rag-contract-and-reference.md) | Tool Integration M003 closure and secure backend document ACL/delegation interface; E001 is optional. |
@@ -354,6 +353,7 @@ Historical M007 blocker assessment at baseline `7e241ad` (`plans/closure/persist
 ## Recently closed
 
 | Subsystem / plan | Disposition | Evidence |
+| Tool Integration M005 — Canonical tool identity correction | closed — the grant authority and explicit readiness doctor share the exact ten-name Eggsearch 0.4.3 catalog; live initialize/list/call and rebuilt doctor pass; default/no-default strict lint and serial workspace suites pass; M003 promoted to ready | `plans/closure/tool-integration/005-status.md`, implementation `c115fdbc` |
 | Tool Integration M002 — Effective tool grants and credential scopes | closed — additive v65 default-deny policy, explicit discovery/invocation credential scopes, live revocation checks, content-free audit and backup/restore qualification; no invocation route | `plans/closure/tool-integration/002-status.md`, implementation `df2f6bb0`, restore test `cff31bde`, admin denial test `da0450b9` |
 | Routing Selection M009 — health effect ownership and terminal-withdrawal producer retirement | closed — the repository now contains one effect-application path and it is the live one: the parallel `HealthEffectApplier` that had no production caller, disabled jitter where the live path enables it, and wrote the account's escalation rung into a model durable row is deleted with its three public re-exports; the unreachable authoritative-absence producer, the health manager's in-memory terminal set, and the terminal-withdrawal branch they fed are removed; the durable terminal vocabulary is retained, annotated as producer-less, and still parsed and still enforced by the routing eligibility gate, so an existing `terminal_withdrawn` row keeps gating its model exactly as before; the backoff policy table, the reason vocabulary, the scope rules, the escalation rungs, the quarantine state machine, and the routing behaviour of a healthy system are unchanged; three new durable-effects tests, each guard shown failing on a deliberate perturbation | `plans/closure/routing-selection/009-status.md`; implementation `2304d6ca` |
 | Routing Selection M008 — durable health state repair and authentication-failure durability | closed — a legacy `model_unavailable` row with no model identity is skipped and counted at hydration instead of failing the batch, so a database written by a predecessor release no longer prevents EggPool from starting, and the skip is reported with a count and the reason vocabulary only; a skipped row grants neither an account-wide nor a model-wide suppression, because it carries no model identity to scope it by; the durable account-scoped scope is unique under the v64 partial unique index over `(account_id, reason)` where `model_id IS NULL`, with the duplicate rows the NULL-distinct table constraint admitted collapsed first; the live failure path now writes the deadline-less `authentication_failed` row on the `(account_id, NULL, 'authentication_failed')` key, so a rejected credential stays suppressed across a restart and is released by a credential rotation, while every other reason keeps its early return; the backoff policy table, the reason vocabulary, the scope rules, the escalation rungs, the quarantine state machine, and the routing behaviour of a healthy system are unchanged; six new durable-effects tests and one new migration test, each guard shown failing on a deliberate revert | `plans/closure/routing-selection/008-status.md`; implementation `b66373f2` |

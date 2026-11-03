@@ -1,6 +1,6 @@
 # Tool Integration M003 — Authenticated, scoped MCP gateway
 
-Status: blocked
+Status: ready
 
 Repository baseline: `0e021c1ffe55803aff5f325033e65313dca9f1dc` (planning, 2026-11-03)
 
@@ -18,7 +18,7 @@ Serve a disabled-by-default, authenticated tools-only MCP endpoint through EggPo
 
 ## 2. Why blocked
 
-**Hard:** M002 is closed with ADR-0007 accepted. **Interface and operational gates still open:** qualify version-appropriate Eggsearch Streamable HTTP session, discovery/list/call negotiation against a pinned local fixture and real loopback service. The effective grant interface is stable and may now be consumed.
+**Hard:** M002 is closed with ADR-0007 accepted. M005 corrected the grant list to the exact verified Eggsearch catalog. **Interface and operational gates:** Eggsearch 0.4.3 Streamable HTTP initialize, discovery/list, and `tools/call` were qualified against the pinned local service. The effective grant interface is stable and may now be consumed.
 
 ## 3. Current evidence
 
