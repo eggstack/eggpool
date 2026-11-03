@@ -313,6 +313,7 @@ record is `plans/closure/deployment-packaging/008-status.md`.
 
 | Subsystem | Milestone | Status | Implementation plan | Handoff note |
 |---|---|---|---|---|
+| Optional tool integration | M002 — Effective tool grants and credential scopes | active | [M002 plan](implementation/tool-integration/002-tool-grants-and-credential-scopes.md) | Default-deny authorization and explicit credential scopes; no invocation route. |
 
 
 ## Blocked work

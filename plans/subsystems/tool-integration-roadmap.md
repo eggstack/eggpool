@@ -85,6 +85,6 @@ Four distinct milestones receive closure evidence under plans/closure/tool-integ
 | Milestone | Status | Implementation plan | Closure record | Blockers |
 |---|---|---|---|---|
 | M001 backend config/readiness | closed | plans/implementation/tool-integration/001-eggsearch-backend-config-and-readiness.md | plans/closure/tool-integration/001-status.md | none |
-| M002 tool policy/scopes | ready | plans/implementation/tool-integration/002-tool-grants-and-credential-scopes.md | pending | none; M001 closed and ADR-0007 accepted |
+| M002 tool policy/scopes | active | plans/implementation/tool-integration/002-tool-grants-and-credential-scopes.md | pending | none; M001 closed and ADR-0007 accepted |
 | M003 MCP gateway | blocked | plans/implementation/tool-integration/003-authenticated-mcp-gateway.md | pending | M002; Eggsearch contract qualification |
 | M004 hosted execution | blocked | plans/implementation/tool-integration/004-finite-hosted-tool-orchestration.md | pending | M003; ADR-0007 acceptance |
