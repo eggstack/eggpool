@@ -12,6 +12,8 @@ Canonical direction:
 - `plans/002-long-term-roadmap.md`
 - `plans/003-planning-process.md`
 
+New optional application-interoperability planning (2026-11-03): [ADR-0007](adrs/ADR-0007-optional-tool-authority-and-hosted-execution-boundary.md) and [ADR-0008](adrs/ADR-0008-embedding-inference-surface-boundary.md) are **proposed**, not accepted. The three new roadmaps and six implementation plans are planning-only; no runtime feature is shipped. M001 alone is dependency-ready because it changes only operator configuration and diagnostics. Solo/SBC inference remains the default. No existing milestone is reopened or declared newly complete.
+
 Legacy archive (pre-251, immutable, top level): `plans/001-*` through
 `plans/250-*` plus `python_hotpath_dispatch_compression_optimization.md`.
 Most recently closed: Request Admission and Wire M008 (remote compaction capability
@@ -86,6 +88,9 @@ No new runtime, schema or performance claim lands with these plans.
 
 | Subsystem | Status | Roadmap | Current milestone | Dependencies or blockers |
 |---|---|---|---|---|
+| Optional tool integration | active | [tool integration roadmap](subsystems/tool-integration-roadmap.md) | M001 ready; M002–M004 blocked | [ADR-0007](adrs/ADR-0007-optional-tool-authority-and-hosted-execution-boundary.md) proposed. Operator-only Eggsearch readiness first; tool policy, authenticated MCP access, then opt-in finite orchestration are separately gated. |
+| Embedding routing | proposed | [embedding routing roadmap](subsystems/embedding-routing-roadmap.md) | E001 blocked | [ADR-0008](adrs/ADR-0008-embedding-inference-surface-boundary.md) acceptance required before publishing POST /v1/embeddings. |
+| Retrieval interoperability | proposed | [retrieval interoperability roadmap](subsystems/retrieval-interoperability-roadmap.md) | R001 blocked | Tool Integration M003 closed plus a backend-enforced document ACL/delegation contract; EggPool embeddings optional interface. |
 | Provider transport | closed | `plans/subsystems/provider-transport-roadmap.md` | M006 closed — Eggress 1.0.12 dependency refresh and requalification | M001–M006 closed; no successor registered. |
 | Provider profile metadata corrective | closed | `plans/subsystems/provider-profile-metadata-corrective-roadmap.md` | M001 closed — provider template endpoint/source reconciliation | M001 terminal; no successor registered. |
 | Provider profile metadata planning/documentation reconciliation | closed | `plans/subsystems/provider-profile-metadata-planning-reconciliation-corrective-roadmap.md` | C001 closed — closed-roadmap/source-truth reconciliation | No successor registered. |
@@ -302,6 +307,7 @@ record is `plans/closure/deployment-packaging/008-status.md`.
 
 | Subsystem | Milestone | Status | Implementation plan | Dependencies / handoff note |
 |---|---|---|---|---|
+| Optional tool integration | M001 — Eggsearch backend configuration and readiness | ready | [M001 handoff](implementation/tool-integration/001-eggsearch-backend-config-and-readiness.md) | Operator-only local backend probe; no public route and no ADR-0007 acceptance needed yet. |
 
 ## Active implementation plans
 
@@ -313,6 +319,11 @@ record is `plans/closure/deployment-packaging/008-status.md`.
 
 | Subsystem | Milestone | Blocker |
 |---|---|---|
+| Optional tool integration | [M002 grants/scopes](implementation/tool-integration/002-tool-grants-and-credential-scopes.md) | M001 closure and proposed [ADR-0007](adrs/ADR-0007-optional-tool-authority-and-hosted-execution-boundary.md) acceptance. |
+| Optional tool integration | [M003 MCP gateway](implementation/tool-integration/003-authenticated-mcp-gateway.md) | M002 closure; supported Eggsearch MCP version/transport contract qualification. |
+| Optional tool integration | [M004 hosted orchestration](implementation/tool-integration/004-finite-hosted-tool-orchestration.md) | M003 closure and ADR-0007; current coordinator/IR interface qualification. |
+| Embedding routing | [E001 embeddings route](implementation/embedding-routing/001-openai-compatible-embeddings.md) | Proposed [ADR-0008](adrs/ADR-0008-embedding-inference-surface-boundary.md) acceptance; qualified provider/model contract. |
+| Retrieval interoperability | [R001 external RAG reference](implementation/retrieval-interoperability/001-external-rag-contract-and-reference.md) | Tool Integration M003 closure and secure backend document ACL/delegation interface; E001 is optional. |
 
 Unblock audit (on-prem user access reopening after M012 closure, baseline
 `3c7def1e`): M001–M013 closure records remain immutable; no
