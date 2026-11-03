@@ -8,7 +8,7 @@ Source roadmap: plans/subsystems/embedding-routing-roadmap.md#7-milestones
 
 Long-term requirements: plans/000-long-term-specification.md §§1–5; plans/001-terminology-and-domain-model.md; plans/002-long-term-roadmap.md §§1, 4–5; plans/003-planning-process.md
 
-Applicable ADR: plans/adrs/ADR-0008-embedding-inference-surface-boundary.md (proposed, hard gate)
+Applicable ADR: plans/adrs/ADR-0008-embedding-inference-surface-boundary.md (accepted)
 
 Primary class: capability
 

@@ -1,6 +1,6 @@
 # ADR-0008: Bounded embedding inference surface and capability discovery
 
-Status: proposed
+Status: accepted
 
 Date: 2026-11-03
 
@@ -73,3 +73,14 @@ Require an actual local compatible embedding backend plus a scripted/mock provid
 ## Supersession
 
 None.
+
+## Acceptance record
+
+Accepted 2026-11-03 for the bounded, finite OpenAI-compatible embedding
+operation described above. The contract keeps embedding input/output separate
+from dialogue IR, requires explicit provider/model eligibility, and preserves
+shared identity, model policy, quota, budget, cancellation, and finalization
+ownership. Acceptance authorizes implementation planning only; E001 remains
+blocked until a local compatible provider and the required test interface are
+qualified. No vector storage, indexing, retrieval, or default local model
+runtime is authorized.

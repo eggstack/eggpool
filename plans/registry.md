@@ -12,7 +12,7 @@ Canonical direction:
 - `plans/002-long-term-roadmap.md`
 - `plans/003-planning-process.md`
 
-New optional application-interoperability planning (2026-11-03): [ADR-0007](adrs/ADR-0007-optional-tool-authority-and-hosted-execution-boundary.md) is accepted; [ADR-0008](adrs/ADR-0008-embedding-inference-surface-boundary.md) remains proposed. The three roadmaps and six implementation plans are staged behind their individual dependency and closure gates. M001 is closed; M002 is being promoted after its sole ADR gate was accepted. Solo/SBC inference remains the default. No unrelated milestone is reopened.
+New optional application-interoperability planning (2026-11-03): [ADR-0007](adrs/ADR-0007-optional-tool-authority-and-hosted-execution-boundary.md) and [ADR-0008](adrs/ADR-0008-embedding-inference-surface-boundary.md) are accepted. The three roadmaps and six implementation plans remain staged behind their individual dependency and closure gates. M001 is closed; M002 is active; E001 remains blocked pending live provider qualification. Solo/SBC inference remains the default. No unrelated milestone is reopened.
 
 Legacy archive (pre-251, immutable, top level): `plans/001-*` through
 `plans/250-*` plus `python_hotpath_dispatch_compression_optimization.md`.
@@ -89,7 +89,7 @@ No new runtime, schema or performance claim lands with these plans.
 | Subsystem | Status | Roadmap | Current milestone | Dependencies or blockers |
 |---|---|---|---|---|
 | Optional tool integration | active | [tool integration roadmap](subsystems/tool-integration-roadmap.md) | M001 closed; M002–M004 blocked | [ADR-0007](adrs/ADR-0007-optional-tool-authority-and-hosted-execution-boundary.md) remains proposed; M002 is blocked only on its acceptance. |
-| Embedding routing | proposed | [embedding routing roadmap](subsystems/embedding-routing-roadmap.md) | E001 blocked | [ADR-0008](adrs/ADR-0008-embedding-inference-surface-boundary.md) acceptance required before publishing POST /v1/embeddings. |
+| Embedding routing | proposed | [embedding routing roadmap](subsystems/embedding-routing-roadmap.md) | E001 blocked | ADR-0008 accepted; qualified provider/model contract and live local backend required before publishing POST /v1/embeddings. |
 | Retrieval interoperability | proposed | [retrieval interoperability roadmap](subsystems/retrieval-interoperability-roadmap.md) | R001 blocked | Tool Integration M003 closed plus a backend-enforced document ACL/delegation contract; EggPool embeddings optional interface. |
 | Provider transport | closed | `plans/subsystems/provider-transport-roadmap.md` | M006 closed — Eggress 1.0.12 dependency refresh and requalification | M001–M006 closed; no successor registered. |
 | Provider profile metadata corrective | closed | `plans/subsystems/provider-profile-metadata-corrective-roadmap.md` | M001 closed — provider template endpoint/source reconciliation | M001 terminal; no successor registered. |
@@ -322,7 +322,7 @@ record is `plans/closure/deployment-packaging/008-status.md`.
 |---|---|---|
 | Optional tool integration | [M003 MCP gateway](implementation/tool-integration/003-authenticated-mcp-gateway.md) | M002 closure; supported Eggsearch MCP version/transport contract qualification. |
 | Optional tool integration | [M004 hosted orchestration](implementation/tool-integration/004-finite-hosted-tool-orchestration.md) | M003 closure and ADR-0007; current coordinator/IR interface qualification. |
-| Embedding routing | [E001 embeddings route](implementation/embedding-routing/001-openai-compatible-embeddings.md) | Proposed [ADR-0008](adrs/ADR-0008-embedding-inference-surface-boundary.md) acceptance; qualified provider/model contract. |
+| Embedding routing | [E001 embeddings route](implementation/embedding-routing/001-openai-compatible-embeddings.md) | Accepted ADR-0008; qualified provider/model contract and live local backend. |
 | Retrieval interoperability | [R001 external RAG reference](implementation/retrieval-interoperability/001-external-rag-contract-and-reference.md) | Tool Integration M003 closure and secure backend document ACL/delegation interface; E001 is optional. |
 
 Unblock audit (on-prem user access reopening after M012 closure, baseline

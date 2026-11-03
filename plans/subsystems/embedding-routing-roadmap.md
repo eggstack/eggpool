@@ -11,7 +11,7 @@ Long-term references:
 
 Related ADRs:
 
-- plans/adrs/ADR-0008-embedding-inference-surface-boundary.md (proposed)
+- plans/adrs/ADR-0008-embedding-inference-surface-boundary.md (accepted)
 
 ## 1. Purpose and ownership boundary
 
