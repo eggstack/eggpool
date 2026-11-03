@@ -88,7 +88,7 @@ No new runtime, schema or performance claim lands with these plans.
 
 | Subsystem | Status | Roadmap | Current milestone | Dependencies or blockers |
 |---|---|---|---|---|
-| Optional tool integration | active | [tool integration roadmap](subsystems/tool-integration-roadmap.md) | M001–M002 and corrective M005 closed; M003 ready; M004 blocked | ADR-0007 accepted; M003's Eggsearch 0.4.3 initialize/list/call interface is qualified. |
+| Optional tool integration | active | [tool integration roadmap](subsystems/tool-integration-roadmap.md) | M001–M002 and corrective M005 closed; M003 closing; M004 blocked | M003 implementation and live Eggsearch 0.4.3 initialize/list/call are qualified; final workspace and operational evidence are being recorded. |
 | Embedding routing | active | [embedding routing roadmap](subsystems/embedding-routing-roadmap.md) | E001 active | E001 implementation in progress; local Ollama contract qualified. |
 | Retrieval interoperability | proposed | [retrieval interoperability roadmap](subsystems/retrieval-interoperability-roadmap.md) | R001 blocked | Tool Integration M003 closed plus a backend-enforced document ACL/delegation contract; EggPool embeddings optional interface. |
 | Provider transport | closed | `plans/subsystems/provider-transport-roadmap.md` | M006 closed — Eggress 1.0.12 dependency refresh and requalification | M001–M006 closed; no successor registered. |
@@ -312,7 +312,7 @@ record is `plans/closure/deployment-packaging/008-status.md`.
 
 | Subsystem | Milestone | Status | Implementation plan | Handoff note |
 |---|---|---|---|---|
-| Optional tool integration | M003 — Authenticated MCP gateway | active | [M003 MCP gateway](implementation/tool-integration/003-authenticated-mcp-gateway.md) | Eggsearch 0.4.3 initialize/list/call contract qualified; implement disabled-by-default authenticated gateway. |
+| Optional tool integration | M003 — Authenticated MCP gateway | closing | [M003 MCP gateway](implementation/tool-integration/003-authenticated-mcp-gateway.md) | Implementation landed; final default/no-default workspace and SBC evidence are being recorded. |
 | Embedding routing | E001 — OpenAI-compatible embeddings | active | [E001 embeddings route](implementation/embedding-routing/001-openai-compatible-embeddings.md) | Implement the bounded route using the qualified Ollama 0.17.7 `nomic-embed-text` contract. |
 
 

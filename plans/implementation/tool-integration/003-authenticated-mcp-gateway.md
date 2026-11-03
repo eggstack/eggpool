@@ -1,6 +1,6 @@
 # Tool Integration M003 — Authenticated, scoped MCP gateway
 
-Status: active
+Status: closing
 
 Repository baseline: `0e021c1ffe55803aff5f325033e65313dca9f1dc` (planning, 2026-11-03)
 
