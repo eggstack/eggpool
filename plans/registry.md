@@ -307,12 +307,12 @@ record is `plans/closure/deployment-packaging/008-status.md`.
 
 | Subsystem | Milestone | Status | Implementation plan | Dependencies / handoff note |
 |---|---|---|---|---|
-| Optional tool integration | M001 — Eggsearch backend configuration and readiness | ready | [M001 handoff](implementation/tool-integration/001-eggsearch-backend-config-and-readiness.md) | Operator-only local backend probe; no public route and no ADR-0007 acceptance needed yet. |
 
 ## Active implementation plans
 
 | Subsystem | Milestone | Status | Implementation plan | Handoff note |
 |---|---|---|---|---|
+| Optional tool integration | M001 — Eggsearch backend configuration and readiness | active | [M001 handoff](implementation/tool-integration/001-eggsearch-backend-config-and-readiness.md) | Operator-only local backend probe; no public route and no ADR-0007 acceptance needed yet. |
 
 
 ## Blocked work
