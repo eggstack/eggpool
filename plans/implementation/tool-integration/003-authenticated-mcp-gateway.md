@@ -1,6 +1,6 @@
 # Tool Integration M003 — Authenticated, scoped MCP gateway
 
-Status: closing
+Status: implemented
 
 Repository baseline: `0e021c1ffe55803aff5f325033e65313dca9f1dc` (planning, 2026-11-03)
 
@@ -16,13 +16,20 @@ Primary class: capability
 
 Serve a disabled-by-default, authenticated tools-only MCP endpoint through EggPool for an operator-configured local Eggsearch backend. Valid managed users can discover and invoke exactly their allowed tools; ordinary inference endpoints stay transparent and independent.
 
-## 2. Why blocked
+## 2. Readiness and dependencies
 
-**Hard:** M002 is closed with ADR-0007 accepted. M005 corrected the grant list to the exact verified Eggsearch catalog. **Interface and operational gates:** Eggsearch 0.4.3 Streamable HTTP initialize, discovery/list, and `tools/call` were qualified against the pinned local service. The effective grant interface is stable and may now be consumed.
+M002 and corrective M005 are closed and ADR-0007 is accepted. Eggsearch 0.4.3
+initialize/list/call and the effective grant interface were qualified before
+implementation. The gateway is implemented and conditionally closed; only
+physical-SBC disabled/enabled footprint and contention evidence remains.
 
 ## 3. Current evidence
 
-rust/src/server/mod.rs hosts thin Axum routes and auth middleware; rust/src/server/middleware.rs validates managed identities. rust/src/identity.rs distinguishes personal tokens from browser sessions and legacy shared credentials. rust/src/server/inference.rs delegates to coordinator, which owns provider retries/finalization. Eggsearch docs/deployment.md documents loopback-only /mcp, Host/Origin checks, 1 MiB POST and 120s transport ceiling; docs/tool-matrix.md covers structuredContent, outputSchema, trust markers, tool fingerprint, compact response detail, error taxonomy and protocol versions. EggPool has no MCP endpoint today.
+`rust/src/server/tools.rs` owns the authenticated, bounded MCP adapter;
+`rust/src/server/mod.rs` mounts it only under both operator gates, and
+`rust/src/server/middleware.rs` requires personal managed-token auth.
+`rust/src/tool_policy.rs` supplies the canonical catalog and current
+authorization. Existing inference endpoints remain independent.
 
 ## 4. Invariants
 
