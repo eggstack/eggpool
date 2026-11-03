@@ -8,7 +8,7 @@ Source roadmap: plans/subsystems/retrieval-interoperability-roadmap.md#7-milesto
 
 Long-term requirements: plans/000-long-term-specification.md §§1–6; plans/001-terminology-and-domain-model.md; plans/002-long-term-roadmap.md §§4–5; plans/003-planning-process.md
 
-Applicable ADRs: plans/adrs/ADR-0007-optional-tool-authority-and-hosted-execution-boundary.md (proposed); plans/adrs/ADR-0008-embedding-inference-surface-boundary.md (proposed; interface only for EggPool embedding route)
+Applicable ADRs: plans/adrs/ADR-0007-optional-tool-authority-and-hosted-execution-boundary.md (accepted); plans/adrs/ADR-0008-embedding-inference-surface-boundary.md (accepted; interface only for EggPool embedding route)
 
 Primary class: capability
 
@@ -18,11 +18,11 @@ Qualify two realistic interoperability paths without a built-in RAG system: (A) 
 
 ## 2. Readiness and dependencies
 
-**Hard:** Tool Integration M003 gateway closure for any public MCP retrieval capability and ADR-0007 acceptance. **Interface:** Embedding Routing E001 if the reference chooses EggPool as its embeddings endpoint; not a hard dependency for external embeddings. **Operational:** an actual local document retrieval service with a governed two-user test fixture. Path A exploration/documentation can precede closure but does not mark R001 complete. Do not claim the upstream application exposes an MCP server unless verified in that exact version.
+**Hard:** Tool Integration M003 closure for any public MCP retrieval capability and ADR-0007 acceptance. Both ADRs are accepted; M003 is conditionally closed with software capability and live Eggsearch qualification complete, while physical SBC evidence remains. **Interface:** Embedding Routing E001 if the reference chooses EggPool as its embeddings endpoint; E001 now provides an opt-in route and is conditionally closed pending physical SBC evidence. E001 is not a hard dependency for external embeddings. **Operational:** an actual local document retrieval service with a governed two-user test fixture. Path A exploration/documentation can precede closure but does not mark R001 complete. Do not claim the upstream application exposes an MCP server unless verified in that exact version.
 
 ## 3. Current implementation evidence
 
-EggPool README documents Chat/Responses/Messages and managed-user inference; docs/api-reference.md has no ingestion, files, vector collections or embeddings path at this baseline. Eggsearch README and docs/tool-matrix.md describe web/repository evidence tools; these are not a persistent private-document collection. Current rust/src/db/ owns request/accounting data and stays a single gate. PrivateGPT's external OpenAI-compatible inference can be configured to use a router, but embedding endpoint and model compatibility need independent validation.
+EggPool owns Chat/Responses/Messages, the authenticated Eggsearch gateway, and the opt-in embedding route. Eggsearch's vetted catalog is fixed to web/repository/provider tools; it is not a private document collection and the gateway does not accept arbitrary retrieval adapters. `docs/retrieval-interoperability.md` documents a PrivateGPT 1.0.1 solo reference, but its attempted `/v1/artifacts/ingest` failed after EggPool returned `Request could not be admitted` to PrivateGPT's embedding request. Direct EggPool→Ollama embeddings succeeded, so the client-request/admission discrepancy remains unresolved. No ingest→retrieve→citation cycle was completed. No backend-enforced two-user document ACL/delegation fixture or adapter exists. EggPool's database remains request/accounting-only and a single gate.
 
 ## 4. Invariants
 

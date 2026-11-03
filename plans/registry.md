@@ -90,7 +90,7 @@ No new runtime, schema or performance claim lands with these plans.
 |---|---|---|---|---|
 | Optional tool integration | active | [tool integration roadmap](subsystems/tool-integration-roadmap.md) | M001, M002 and corrective M005 closed; M003 and M004 conditionally closed | M003 and M004 physical SBC footprint evidence remains; M004 also requires a successful live hosted-execution trace. |
 | Embedding routing | closing | [embedding routing roadmap](subsystems/embedding-routing-roadmap.md) | E001 conditionally closed | Physical SBC absent-provider footprint and contention evidence remains. |
-| Retrieval interoperability | proposed | [retrieval interoperability roadmap](subsystems/retrieval-interoperability-roadmap.md) | R001 blocked | Tool Integration M003 closed plus a backend-enforced document ACL/delegation contract; EggPool embeddings optional interface. |
+| Retrieval interoperability | active | [retrieval interoperability roadmap](subsystems/retrieval-interoperability-roadmap.md) | R001 blocked | PrivateGPT ingest/admission failure and no backend-enforced document ACL/delegation adapter; EggPool embeddings remain optional. |
 | Provider transport | closed | `plans/subsystems/provider-transport-roadmap.md` | M006 closed — Eggress 1.0.12 dependency refresh and requalification | M001–M006 closed; no successor registered. |
 | Provider profile metadata corrective | closed | `plans/subsystems/provider-profile-metadata-corrective-roadmap.md` | M001 closed — provider template endpoint/source reconciliation | M001 terminal; no successor registered. |
 | Provider profile metadata planning/documentation reconciliation | closed | `plans/subsystems/provider-profile-metadata-planning-reconciliation-corrective-roadmap.md` | C001 closed — closed-roadmap/source-truth reconciliation | No successor registered. |
@@ -319,7 +319,7 @@ record is `plans/closure/deployment-packaging/008-status.md`.
 
 | Subsystem | Milestone | Blocker |
 |---|---|---|
-| Retrieval interoperability | [R001 external RAG reference](implementation/retrieval-interoperability/001-external-rag-contract-and-reference.md) | Tool Integration M003 closure and secure backend document ACL/delegation interface; E001 is optional. |
+| Retrieval interoperability | [R001 external RAG reference](implementation/retrieval-interoperability/001-external-rag-contract-and-reference.md), [blocked closure record](closure/retrieval-interoperability/001-status.md) | PrivateGPT ingest/admission failure and secure backend document ACL/delegation interface; E001 is optional. |
 
 Unblock audit (on-prem user access reopening after M012 closure, baseline
 `3c7def1e`): M001–M013 closure records remain immutable; no

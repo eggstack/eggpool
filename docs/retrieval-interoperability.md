@@ -43,9 +43,13 @@ unique fact, ingest it through the PrivateGPT version's own documented ingest
 API, ask a question whose answer is in that fixture, then inspect the returned
 source citation and resolve it to the same PrivateGPT-owned document revision.
 Repeat with an unrelated question to confirm that the answer does not cite the
-fixture. This repository has not run that full PrivateGPT ingest/retrieval
-cycle; the topology above is an operator reference, not a claim that EggPool
-provides document ACLs or citations.
+fixture. PrivateGPT 1.0.1 was started against EggPool with Ollama 0.17.7;
+direct model discovery and embedding calls succeeded, but the documented
+`/v1/artifacts/ingest` call failed when EggPool rejected PrivateGPT's embedding
+request with `Request could not be admitted`. No retrieval or citation check
+was reached, and the request/admission discrepancy is unresolved. The topology
+above remains an operator reference, not a claim that EggPool provides
+document ACLs or citations.
 
 ## Managed users and MCP retrieval
 

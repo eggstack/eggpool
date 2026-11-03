@@ -1,6 +1,6 @@
 # Retrieval Interoperability Roadmap
 
-Status: proposed
+Status: active
 
 Long-term references:
 
@@ -11,8 +11,8 @@ Long-term references:
 
 Related ADRs:
 
-- plans/adrs/ADR-0007-optional-tool-authority-and-hosted-execution-boundary.md (proposed)
-- plans/adrs/ADR-0008-embedding-inference-surface-boundary.md (proposed; optional interface)
+- plans/adrs/ADR-0007-optional-tool-authority-and-hosted-execution-boundary.md (accepted)
+- plans/adrs/ADR-0008-embedding-inference-surface-boundary.md (accepted; optional interface)
 
 ## 1. Purpose and ownership boundary
 
@@ -34,7 +34,7 @@ No new EggPool document DB, vector index or background ingestion process, no fil
 
 ## 4. Current state
 
-EggPool offers inference APIs and managed identities/budgets, not an embeddings route or indexed retrieval. Eggsearch offers web/repo/research tools and deterministic evidence bundles, but not a persistent private-document RAG collection. PrivateGPT can already consume an external OpenAI-compatible inference API; using EggPool as its LLM backend should be qualified independently of any EggPool-hosted MCP adapter. No assertion is made that PrivateGPT exposes an MCP retrieval tool directly.
+EggPool offers inference APIs, an opt-in embeddings route, and a fixed Eggsearch MCP gateway, but no indexed private-document retrieval. Eggsearch's vetted catalog is not a persistent private-document RAG collection. PrivateGPT 1.0.1 was configured to use EggPool; direct model discovery and embedding calls succeeded, but document ingestion failed when PrivateGPT's embedding request received `Request could not be admitted`. No full RAG or citation claim is made. No assertion is made that PrivateGPT exposes an MCP retrieval tool directly.
 
 ## 5. Target architecture
 
@@ -42,7 +42,7 @@ Two supported deployment patterns: (A) external retrieval app calls EggPool infe
 
 ## 6. Dependency graph
 
-- R001: hard Tool Integration M003 closure for pattern B; interface Embedding Routing E001 if using EggPool embeddings; pattern A may be qualified separately using external embeddings without waiting for E001. No hard dependency on hosted orchestration M004.
+- R001: Tool Integration M003 is conditionally closed, with its software capability/live Eggsearch qualification complete and physical SBC evidence remaining; pattern B still lacks a secure retrieval adapter. Embedding Routing E001 is conditionally closed and provides an optional interface. No hard dependency on hosted orchestration M004.
 - Operational: fixture retrieval service with at least two disjoint principals/collections; working PrivateGPT instance or equivalent for pattern A.
 - No migration/storage dependency on EggPool beyond tool policy already delivered by T002.
 
@@ -71,4 +71,4 @@ R001 closure includes a repeatable reference deployment, two-user security regre
 
 | Milestone | Status | Implementation plan | Closure record | Blockers |
 |---|---|---|---|---|
-| R001 external retrieval | blocked | plans/implementation/retrieval-interoperability/001-external-rag-contract-and-reference.md | pending | Tool Integration M003; retrieval ACL interface |
+| R001 external retrieval | blocked | plans/implementation/retrieval-interoperability/001-external-rag-contract-and-reference.md | plans/closure/retrieval-interoperability/001-status.md | PrivateGPT ingest/admission failure; no backend-enforced document ACL/delegation adapter or two-principal suite |
