@@ -56,6 +56,11 @@ The probe is disabled unless `[tools].enabled = true`; EggPool never starts
 Eggsearch. See [deployment](deployment.md#optional-eggsearch-service) for
 configuration and the upstream service lifecycle.
 
+The optional MCP route additionally requires `[tools].gateway_enabled = true`
+and a server restart. Issue personal tokens with `--tool-discovery` and/or
+`--tool-invocation` as needed, then grant exact Eggsearch tools with
+`eggpool users tool-policy`. The route is `POST /api/tools/v1/mcp`.
+
 ## Config & keys
 
 | Command | Description |

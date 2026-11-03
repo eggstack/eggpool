@@ -21,6 +21,7 @@ The subsystem is six flat runtime modules plus two HTTP adapter surfaces:
 | `rust/src/web_session.rs` | Opaque browser sessions, the CSRF digest, and bounded local login throttling |
 | `rust/src/model_policy.rs` | Versioned, user-specific model authorization (profiles, exact rules, per-user overrides, instance denials) |
 | `rust/src/tool_policy.rs` | Default-deny Eggsearch discovery/invocation authorization, explicit credential scopes, exact profile/user rules, instance denials, and content-free audit mutations |
+| `rust/src/server/tools.rs` | Disabled-by-default authenticated MCP JSON POST gateway; bounded backend operations, per-request grant rechecks, and user-bound downstream sessions |
 | `rust/src/user_budget.rs` | Durable per-user budget rules, admission holds, attempt usage, and settled usage windows |
 | `rust/src/instance_budget.rs` | The instance-global budget scope intersected with the per-user rules |
 | `rust/src/server/auth.rs` | Browser login, session cookies, CSRF forms, and forwarded-HTTPS validation |

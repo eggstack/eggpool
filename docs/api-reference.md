@@ -149,9 +149,19 @@ refresh after an administrator changes model access.
 
 Personal credentials may be issued with separate `tools:discover:eggsearch`
 and `tools:invoke:eggsearch` scopes. Existing credentials keep their original
-scopes, and no tool gateway or public tool invocation route is provided by this
-release. Tool grants are independently default-deny and do not affect model
-authorization.
+scopes. Tool grants are independently default-deny and do not affect model
+authorization. With `[tools].enabled = true` and
+`[tools].gateway_enabled = true`, the managed-user-only
+`POST /api/tools/v1/mcp` route exposes authorized Eggsearch tools using MCP
+`2025-03-26`. It supports JSON POST requests for `initialize`,
+`notifications/initialized`, `tools/list`, and `tools/call`; it rejects
+JSON-RPC batches and other methods, does not implement downstream GET/SSE
+streams, resources, prompts, or session resumption, and does not change
+Chat/Responses/Messages tool execution semantics. Request bodies are capped at
+128 KiB, tool arguments at 32 KiB, backend responses at 1 MiB, concurrent
+backend operations at 16, and sessions at 1,024 with a 30-minute idle expiry.
+Only the configured loopback Eggsearch 0.4.3 service is contacted. Credentials
+are never forwarded; trust labels and structured tool results are preserved.
 
 `GET /api/user-budget` is available to personal tokens and browser sessions.
 Members can read only their own rules and rollups; an active admin may select a

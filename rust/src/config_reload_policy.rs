@@ -922,7 +922,7 @@ const FIELD_DISPOSITIONS: &[(&str, ReloadDisposition)] = &[
     ("server.threads", ReloadDisposition::RestartRequired),
     // Operator-only diagnostic connection. It is read by a short-lived CLI
     // command and is absent from runtime generations.
-    ("tools", ReloadDisposition::Ignored),
+    ("tools", ReloadDisposition::RestartRequired),
     ("transcoder", ReloadDisposition::Live),
     ("update_checker.enabled", ReloadDisposition::RestartRequired),
     ("upstream.base_url", ReloadDisposition::RestartRequired),

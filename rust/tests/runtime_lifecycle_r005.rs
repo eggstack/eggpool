@@ -99,14 +99,14 @@ fn exact_r001_field_dispositions_are_ported() {
             .iter()
             .filter(|(_, disposition)| disposition == "restart_required")
             .count(),
-        94
+        95
     );
     assert_eq!(
         actual
             .iter()
             .filter(|(_, disposition)| disposition == "ignored")
             .count(),
-        1
+        0
     );
 }
 
@@ -229,19 +229,20 @@ fn advertised_endpoint_change_is_live_and_noop_is_empty() {
 }
 
 #[test]
-fn operator_tool_backend_config_is_ignored_by_runtime_reload() {
+fn tool_gateway_config_requires_restart() {
     let old = Config::default();
     let mut new = old.clone();
     new.tools.enabled = true;
+    new.tools.gateway_enabled = true;
     new.tools.base_url = "http://127.0.0.1:11320/mcp".to_owned();
     let transition = classify_transition(&old, &new).expect("tools config transition");
     assert_eq!(transition.diff().changes.len(), 1);
     assert_eq!(transition.diff().changes[0].path, "tools");
     assert_eq!(
         transition.diff().changes[0].disposition,
-        ReloadDisposition::Ignored
+        ReloadDisposition::RestartRequired
     );
-    assert!(!transition.has_restart_required());
+    assert!(transition.has_restart_required());
 }
 
 #[test]

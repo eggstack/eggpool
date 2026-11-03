@@ -6,6 +6,20 @@ Codex and OpenCode additionally support a managed lifecycle that installs a gene
 
 `eggpool configremote` is the headless companion: on the EggPool host it exports a small secret-free `epc1` connection profile for Codex/OpenCode running on other machines. Local `configsetup` writes the local filesystem; `configremote` never touches a desktop filesystem and never mutates EggPool config to manufacture a setup.
 
+## Optional EggPool MCP tools
+
+The tools gateway is a separate, disabled-by-default MCP endpoint. Configure
+the agent's Streamable HTTP MCP client to use
+`http://<eggpool-host>:11300/api/tools/v1/mcp` (or the HTTPS URL of the
+operator-managed reverse proxy) and provide a personal EggPool token through
+the agent's secret/environment mechanism. The token needs the
+`tools:discover:eggsearch` scope for listing and `tools:invoke:eggsearch` for
+calling, and an administrator must grant the specific tools. The route
+supports MCP `2025-03-26` initialize, list, and call over JSON POST; clients
+that require downstream GET/SSE streams, resources, prompts, or resumable
+sessions are not supported. Ordinary inference tool declarations remain
+client-executed.
+
 ## Supported Targets
 
 For hard token budgets, clients must send an explicit output cap supported by

@@ -1067,6 +1067,7 @@ protocol = "anthropic"
 # inference; `eggpool tools doctor` performs an explicit bounded probe.
 # [tools]
 # enabled = true
+# gateway_enabled = true
 # base_url = "http://127.0.0.1:11320/mcp"
 # connect_timeout_s = 2.0
 # read_timeout_s = 3.0

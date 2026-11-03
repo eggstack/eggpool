@@ -166,6 +166,7 @@ fn legacy_server_key_allowed(access_state: Option<&str>) -> bool {
 fn personal_credential_allowed(path: &str) -> bool {
     (path.starts_with("/v1/") && path != "/v1/healthz" && path != "/v1/readyz")
         || path == "/api/integrations/v1/profile"
+        || path == "/api/tools/v1/mcp"
         || path == "/api/user-budget"
 }
 
@@ -710,6 +711,7 @@ mod tests {
             database_path: ":memory:".to_owned(),
             trusted_proxy_ips: Vec::new(),
             allow_insecure_web_auth: false,
+            tool_gateway: super::tools::Gateway::new(crate::config::ToolBackendConfig::default()),
             started_at: Instant::now(),
         };
         for path in [

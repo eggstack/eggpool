@@ -70,3 +70,9 @@ does not install or start Eggsearch, and ordinary inference never probes it.
 `eggpool tools doctor` explicitly checks `/healthz`, negotiates MCP, and
 validates the expected Eggsearch tool catalog. See
 [deployment](deployment.md#optional-eggsearch-service).
+
+The gateway is a separate explicit opt-in: set `gateway_enabled = true` as
+well as `enabled = true`. Enabling either tools setting requires a server
+restart. The authenticated `POST /api/tools/v1/mcp` route accepts MCP
+`2025-03-26` `initialize`, `notifications/initialized`, `tools/list`, and
+`tools/call`; it exposes only per-user grants and does not affect inference.

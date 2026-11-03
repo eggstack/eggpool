@@ -967,11 +967,13 @@ pub struct IntegrationsConfig {
 }
 
 /// Optional operator-owned Eggsearch MCP connection. Merely configuring this
-/// value never starts or probes Eggsearch; only `eggpool tools doctor` uses it.
+/// value never starts or probes Eggsearch. The optional authenticated gateway
+/// is separately gated and only opens a request-scoped MCP connection.
 #[derive(Debug, Clone, Deserialize, Serialize)]
 #[serde(deny_unknown_fields, default)]
 pub struct ToolBackendConfig {
     pub enabled: bool,
+    pub gateway_enabled: bool,
     pub base_url: String,
     pub connect_timeout_s: f64,
     pub read_timeout_s: f64,
@@ -981,6 +983,7 @@ impl Default for ToolBackendConfig {
     fn default() -> Self {
         Self {
             enabled: false,
+            gateway_enabled: false,
             base_url: "http://127.0.0.1:11320/mcp".into(),
             connect_timeout_s: 2.0,
             read_timeout_s: 3.0,
@@ -1940,6 +1943,11 @@ impl Config {
 }
 
 fn validate_tool_backend(backend: &ToolBackendConfig) -> Result<(), ConfigError> {
+    if backend.gateway_enabled && !backend.enabled {
+        return Err(ConfigError::validation(
+            "tools.gateway_enabled requires tools.enabled",
+        ));
+    }
     if !backend.connect_timeout_s.is_finite()
         || !(0.1..=10.0).contains(&backend.connect_timeout_s)
         || !backend.read_timeout_s.is_finite()
@@ -2907,5 +2915,8 @@ mod tests {
         let mut invalid_read = Config::default();
         invalid_read.tools.read_timeout_s = 31.0;
         assert!(invalid_read.validate().is_err());
+        let mut gateway_without_backend = Config::default();
+        gateway_without_backend.tools.gateway_enabled = true;
+        assert!(gateway_without_backend.validate().is_err());
     }
 }

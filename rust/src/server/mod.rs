@@ -11,6 +11,7 @@ mod dashboard;
 mod health;
 mod inference;
 mod middleware;
+mod tools;
 
 use auth::{
     account_page, login_page, login_submit, logout_submit, member_landing_page, password_change,
@@ -682,6 +683,7 @@ pub struct ServerState {
     database_path: String,
     trusted_proxy_ips: Vec<String>,
     allow_insecure_web_auth: bool,
+    tool_gateway: tools::Gateway,
     started_at: Instant,
 }
 
@@ -699,6 +701,7 @@ impl ServerState {
                 .into_owned(),
             trusted_proxy_ips: config.security.trusted_proxies.clone(),
             allow_insecure_web_auth: config.security.allow_insecure_web_auth,
+            tool_gateway: tools::Gateway::new(config.tools.clone()),
             started_at: Instant::now(),
         }
     }
@@ -1189,6 +1192,13 @@ pub fn build_router(state: AppState) -> Router {
         .route("/static/favicon.svg", get(static_favicon))
         .route("/static/theme.css", get(theme_css));
 
+    if state.server.tool_gateway.enabled() {
+        router = router.route(
+            tools::PATH,
+            post(tools::gateway).layer(tools::request_limit()),
+        );
+    }
+
     router = router
         .route("/login", get(login_page).post(login_submit))
         .route("/account", get(account_page))
@@ -1325,6 +1335,7 @@ mod tests {
             database_path: ":memory:".to_owned(),
             trusted_proxy_ips: Vec::new(),
             allow_insecure_web_auth: false,
+            tool_gateway: tools::Gateway::new(crate::config::ToolBackendConfig::default()),
             started_at: Instant::now(),
         }
     }

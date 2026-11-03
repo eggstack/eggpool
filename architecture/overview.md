@@ -502,8 +502,10 @@ observational only.
 - On-prem user access: local downstream identities with Argon2id passwords and
 revocable per-user agent tokens (`eggpool users …`), browser login behind a
 session/CSRF boundary, versioned per-user model policy, default-deny Eggsearch
-tool grants and explicit per-token tool scopes (authorization only; no public
-tool route yet), and per-user plus instance-global daily/monthly budgets; the admin and member surfaces are the
+tool grants and explicit per-token tool scopes, plus a disabled-by-default
+authenticated Eggsearch MCP gateway at `POST /api/tools/v1/mcp`; per-user and
+instance-global daily/monthly budgets remain owned by their current authorities.
+The admin and member surfaces are the
 `/admin/*`, `/users`, `/profiles`, `/account*`, `/my-account*`, and `/usage`
 routes; see [On-prem user access](deep-dive-on-prem-user-access.md).
 - CLI: full command tree in §1 (`status` is the concise provider health

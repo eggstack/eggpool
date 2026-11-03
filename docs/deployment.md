@@ -1161,6 +1161,7 @@ Then opt in to the connection in EggPool's TOML:
 ```toml
 [tools]
 enabled = true
+gateway_enabled = true
 base_url = "http://127.0.0.1:11320/mcp"
 connect_timeout_s = 2.0
 read_timeout_s = 3.0
@@ -1170,9 +1171,17 @@ Run `eggpool tools doctor --json` to check service identity, negotiated MCP
 version, and the expected tool names. The command is read-only, short-lived,
 bounded to a 1 MiB response, and reports no tool schemas, arguments, or
 results. Only literal `127.0.0.1` or `::1` HTTP URLs with an explicit port
-and `/mcp` path are accepted. EggPool does not start Eggsearch, register a
-system service, expose an MCP route, or use tools during inference. A missing
-or incompatible backend therefore leaves normal model routing unchanged.
+and `/mcp` path are accepted. `gateway_enabled` is a separate opt-in for the
+authenticated `POST /api/tools/v1/mcp` route; both flags are required. Changes
+to `[tools]` require a server restart. The gateway accepts MCP `2025-03-26`
+JSON POST initialize/list/call operations only. It rejects batch JSON-RPC,
+other MCP methods, GET/SSE streams, and session resumption. It caps requests at
+128 KiB, arguments at 32 KiB, backend responses at 1 MiB, and concurrent
+backend operations at 16. Each user needs a personal token with the relevant
+discovery and/or invocation scope plus matching tool grants. EggPool does not
+start Eggsearch, register a system service, or use tools during ordinary
+inference. A missing or incompatible backend therefore leaves normal model
+routing unchanged.
 
 See the upstream [Eggsearch deployment guide](https://github.com/eggstack/eggsearch/blob/main/docs/deployment.md)
 for its current install and service lifecycle.
