@@ -1,6 +1,6 @@
 # Embedding Routing Roadmap
 
-Status: proposed
+Status: active
 
 Long-term references:
 
@@ -71,4 +71,4 @@ E001 closure record proves that embeddings use normal identity, policy, quota, f
 
 | Milestone | Status | Implementation plan | Closure record | Blockers |
 |---|---|---|---|---|
-| E001 embeddings | blocked | plans/implementation/embedding-routing/001-openai-compatible-embeddings.md | pending | ADR-0008 acceptance |
+| E001 embeddings | ready | plans/implementation/embedding-routing/001-openai-compatible-embeddings.md | pending | ADR-0008 accepted; Ollama 0.17.7 `nomic-embed-text:latest` live embeddings contract qualified |

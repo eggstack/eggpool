@@ -89,7 +89,7 @@ No new runtime, schema or performance claim lands with these plans.
 | Subsystem | Status | Roadmap | Current milestone | Dependencies or blockers |
 |---|---|---|---|---|
 | Optional tool integration | active | [tool integration roadmap](subsystems/tool-integration-roadmap.md) | M001–M002 and corrective M005 closed; M003 ready; M004 blocked | ADR-0007 accepted; M003's Eggsearch 0.4.3 initialize/list/call interface is qualified. |
-| Embedding routing | proposed | [embedding routing roadmap](subsystems/embedding-routing-roadmap.md) | E001 blocked | ADR-0008 accepted; qualified provider/model contract and live local backend required before publishing POST /v1/embeddings. |
+| Embedding routing | active | [embedding routing roadmap](subsystems/embedding-routing-roadmap.md) | E001 ready | ADR-0008 accepted; Ollama 0.17.7 `nomic-embed-text:latest` live embeddings contract qualified. |
 | Retrieval interoperability | proposed | [retrieval interoperability roadmap](subsystems/retrieval-interoperability-roadmap.md) | R001 blocked | Tool Integration M003 closed plus a backend-enforced document ACL/delegation contract; EggPool embeddings optional interface. |
 | Provider transport | closed | `plans/subsystems/provider-transport-roadmap.md` | M006 closed — Eggress 1.0.12 dependency refresh and requalification | M001–M006 closed; no successor registered. |
 | Provider profile metadata corrective | closed | `plans/subsystems/provider-profile-metadata-corrective-roadmap.md` | M001 closed — provider template endpoint/source reconciliation | M001 terminal; no successor registered. |
@@ -307,6 +307,7 @@ record is `plans/closure/deployment-packaging/008-status.md`.
 
 | Subsystem | Milestone | Status | Implementation plan | Dependencies / handoff note |
 |---|---|---|---|---|
+| Embedding routing | E001 — OpenAI-compatible embeddings | ready | [E001 embeddings route](implementation/embedding-routing/001-openai-compatible-embeddings.md) | ADR-0008 accepted; local Ollama 0.17.7 `nomic-embed-text` request returned two ordered finite 768-dimensional vectors. |
 
 ## Active implementation plans
 
@@ -320,7 +321,6 @@ record is `plans/closure/deployment-packaging/008-status.md`.
 | Subsystem | Milestone | Blocker |
 |---|---|---|
 | Optional tool integration | [M004 hosted orchestration](implementation/tool-integration/004-finite-hosted-tool-orchestration.md) | M003 closure and current coordinator/IR interface qualification; ADR-0007 accepted. |
-| Embedding routing | [E001 embeddings route](implementation/embedding-routing/001-openai-compatible-embeddings.md) | Accepted ADR-0008; qualified provider/model contract and live local backend. |
 | Retrieval interoperability | [R001 external RAG reference](implementation/retrieval-interoperability/001-external-rag-contract-and-reference.md) | Tool Integration M003 closure and secure backend document ACL/delegation interface; E001 is optional. |
 
 Unblock audit (on-prem user access reopening after M012 closure, baseline
@@ -886,3 +886,11 @@ unsatisfied, so M003 stays blocked. M004 remains blocked on M003 closure and
 coordinator/IR qualification. E001 remains blocked on a qualified live local
 embedding provider; R001 remains blocked on M003 and backend-enforced document
 ACL/delegation evidence. No plan is promoted by this audit.
+
+Embedding Routing E001 readiness audit (baseline `c61a31a`): ADR-0008 is
+accepted, and the local Ollama 0.17.7 `nomic-embed-text:latest` endpoint
+completed a two-input OpenAI-compatible embeddings request with two ordered,
+finite 768-dimensional vectors and usage. This supplies the plan's live
+provider/model contract gate, not EggPool implementation evidence. E001 moves
+from blocked to ready; its roadmap moves from proposed to active. The tool
+integration and retrieval plans have no hard dependency on E001.

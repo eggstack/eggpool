@@ -1,6 +1,6 @@
 # Embedding Routing E001 — OpenAI-compatible embeddings and model eligibility
 
-Status: blocked
+Status: ready
 
 Repository baseline: `0e021c1ffe55803aff5f325033e65313dca9f1dc` (planning, 2026-11-03)
 
@@ -19,6 +19,14 @@ Implement a typed finite OpenAI-compatible `POST /v1/embeddings` route that sele
 ## 2. Readiness and dependencies
 
 **Hard:** ADR-0008 acceptance. **Interface:** existing canonical routing model, generation lease, user budgets (hard-vs-estimated), provider profile authority, provider catalog, error mapping and request finalization. **Operational:** one real known-compatible local embedding upstream and a deterministic synthetic upstream. No hard dependency on Eggsearch tool plans.
+
+Readiness evidence (2026-11-03): ADR-0008 is accepted. A local Ollama 0.17.7
+service exposed `nomic-embed-text:latest`; an OpenAI-compatible
+`POST /v1/embeddings` request with two inputs returned two ordered, finite
+768-dimensional vectors and usage. This qualifies the initial wire contract
+and local live fixture only; it does not establish EggPool provider/model
+eligibility, admission, accounting, or endpoint behavior. E001 is ready to
+implement that bounded route.
 
 ## 3. Current implementation evidence
 
