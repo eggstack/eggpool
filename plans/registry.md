@@ -307,6 +307,7 @@ record is `plans/closure/deployment-packaging/008-status.md`.
 
 | Subsystem | Milestone | Status | Implementation plan | Dependencies / handoff note |
 |---|---|---|---|---|
+| Optional tool integration | M002 — Effective tool grants and credential scopes | ready | [M002 plan](implementation/tool-integration/002-tool-grants-and-credential-scopes.md) | M001 closed; ADR-0007 accepted. |
 
 ## Active implementation plans
 
@@ -318,7 +319,6 @@ record is `plans/closure/deployment-packaging/008-status.md`.
 
 | Subsystem | Milestone | Blocker |
 |---|---|---|
-| Optional tool integration | [M002 grants/scopes](implementation/tool-integration/002-tool-grants-and-credential-scopes.md) | Proposed [ADR-0007](adrs/ADR-0007-optional-tool-authority-and-hosted-execution-boundary.md) acceptance. |
 | Optional tool integration | [M003 MCP gateway](implementation/tool-integration/003-authenticated-mcp-gateway.md) | M002 closure; supported Eggsearch MCP version/transport contract qualification. |
 | Optional tool integration | [M004 hosted orchestration](implementation/tool-integration/004-finite-hosted-tool-orchestration.md) | M003 closure and ADR-0007; current coordinator/IR interface qualification. |
 | Embedding routing | [E001 embeddings route](implementation/embedding-routing/001-openai-compatible-embeddings.md) | Proposed [ADR-0008](adrs/ADR-0008-embedding-inference-surface-boundary.md) acceptance; qualified provider/model contract. |

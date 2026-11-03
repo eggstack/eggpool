@@ -1,6 +1,6 @@
 # Tool Integration M002 — Effective tool grants and credential scopes
 
-Status: blocked
+Status: ready
 
 Repository baseline: `0e021c1ffe55803aff5f325033e65313dca9f1dc` (planning, 2026-11-03)
 
@@ -8,7 +8,7 @@ Source roadmap: plans/subsystems/tool-integration-roadmap.md (M002)
 
 Long-term requirements: plans/000-long-term-specification.md §§1–3 and `6; plans/001-terminology-and-domain-model.md; plans/002-long-term-roadmap.md `5; plans/003-planning-process.md
 
-Applicable ADR: plans/adrs/ADR-0007-optional-tool-authority-and-hosted-execution-boundary.md (proposed, hard gate)
+Applicable ADR: plans/adrs/ADR-0007-optional-tool-authority-and-hosted-execution-boundary.md (accepted)
 
 Primary class: infrastructure
 
