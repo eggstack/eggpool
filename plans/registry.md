@@ -312,7 +312,6 @@ record is `plans/closure/deployment-packaging/008-status.md`.
 
 | Subsystem | Milestone | Status | Implementation plan | Handoff note |
 |---|---|---|---|---|
-| Optional tool integration | M004 — Finite hosted tool orchestration | active | [M004 hosted orchestration](implementation/tool-integration/004-finite-hosted-tool-orchestration.md) | Implement the explicit finite route through the existing coordinator and M003 internal tool service. |
 
 
 ## Blocked work
@@ -351,6 +350,7 @@ Historical M007 blocker assessment at baseline `7e241ad` (`plans/closure/persist
 ## Recently closed
 
 | Subsystem / plan | Disposition | Evidence |
+| Tool Integration M004 — Finite hosted tool orchestration | conditionally closed — deterministic finite model/tool/model flow, authorization, cancellation, result bounds, and default/no-default suites pass; live Ollama/Eggsearch attempts did not complete within the operation deadline or result limits; physical SBC footprint evidence remains | `plans/closure/tool-integration/004-status.md`, implementation `5451be62` |
 | Embedding Routing E001 — OpenAI-compatible embeddings | conditionally closed — explicit configured embedding eligibility, shared coordinator admission/accounting, deterministic and live Ollama compatibility, and default/no-default suites pass; physical SBC footprint evidence remains | `plans/closure/embedding-routing/001-status.md`, implementation `088a1379` |
 | Tool Integration M005 — Canonical tool identity correction | closed — the grant authority and explicit readiness doctor share the exact ten-name Eggsearch 0.4.3 catalog; live initialize/list/call and rebuilt doctor pass; default/no-default strict lint and serial workspace suites pass; M003 promoted to ready | `plans/closure/tool-integration/005-status.md`, implementation `c115fdbc` |
 | Tool Integration M003 — Authenticated MCP gateway | conditionally closed — disabled-by-default authenticated route; per-user grants/scopes/revocation, protocol subset, live Eggsearch 0.4.3 call, bounded/cancelled backend calls and failure isolation pass; physical SBC footprint/contention evidence remains | `plans/closure/tool-integration/003-status.md`, implementation `c61a31a`, hardening `5a24eeb` |
