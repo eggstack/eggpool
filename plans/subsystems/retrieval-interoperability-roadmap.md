@@ -4,9 +4,9 @@ Status: proposed
 
 Long-term references:
 
-- plans/000-long-term-specification.md ``1–5
+- plans/000-long-term-specification.md §§1–5
 - plans/001-terminology-and-domain-model.md
-- plans/002-long-term-roadmap.md ``4–5
+- plans/002-long-term-roadmap.md §§4–5
 - plans/003-planning-process.md
 
 Related ADRs:
