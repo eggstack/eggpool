@@ -1,6 +1,6 @@
 # Tool Integration M004 — Explicit finite hosted tool orchestration
 
-Status: ready
+Status: active
 
 Repository baseline: `0e021c1ffe55803aff5f325033e65313dca9f1dc` (planning, 2026-11-03)
 

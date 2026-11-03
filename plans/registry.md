@@ -88,7 +88,7 @@ No new runtime, schema or performance claim lands with these plans.
 
 | Subsystem | Status | Roadmap | Current milestone | Dependencies or blockers |
 |---|---|---|---|---|
-| Optional tool integration | active | [tool integration roadmap](subsystems/tool-integration-roadmap.md) | M001–M003 and corrective M005 closed; M004 ready | M003 software capability conditionally closed; M004 coordinator/IR, attribution and budget interfaces audited. |
+| Optional tool integration | active | [tool integration roadmap](subsystems/tool-integration-roadmap.md) | M001–M003 and corrective M005 closed; M004 active | M003 software capability conditionally closed; M004 hosted endpoint implementation in progress. |
 | Embedding routing | active | [embedding routing roadmap](subsystems/embedding-routing-roadmap.md) | E001 active | E001 implementation in progress; local Ollama contract qualified. |
 | Retrieval interoperability | proposed | [retrieval interoperability roadmap](subsystems/retrieval-interoperability-roadmap.md) | R001 blocked | Tool Integration M003 closed plus a backend-enforced document ACL/delegation contract; EggPool embeddings optional interface. |
 | Provider transport | closed | `plans/subsystems/provider-transport-roadmap.md` | M006 closed — Eggress 1.0.12 dependency refresh and requalification | M001–M006 closed; no successor registered. |
@@ -307,13 +307,13 @@ record is `plans/closure/deployment-packaging/008-status.md`.
 
 | Subsystem | Milestone | Status | Implementation plan | Dependencies / handoff note |
 |---|---|---|---|---|
-| Optional tool integration | M004 — Finite hosted tool orchestration | ready | [M004 hosted orchestration](implementation/tool-integration/004-finite-hosted-tool-orchestration.md) | M003 software capability conditionally closed; stable coordinator/IR and attribution boundaries audited. |
 
 ## Active implementation plans
 
 | Subsystem | Milestone | Status | Implementation plan | Handoff note |
 |---|---|---|---|---|
 | Embedding routing | E001 — OpenAI-compatible embeddings | active | [E001 embeddings route](implementation/embedding-routing/001-openai-compatible-embeddings.md) | Implement the bounded route using the qualified Ollama 0.17.7 `nomic-embed-text` contract. |
+| Optional tool integration | M004 — Finite hosted tool orchestration | active | [M004 hosted orchestration](implementation/tool-integration/004-finite-hosted-tool-orchestration.md) | Implement the explicit finite route through the existing coordinator and M003 internal tool service. |
 
 
 ## Blocked work
@@ -912,3 +912,8 @@ Eggsearch fixture/live service and Ollama models are available; deterministic
 model behavior will be supplied by M004's test fixture. M004 moves from
 blocked to ready. The SBC operational condition does not change the M003
 software interface used by M004.
+
+Tool Integration M004 activation audit: M004 is the only remaining active
+milestone in its subsystem. Its hard M003 software dependency and ADR-0007
+decision are satisfied, and coordinator/IR attribution interfaces are audited.
+It moves from ready to active to implement the opt-in finite hosted route.
