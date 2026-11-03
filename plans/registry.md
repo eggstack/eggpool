@@ -307,12 +307,12 @@ record is `plans/closure/deployment-packaging/008-status.md`.
 
 | Subsystem | Milestone | Status | Implementation plan | Dependencies / handoff note |
 |---|---|---|---|---|
-| Optional tool integration | M003 — Authenticated MCP gateway | ready | [M003 MCP gateway](implementation/tool-integration/003-authenticated-mcp-gateway.md) | M005 closed; Eggsearch 0.4.3 initialize/list/call contract qualified. |
 
 ## Active implementation plans
 
 | Subsystem | Milestone | Status | Implementation plan | Handoff note |
 |---|---|---|---|---|
+| Optional tool integration | M003 — Authenticated MCP gateway | active | [M003 MCP gateway](implementation/tool-integration/003-authenticated-mcp-gateway.md) | Eggsearch 0.4.3 initialize/list/call contract qualified; implement disabled-by-default authenticated gateway. |
 
 
 ## Blocked work
