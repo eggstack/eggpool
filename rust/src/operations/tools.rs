@@ -13,19 +13,6 @@ use crate::config::{Config, ToolBackendConfig};
 
 const MAX_RESPONSE_BYTES: usize = 1024 * 1024;
 const MCP_PROTOCOL: &str = "2025-03-26";
-const EXPECTED_TOOLS: &[&str] = &[
-    "web_search",
-    "web_fetch",
-    "batch_fetch",
-    "provider_status",
-    "repo_search",
-    "repo_fetch",
-    "repo_map",
-    "security_search",
-    "research_search",
-    "build_evidence_bundle",
-];
-
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum ProbeFailure {
     Unreachable,
@@ -239,9 +226,11 @@ async fn doctor_backend(backend: &ToolBackendConfig) -> BackendDiagnostic {
         .iter()
         .filter_map(|tool| tool.get("name").and_then(Value::as_str))
         .collect::<std::collections::BTreeSet<_>>();
-    if tools.len() != EXPECTED_TOOLS.len()
+    if tools.len() != crate::tool_policy::KNOWN_TOOLS.len()
         || names.len() != tools.len()
-        || EXPECTED_TOOLS.iter().any(|name| !names.contains(name))
+        || crate::tool_policy::KNOWN_TOOLS
+            .iter()
+            .any(|name| !names.contains(name))
     {
         return BackendDiagnostic::new(BackendStatus::IncompatibleCatalog);
     }

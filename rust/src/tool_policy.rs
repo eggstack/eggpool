@@ -19,14 +19,14 @@ pub const INVOCATION_SCOPE: &str = "tools:invoke:eggsearch";
 pub const KNOWN_TOOLS: &[&str] = &[
     "web_search",
     "web_fetch",
-    "deep_research",
-    "evidence_extract",
-    "source_inspect",
-    "page_outline",
-    "research_report",
-    "citation_verify",
-    "query_expand",
-    "answer_ground",
+    "batch_fetch",
+    "provider_status",
+    "repo_search",
+    "repo_fetch",
+    "repo_map",
+    "security_search",
+    "research_search",
+    "build_evidence_bundle",
 ];
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -446,6 +446,21 @@ mod tests {
             KNOWN_TOOLS
                 .iter()
                 .all(|name| name.is_ascii() && !name.is_empty())
+        );
+        assert_eq!(
+            KNOWN_TOOLS,
+            &[
+                "web_search",
+                "web_fetch",
+                "batch_fetch",
+                "provider_status",
+                "repo_search",
+                "repo_fetch",
+                "repo_map",
+                "security_search",
+                "research_search",
+                "build_evidence_bundle",
+            ]
         );
         assert!(!KNOWN_TOOLS.contains(&"WEB_SEARCH"));
         assert!(!KNOWN_TOOLS.contains(&"web_search\u{212a}"));
