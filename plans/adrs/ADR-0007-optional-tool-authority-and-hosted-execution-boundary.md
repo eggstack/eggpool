@@ -8,9 +8,9 @@ Decision owners: EggPool maintainers
 
 Related specification sections:
 
-- plans/000-long-term-specification.md ``1–4 (on-prem identity, single admission, canonical wire, stateless compatibility)
+- plans/000-long-term-specification.md §§1–4 (on-prem identity, single admission, canonical wire, stateless compatibility)
 - plans/001-terminology-and-domain-model.md (principal, account, generation, authorization)
-- plans/002-long-term-roadmap.md ``4–5 (integrations and local users)
+- plans/002-long-term-roadmap.md §§4–5 (integrations and local users)
 - plans/003-planning-process.md `2.2 (public-contract ADR gate)
 
 Affected subsystem roadmaps:
