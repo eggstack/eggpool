@@ -1,9 +1,72 @@
 use eggpool::{
+    Config,
     db::{Database, DatabaseConfig, MigrationRunner},
     identity,
     model_policy::ModelPolicyService,
+    operations::backup::BackupService,
     tool_policy::{DISCOVERY_SCOPE, GrantEffect, INVOCATION_SCOPE, ToolAction, ToolPolicyService},
 };
+
+#[tokio::test]
+async fn tool_grants_survive_backup_and_restore() {
+    let root = tempfile::tempdir().unwrap();
+    let database_path = root.path().join("eggpool.db");
+    let config_path = root.path().join("config.toml");
+    let mut config = Config::default();
+    config.database.path = database_path.to_string_lossy().into_owned();
+    std::fs::write(&config_path, toml::to_string(&config).unwrap()).unwrap();
+    let database = Database::open(DatabaseConfig {
+        path: config.database.path.clone(),
+        ..DatabaseConfig::default()
+    })
+    .await
+    .unwrap();
+    MigrationRunner::new(&database).run().await.unwrap();
+    add_user(&database, "backup-admin", "backup-admin", "admin").await;
+    add_user(&database, "backup-member", "backup-member", "member").await;
+    let model_policy = ModelPolicyService::new(database.clone());
+    model_policy
+        .create_profile("retrieval", "Retrieval", "deny", "backup-admin")
+        .await
+        .unwrap();
+    model_policy
+        .assign_profile("backup-member", "retrieval", "backup-admin")
+        .await
+        .unwrap();
+    ToolPolicyService::new(database.clone())
+        .set_profile_rule(
+            "retrieval",
+            "web_search",
+            Some(GrantEffect::Allow),
+            None,
+            "backup-admin",
+        )
+        .await
+        .unwrap();
+
+    let backup = BackupService::from_config(&config_path, &config)
+        .with_output_dir(root.path().join("backups"));
+    let archive = backup.create(&database).await.unwrap().archive;
+    database.close().await.unwrap();
+    backup.recover(&archive).unwrap();
+
+    let restored = Database::open(DatabaseConfig {
+        path: config.database.path,
+        ..DatabaseConfig::default()
+    })
+    .await
+    .unwrap();
+    MigrationRunner::new(&restored).run().await.unwrap();
+    let policy = ToolPolicyService::new(restored.clone());
+    assert_eq!(
+        policy
+            .effective_tools_for_user("backup-member")
+            .await
+            .unwrap(),
+        vec!["web_search"]
+    );
+    restored.close().await.unwrap();
+}
 
 async fn database() -> Database {
     let database = Database::open(DatabaseConfig::default())
