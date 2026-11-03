@@ -11,7 +11,7 @@ Long-term references:
 
 Related ADRs:
 
-- plans/adrs/ADR-0007-optional-tool-authority-and-hosted-execution-boundary.md (proposed; M002–M004 decision gate)
+- plans/adrs/ADR-0007-optional-tool-authority-and-hosted-execution-boundary.md (accepted; M002–M004 decision gate)
 
 ## 1. Purpose and ownership boundary
 
@@ -74,7 +74,7 @@ Use existing serial cargo suites and no-default feature checks; add tool-config,
 
 ## 10. Risks and decision points
 
-ADR-0007 must be accepted before M002; avoid treating a tool definition as execution authorization. MCP legacy sessions versus stateless discovery, request transport envelopes, sessions and pagination need explicit version-appropriate conformance. A feature that needs generic process execution, remote MCP trust, new stateful Responses, or secondary inference/retry owner requires a separate ADR, not scope creep. Client-owned Eggsearch MCP remains the recommended simple workstation route.
+ADR-0007 is accepted; avoid treating a tool definition as execution authorization. MCP legacy sessions versus stateless discovery, request transport envelopes, sessions and pagination need explicit version-appropriate conformance. A feature that needs generic process execution, remote MCP trust, new stateful Responses, or secondary inference/retry owner requires a separate ADR, not scope creep. Client-owned Eggsearch MCP remains the recommended simple workstation route.
 
 ## 11. Completion definition
 
@@ -85,6 +85,6 @@ Four distinct milestones receive closure evidence under plans/closure/tool-integ
 | Milestone | Status | Implementation plan | Closure record | Blockers |
 |---|---|---|---|---|
 | M001 backend config/readiness | closed | plans/implementation/tool-integration/001-eggsearch-backend-config-and-readiness.md | plans/closure/tool-integration/001-status.md | none |
-| M002 tool policy/scopes | active | plans/implementation/tool-integration/002-tool-grants-and-credential-scopes.md | pending | none; M001 closed and ADR-0007 accepted |
-| M003 MCP gateway | blocked | plans/implementation/tool-integration/003-authenticated-mcp-gateway.md | pending | M002; Eggsearch contract qualification |
-| M004 hosted execution | blocked | plans/implementation/tool-integration/004-finite-hosted-tool-orchestration.md | pending | M003; ADR-0007 acceptance |
+| M002 tool policy/scopes | closed | plans/implementation/tool-integration/002-tool-grants-and-credential-scopes.md | plans/closure/tool-integration/002-status.md | none |
+| M003 MCP gateway | blocked | plans/implementation/tool-integration/003-authenticated-mcp-gateway.md | pending | Eggsearch MCP session/transport and live tools/call qualification |
+| M004 hosted execution | blocked | plans/implementation/tool-integration/004-finite-hosted-tool-orchestration.md | pending | M003; current coordinator/IR interface qualification |

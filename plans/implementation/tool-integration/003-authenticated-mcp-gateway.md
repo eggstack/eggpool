@@ -8,7 +8,7 @@ Source roadmap: plans/subsystems/tool-integration-roadmap.md (M003)
 
 Long-term requirements: plans/000-long-term-specification.md §§1–5; plans/001-terminology-and-domain-model.md; plans/002-long-term-roadmap.md `4; plans/003-planning-process.md
 
-Applicable ADR: plans/adrs/ADR-0007-optional-tool-authority-and-hosted-execution-boundary.md (proposed, hard gate via M002)
+Applicable ADR: plans/adrs/ADR-0007-optional-tool-authority-and-hosted-execution-boundary.md (accepted)
 
 Primary class: capability
 
@@ -18,7 +18,7 @@ Serve a disabled-by-default, authenticated tools-only MCP endpoint through EggPo
 
 ## 2. Why blocked
 
-**Hard:** Tool Integration M002 closure (which itself requires M001 and accepted ADR-0007). **Interface:** version-appropriate Eggsearch Streamable HTTP MCP discovery/list/call negotiation; prove with a pinned local Eggsearch fixture. **Operational:** a real loopback Eggsearch service for live end-to-end qualification. Do not start until the effective grant interface is stable.
+**Hard:** M002 is closed with ADR-0007 accepted. **Interface and operational gates still open:** qualify version-appropriate Eggsearch Streamable HTTP session, discovery/list/call negotiation against a pinned local fixture and real loopback service. The effective grant interface is stable and may now be consumed.
 
 ## 3. Current evidence
 
