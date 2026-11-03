@@ -1,6 +1,6 @@
 # Embedding Routing E001 — OpenAI-compatible embeddings and model eligibility
 
-Status: active
+Status: implemented
 
 Repository baseline: `0e021c1ffe55803aff5f325033e65313dca9f1dc` (planning, 2026-11-03)
 

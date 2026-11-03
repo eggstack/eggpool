@@ -12,7 +12,7 @@ Canonical direction:
 - `plans/002-long-term-roadmap.md`
 - `plans/003-planning-process.md`
 
-New optional application-interoperability planning (2026-11-03): [ADR-0007](adrs/ADR-0007-optional-tool-authority-and-hosted-execution-boundary.md) and [ADR-0008](adrs/ADR-0008-embedding-inference-surface-boundary.md) are accepted. M001, M002, and corrective M005 are closed; M003 is conditionally closed after supported Eggsearch 0.4.3 initialize/list/call qualification; M004 is conditionally closed with a live hosted-execution qualification still outstanding; R001 remains blocked on its declared contracts; E001 remains blocked pending live embedding qualification. Solo/SBC inference remains the default. No unrelated milestone is reopened.
+New optional application-interoperability planning (2026-11-03): [ADR-0007](adrs/ADR-0007-optional-tool-authority-and-hosted-execution-boundary.md) and [ADR-0008](adrs/ADR-0008-embedding-inference-surface-boundary.md) are accepted. M001, M002, and corrective M005 are closed; M003 is conditionally closed after supported Eggsearch 0.4.3 initialize/list/call qualification; M004 is conditionally closed with a live hosted-execution qualification still outstanding; R001 remains blocked on its declared contracts; E001 is conditionally closed after live Ollama qualification. Solo/SBC inference remains the default. No unrelated milestone is reopened.
 
 Legacy archive (pre-251, immutable, top level): `plans/001-*` through
 `plans/250-*` plus `python_hotpath_dispatch_compression_optimization.md`.
@@ -89,7 +89,7 @@ No new runtime, schema or performance claim lands with these plans.
 | Subsystem | Status | Roadmap | Current milestone | Dependencies or blockers |
 |---|---|---|---|---|
 | Optional tool integration | active | [tool integration roadmap](subsystems/tool-integration-roadmap.md) | M001, M002 and corrective M005 closed; M003 and M004 conditionally closed | M003 and M004 physical SBC footprint evidence remains; M004 also requires a successful live hosted-execution trace. |
-| Embedding routing | active | [embedding routing roadmap](subsystems/embedding-routing-roadmap.md) | E001 active | E001 implementation in progress; local Ollama contract qualified. |
+| Embedding routing | closing | [embedding routing roadmap](subsystems/embedding-routing-roadmap.md) | E001 conditionally closed | Physical SBC absent-provider footprint and contention evidence remains. |
 | Retrieval interoperability | proposed | [retrieval interoperability roadmap](subsystems/retrieval-interoperability-roadmap.md) | R001 blocked | Tool Integration M003 closed plus a backend-enforced document ACL/delegation contract; EggPool embeddings optional interface. |
 | Provider transport | closed | `plans/subsystems/provider-transport-roadmap.md` | M006 closed — Eggress 1.0.12 dependency refresh and requalification | M001–M006 closed; no successor registered. |
 | Provider profile metadata corrective | closed | `plans/subsystems/provider-profile-metadata-corrective-roadmap.md` | M001 closed — provider template endpoint/source reconciliation | M001 terminal; no successor registered. |
@@ -312,7 +312,6 @@ record is `plans/closure/deployment-packaging/008-status.md`.
 
 | Subsystem | Milestone | Status | Implementation plan | Handoff note |
 |---|---|---|---|---|
-| Embedding routing | E001 — OpenAI-compatible embeddings | active | [E001 embeddings route](implementation/embedding-routing/001-openai-compatible-embeddings.md) | Implement the bounded route using the qualified Ollama 0.17.7 `nomic-embed-text` contract. |
 | Optional tool integration | M004 — Finite hosted tool orchestration | active | [M004 hosted orchestration](implementation/tool-integration/004-finite-hosted-tool-orchestration.md) | Implement the explicit finite route through the existing coordinator and M003 internal tool service. |
 
 
@@ -352,6 +351,7 @@ Historical M007 blocker assessment at baseline `7e241ad` (`plans/closure/persist
 ## Recently closed
 
 | Subsystem / plan | Disposition | Evidence |
+| Embedding Routing E001 — OpenAI-compatible embeddings | conditionally closed — explicit configured embedding eligibility, shared coordinator admission/accounting, deterministic and live Ollama compatibility, and default/no-default suites pass; physical SBC footprint evidence remains | `plans/closure/embedding-routing/001-status.md`, implementation `088a1379` |
 | Tool Integration M005 — Canonical tool identity correction | closed — the grant authority and explicit readiness doctor share the exact ten-name Eggsearch 0.4.3 catalog; live initialize/list/call and rebuilt doctor pass; default/no-default strict lint and serial workspace suites pass; M003 promoted to ready | `plans/closure/tool-integration/005-status.md`, implementation `c115fdbc` |
 | Tool Integration M003 — Authenticated MCP gateway | conditionally closed — disabled-by-default authenticated route; per-user grants/scopes/revocation, protocol subset, live Eggsearch 0.4.3 call, bounded/cancelled backend calls and failure isolation pass; physical SBC footprint/contention evidence remains | `plans/closure/tool-integration/003-status.md`, implementation `c61a31a`, hardening `5a24eeb` |
 | Tool Integration M002 — Effective tool grants and credential scopes | closed — additive v65 default-deny policy, explicit discovery/invocation credential scopes, live revocation checks, content-free audit and backup/restore qualification; no invocation route | `plans/closure/tool-integration/002-status.md`, implementation `df2f6bb0`, restore test `cff31bde`, admin denial test `da0450b9` |

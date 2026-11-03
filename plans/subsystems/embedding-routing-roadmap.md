@@ -1,6 +1,6 @@
 # Embedding Routing Roadmap
 
-Status: active
+Status: closing
 
 Long-term references:
 
@@ -71,4 +71,4 @@ E001 closure record proves that embeddings use normal identity, policy, quota, f
 
 | Milestone | Status | Implementation plan | Closure record | Blockers |
 |---|---|---|---|---|
-| E001 embeddings | active | plans/implementation/embedding-routing/001-openai-compatible-embeddings.md | pending | Implement typed route using the qualified local provider/model contract |
+| E001 embeddings | conditionally closed | plans/implementation/embedding-routing/001-openai-compatible-embeddings.md | plans/closure/embedding-routing/001-status.md | Live Ollama route and software gates pass; physical SBC footprint evidence remains |
