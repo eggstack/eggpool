@@ -419,13 +419,32 @@ impl Gateway {
         let Some(schema) = tool.get("inputSchema") else {
             return json_rpc_error(id, -32603, "Invalid tool catalog");
         };
-        if !schema_accepts(schema, &Value::Object(arguments.clone()), 0) {
+        let mut call_arguments = Value::Object(arguments.clone());
+        let supports_compact_detail = schema
+            .pointer("/properties/response_detail/enum")
+            .and_then(Value::as_array)
+            .is_some_and(|values| values.iter().any(|value| value.as_str() == Some("compact")));
+        if supports_compact_detail
+            && !call_arguments
+                .as_object()
+                .is_some_and(|object| object.contains_key("response_detail"))
+        {
+            call_arguments
+                .as_object_mut()
+                .expect("tool arguments are an object")
+                .insert("response_detail".into(), Value::String("compact".into()));
+        }
+        if serde_json::to_vec(&call_arguments)
+            .map_or(true, |bytes| bytes.len() > MAX_ARGUMENT_BYTES)
+            || !json_depth_within(&call_arguments, MAX_JSON_DEPTH)
+            || !schema_accepts(schema, &call_arguments, 0)
+        {
             return json_rpc_error(id, -32602, "Tool arguments do not match the current schema");
         }
         if self.catalog_changed(&session_id, &catalog.fingerprint) {
             return json_rpc_error(id, -32001, "Tool catalog changed; refresh discovery");
         }
-        let result = match upstream.call(name, Value::Object(arguments.clone())).await {
+        let result = match upstream.call(name, call_arguments).await {
             Ok(result) => result,
             Err(error) => return protocol_error(id, error),
         };

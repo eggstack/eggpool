@@ -162,6 +162,7 @@ Chat/Responses/Messages tool execution semantics. Request bodies are capped at
 backend operations at 16, and sessions at 1,024 with a 30-minute idle expiry.
 Only the configured loopback Eggsearch 0.4.3 service is contacted. Credentials
 are never forwarded; trust labels and structured tool results are preserved.
+See the [MCP gateway guide](tool-gateway.md) for the security model and setup.
 
 `GET /api/user-budget` is available to personal tokens and browser sessions.
 Members can read only their own rules and rollups; an active admin may select a

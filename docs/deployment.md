@@ -1184,4 +1184,5 @@ inference. A missing or incompatible backend therefore leaves normal model
 routing unchanged.
 
 See the upstream [Eggsearch deployment guide](https://github.com/eggstack/eggsearch/blob/main/docs/deployment.md)
-for its current install and service lifecycle.
+for its current install and service lifecycle. See the [EggPool MCP gateway
+guide](tool-gateway.md) for supported methods, authorization, and trust rules.

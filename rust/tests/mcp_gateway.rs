@@ -25,6 +25,7 @@ use serde_json::{Value, json};
 use tokio::{
     io::{AsyncReadExt, AsyncWriteExt},
     net::{TcpListener, TcpStream},
+    sync::Notify,
 };
 
 const PROTOCOL: &str = "2025-03-26";
@@ -33,7 +34,18 @@ const PROTOCOL: &str = "2025-03-26";
 struct Fixture {
     calls: Arc<AtomicUsize>,
     schema_version: Arc<AtomicUsize>,
+    response_mode: Arc<AtomicUsize>,
+    call_started: Arc<Notify>,
+    call_dropped: Arc<Notify>,
     version: &'static str,
+}
+
+struct CallDropSignal(Arc<Notify>);
+
+impl Drop for CallDropSignal {
+    fn drop(&mut self) {
+        self.0.notify_one();
+    }
 }
 
 async fn health() -> Json<Value> {
@@ -57,6 +69,25 @@ async fn mcp(
             .body(Body::empty())
             .unwrap();
     }
+    if method == "tools/call" && fixture.response_mode.load(Ordering::SeqCst) == 1 {
+        return Response::builder()
+            .status(StatusCode::OK)
+            .header("content-type", "application/octet-stream")
+            .body(Body::from("not an MCP response"))
+            .unwrap();
+    }
+    if method == "tools/call" && fixture.response_mode.load(Ordering::SeqCst) == 2 {
+        return Response::builder()
+            .status(StatusCode::OK)
+            .header("content-type", "application/json")
+            .body(Body::from(" ".repeat(1024 * 1024 + 1)))
+            .unwrap();
+    }
+    if method == "tools/call" && fixture.response_mode.load(Ordering::SeqCst) == 3 {
+        fixture.call_started.notify_one();
+        let _drop_signal = CallDropSignal(fixture.call_dropped.clone());
+        std::future::pending::<()>().await;
+    }
     let id = request.get("id").cloned().unwrap_or(Value::Null);
     let payload = match method {
         "initialize" => {
@@ -71,7 +102,7 @@ async fn mcp(
             );
             let tools = KNOWN_TOOLS.iter().map(|name| {
                 let (properties, required) = if *name == "web_search" {
-                    (json!({"query":{"type":"string","minLength":1,"maxLength":256}}), json!(["query"]))
+                    (json!({"query":{"type":"string","minLength":1,"maxLength":256},"response_detail":{"type":"string","enum":["compact","full"]}}), json!(["query"]))
                 } else { (json!({}), json!([])) };
                 json!({"name":name,"description":format!("bounded fixture tool v{}", fixture.schema_version.load(Ordering::SeqCst)),"inputSchema":{"type":"object","properties":properties,"required":required,"additionalProperties":false}})
             }).collect::<Vec<_>>();
@@ -79,7 +110,13 @@ async fn mcp(
         }
         "tools/call" => {
             fixture.calls.fetch_add(1, Ordering::SeqCst);
-            json!({"jsonrpc":"2.0","id":id,"result":{"content":[{"type":"text","text":"fixture result"}],"structuredContent":{"trust":"external_untrusted","source_id":"source-1"},"isError":false}})
+            let detail = request
+                .get("params")
+                .and_then(|params| params.get("arguments"))
+                .and_then(|arguments| arguments.get("response_detail"))
+                .cloned()
+                .unwrap_or(Value::Null);
+            json!({"jsonrpc":"2.0","id":id,"result":{"content":[{"type":"text","text":"fixture result"}],"structuredContent":{"trust":"external_untrusted","source_id":"source-1","response_detail":detail},"isError":false}})
         }
         _ => json!({"jsonrpc":"2.0","id":id,"error":{"code":-32601,"message":"unknown method"}}),
     };
@@ -109,14 +146,23 @@ async fn fixture_server() -> (
     tokio::task::JoinHandle<()>,
     Arc<AtomicUsize>,
     Arc<AtomicUsize>,
+    Arc<AtomicUsize>,
+    Arc<Notify>,
+    Arc<Notify>,
 ) {
     let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
     let address = listener.local_addr().unwrap();
     let calls = Arc::new(AtomicUsize::new(0));
     let schema_version = Arc::new(AtomicUsize::new(1));
+    let response_mode = Arc::new(AtomicUsize::new(0));
+    let call_started = Arc::new(Notify::new());
+    let call_dropped = Arc::new(Notify::new());
     let state = Fixture {
         calls: calls.clone(),
         schema_version: schema_version.clone(),
+        response_mode: response_mode.clone(),
+        call_started: call_started.clone(),
+        call_dropped: call_dropped.clone(),
         version: "0.4.3",
     };
     let router = Router::new()
@@ -124,7 +170,15 @@ async fn fixture_server() -> (
         .route("/mcp", post(mcp))
         .with_state(state);
     let task = tokio::spawn(async move { axum::serve(listener, router).await.unwrap() });
-    (address, task, calls, schema_version)
+    (
+        address,
+        task,
+        calls,
+        schema_version,
+        response_mode,
+        call_started,
+        call_dropped,
+    )
 }
 
 async fn runtime_fixture(
@@ -251,6 +305,21 @@ async fn raw_request_with_content_type(
     String::from_utf8(response).unwrap()
 }
 
+async fn raw_health_request(address: std::net::SocketAddr) -> String {
+    let mut stream = TcpStream::connect(address).await.unwrap();
+    let request = format!(
+        "GET /v1/healthz HTTP/1.1\r\nHost: 127.0.0.1:{}\r\nConnection: close\r\n\r\n",
+        address.port()
+    );
+    stream.write_all(request.as_bytes()).await.unwrap();
+    let mut response = Vec::new();
+    tokio::time::timeout(Duration::from_secs(4), stream.read_to_end(&mut response))
+        .await
+        .unwrap()
+        .unwrap();
+    String::from_utf8(response).unwrap()
+}
+
 fn response_body(response: &str) -> &str {
     response
         .split_once("\r\n\r\n")
@@ -271,7 +340,8 @@ fn session_id(response: &str) -> String {
 
 #[tokio::test]
 async fn mcp_sessions_filter_per_user_and_reauthorize_direct_calls() {
-    let (backend, backend_task, calls, schema_version) = fixture_server().await;
+    let (backend, backend_task, calls, schema_version, response_mode, call_started, call_dropped) =
+        fixture_server().await;
     let backend_url = format!("http://127.0.0.1:{}/mcp", backend.port());
     let (_directory, database, runtime, tokens) =
         runtime_fixture(&backend_url, "web_search", true).await;
@@ -460,7 +530,43 @@ async fn mcp_sessions_filter_per_user_and_reauthorize_direct_calls() {
         serde_json::from_str::<Value>(response_body(&refreshed_list)).unwrap()["result"]["tools"]
             .is_array()
     );
-    let result = raw_request(
+    let allowed_call_headers = [
+        ("Mcp-Session-Id", allowed_session.as_str()),
+        ("Mcp-Protocol-Version", PROTOCOL),
+    ];
+    let denied_list_headers = [
+        ("Mcp-Session-Id", denied_session.as_str()),
+        ("Mcp-Protocol-Version", PROTOCOL),
+    ];
+    let (result, concurrent_denied_list) = tokio::join!(
+        raw_request(address, &tokens[0], "POST", &allowed_call_headers, call,),
+        raw_request(address, &tokens[1], "POST", &denied_list_headers, list,),
+    );
+    let concurrent_denied_json: Value =
+        serde_json::from_str(response_body(&concurrent_denied_list)).unwrap();
+    assert!(
+        concurrent_denied_json["result"]["tools"]
+            .as_array()
+            .unwrap()
+            .is_empty()
+    );
+    let call_json: Value = serde_json::from_str(response_body(&result)).unwrap();
+    assert_eq!(
+        call_json["result"]["structuredContent"]["trust"],
+        "external_untrusted"
+    );
+    assert_eq!(
+        call_json["result"]["structuredContent"]["source_id"],
+        "source-1"
+    );
+    assert_eq!(
+        call_json["result"]["structuredContent"]["response_detail"], "compact",
+        "the gateway selects Eggsearch's compact projection when available"
+    );
+    assert_eq!(calls.load(Ordering::SeqCst), 1);
+
+    response_mode.store(1, Ordering::SeqCst);
+    let wrong_mime = raw_request(
         address,
         &tokens[0],
         "POST",
@@ -471,16 +577,50 @@ async fn mcp_sessions_filter_per_user_and_reauthorize_direct_calls() {
         call,
     )
     .await;
-    let call_json: Value = serde_json::from_str(response_body(&result)).unwrap();
-    assert_eq!(
-        call_json["result"]["structuredContent"]["trust"],
-        "external_untrusted"
-    );
-    assert_eq!(
-        call_json["result"]["structuredContent"]["source_id"],
-        "source-1"
-    );
-    assert_eq!(calls.load(Ordering::SeqCst), 1);
+    let wrong_mime_json: Value = serde_json::from_str(response_body(&wrong_mime)).unwrap();
+    assert_eq!(wrong_mime_json["error"]["code"], -32603);
+    assert!(!wrong_mime.contains("not an MCP response"));
+
+    response_mode.store(2, Ordering::SeqCst);
+    let oversized_backend = raw_request(
+        address,
+        &tokens[0],
+        "POST",
+        &[
+            ("Mcp-Session-Id", &allowed_session),
+            ("Mcp-Protocol-Version", PROTOCOL),
+        ],
+        call,
+    )
+    .await;
+    let oversized_json: Value = serde_json::from_str(response_body(&oversized_backend)).unwrap();
+    assert_eq!(oversized_json["error"]["code"], -32603);
+
+    response_mode.store(3, Ordering::SeqCst);
+    let abort_token = tokens[0].clone();
+    let abort_session = allowed_session.clone();
+    let abort_body = call.to_owned();
+    let aborted_call = tokio::spawn(async move {
+        raw_request(
+            address,
+            &abort_token,
+            "POST",
+            &[
+                ("Mcp-Session-Id", &abort_session),
+                ("Mcp-Protocol-Version", PROTOCOL),
+            ],
+            &abort_body,
+        )
+        .await
+    });
+    tokio::time::timeout(Duration::from_secs(4), call_started.notified())
+        .await
+        .expect("backend call reached the cancellation fixture");
+    aborted_call.abort();
+    let _ = aborted_call.await;
+    tokio::time::timeout(Duration::from_secs(4), call_dropped.notified())
+        .await
+        .expect("client cancellation drops the backend operation");
 
     identity::revoke_api_tokens(&database, "allowed")
         .await
@@ -514,7 +654,7 @@ async fn mcp_sessions_filter_per_user_and_reauthorize_direct_calls() {
 
 #[tokio::test]
 async fn disabled_gateway_route_is_not_registered() {
-    let (backend, backend_task, calls, _) = fixture_server().await;
+    let (backend, backend_task, calls, _, _, _, _) = fixture_server().await;
     let backend_url = format!("http://127.0.0.1:{}/mcp", backend.port());
     let (_directory, database, runtime, tokens) =
         runtime_fixture(&backend_url, "web_search", false).await;
@@ -541,6 +681,51 @@ async fn disabled_gateway_route_is_not_registered() {
         .unwrap()
         .unwrap();
     backend_task.abort();
+    database.close().await.unwrap();
+}
+
+#[tokio::test]
+async fn unavailable_backend_is_isolated_from_model_health() {
+    let (backend, backend_task, _, _, _, _, _) = fixture_server().await;
+    let backend_url = format!("http://127.0.0.1:{}/mcp", backend.port());
+    backend_task.abort();
+    let (_directory, database, runtime, tokens) =
+        runtime_fixture(&backend_url, "web_search", true).await;
+    let handle = runtime.handle();
+    let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let address = listener.local_addr().unwrap();
+    let server_task = tokio::spawn(async move { runtime.serve_listener(listener).await });
+
+    let initialize = format!(
+        "{{\"jsonrpc\":\"2.0\",\"id\":1,\"method\":\"initialize\",\"params\":{{\"protocolVersion\":\"{PROTOCOL}\",\"capabilities\":{{}},\"clientInfo\":{{\"name\":\"test\",\"version\":\"1\"}}}}}}"
+    );
+    let initialized = raw_request(address, &tokens[0], "POST", &[], &initialize).await;
+    let session = session_id(&initialized);
+    let list = raw_request(
+        address,
+        &tokens[0],
+        "POST",
+        &[
+            ("Mcp-Session-Id", &session),
+            ("Mcp-Protocol-Version", PROTOCOL),
+        ],
+        r#"{"jsonrpc":"2.0","id":2,"method":"tools/list","params":{}}"#,
+    )
+    .await;
+    let list: Value = serde_json::from_str(response_body(&list)).unwrap();
+    assert_eq!(list["error"]["code"], -32000);
+    assert!(
+        raw_health_request(address)
+            .await
+            .starts_with("HTTP/1.1 200")
+    );
+
+    handle.request_shutdown(ShutdownReason::Requested);
+    tokio::time::timeout(Duration::from_secs(6), server_task)
+        .await
+        .unwrap()
+        .unwrap()
+        .unwrap();
     database.close().await.unwrap();
 }
 

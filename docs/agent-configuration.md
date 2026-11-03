@@ -18,7 +18,7 @@ calling, and an administrator must grant the specific tools. The route
 supports MCP `2025-03-26` initialize, list, and call over JSON POST; clients
 that require downstream GET/SSE streams, resources, prompts, or resumable
 sessions are not supported. Ordinary inference tool declarations remain
-client-executed.
+client-executed. See the [gateway security and protocol guide](tool-gateway.md).
 
 ## Supported Targets
 
