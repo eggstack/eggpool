@@ -1,6 +1,6 @@
 # Tool Integration M001 — Eggsearch backend configuration and readiness
 
-Status: active
+Status: implemented
 
 Repository baseline: `0e021c1ffe55803aff5f325033e65313dca9f1dc` (main at planning, 2026-11-03)
 
