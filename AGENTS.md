@@ -29,7 +29,8 @@ providers/transport → `deep-dive-providers.md`; reload/restart →
   package version, `server/` thin HTTP adapters, `coordinator/` +
   `coordinator/streaming/` (`coordinator.rs`, `execution.rs`, `terminal.rs`,
   `timeout.rs`, `types.rs`, `diagnostics.rs` behind `mod.rs`) request lifecycle,
-  `request/` admission, `wire/` protocol codecs, `routing/` + `accounts/` +
+  `agent_orchestration.rs` finite hosted tool execution, `request/` admission,
+  `wire/` protocol codecs, `routing/` + `accounts/` +
   `catalog/` + `quota/` + `health/` selection, `model_router.rs` affinity,
   `identity.rs` + `web_session.rs` + `user_budget.rs` + `instance_budget.rs` +
   `model_policy.rs` + `tool_policy.rs` on-prem user access, `providers/` transport,

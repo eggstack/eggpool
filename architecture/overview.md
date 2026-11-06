@@ -75,9 +75,9 @@ fail closed on validation, commit, or ownership ambiguity.
 `AppError` to `ExitCode` (`Command` code, `Interrupted` → 130, else 1).
 `rust/src/lib.rs` declares the module tree (with `forbid(unsafe_code)`) and
 re-exports the CLI/config/error boundary. `rust/src/cli.rs` owns the Clap
-command tree (35 commands: `serve`, `connect`, `logout`, `check-config`, `edit`, `getkey`,
+command tree (36 commands: `serve`, `connect`, `logout`, `check-config`, `edit`, `getkey`,
 `newkey`, `configsetup`, `configremote`, `deploy`, `accounts`, `dashboard`, `db`, `models`,
-`modelinfo`, `stats`, `users`, `onboard`, `croncheck`, `ensure-running`, `migrate`,
+`modelinfo`, `stats`, `tools`, `users`, `onboard`, `croncheck`, `ensure-running`, `migrate`,
 `stop`, `restart`, `init-config`, `help`, `recover`, `uninstall`, `update`,
 `install-provenance`, `set`, `rehash`, `runtime-status`, `status`, `backup`, `version`).
 `rust/src/runtime.rs` adapts each command to `operations/*`, `config`, and
@@ -145,7 +145,7 @@ compact via finite-only `execute_compact_finite`), `dashboard/`
 (thin route facade plus bounded read projections, static/theme delivery,
 shared formatting, and page-family renderers).
 Route topology (every route registered by `rust/src/server/mod.rs`):
-inference at `/v1/chat/completions`, `/v1/messages`,
+inference at `/v1/chat/completions`, `/v1/embeddings`, `/v1/messages`,
 `/v1/responses`, `/v1/responses/compact` (bounded distinct compaction
 operation, not a Responses alias); discovery and health at `/v1/models`,
 `/v1/healthz`, `/v1/readyz`; observability at `/api/status`,
