@@ -926,7 +926,7 @@ async fn hosted_endpoint_completes_finite_model_tool_model_flow() {
 
 #[tokio::test]
 #[ignore = "requires Ollama qwen3.5:4b on loopback"]
-async fn live_ollama_eggsearch_hosted_orchestration() {
+async fn live_ollama_hosted_model_tool_model_with_mcp_fixture() {
     let (backend, backend_task, calls, _, _, _, _) = fixture_server().await;
     let backend_url = format!("http://{backend}/mcp");
     let provider_url = "http://127.0.0.1:11434/v1";

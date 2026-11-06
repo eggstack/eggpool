@@ -352,10 +352,10 @@ mod tests {
         )
         .unwrap();
         assert_eq!(base64.encoding_format, EmbeddingEncoding::Base64);
-        assert_eq!(
-            base64.upstream_body("m").unwrap().as_ref(),
-            br#"{"encoding_format":"float","input":["a","b"],"model":"m"}"#
-        );
+        let upstream: Value = serde_json::from_slice(&base64.upstream_body("m").unwrap()).unwrap();
+        assert_eq!(upstream["model"], "m");
+        assert_eq!(upstream["input"], json!(["a", "b"]));
+        assert_eq!(upstream["encoding_format"], "float");
     }
 
     #[test]

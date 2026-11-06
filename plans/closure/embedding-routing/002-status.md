@@ -50,7 +50,7 @@ formats. The sanitized capture fixture contains no client content or secret.
 
 ```bash
 cargo test --manifest-path rust/Cargo.toml --test embeddings_api -- --test-threads=1
-cargo test --manifest-path rust/Cargo.toml --test mcp_gateway live_ollama_eggsearch_hosted_orchestration -- --ignored --test-threads=1
+cargo test --manifest-path rust/Cargo.toml --test mcp_gateway live_ollama_hosted_model_tool_model_with_mcp_fixture -- --ignored --test-threads=1
 ```
 
 ### Results
