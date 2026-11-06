@@ -43,13 +43,21 @@ unique fact, ingest it through the PrivateGPT version's own documented ingest
 API, ask a question whose answer is in that fixture, then inspect the returned
 source citation and resolve it to the same PrivateGPT-owned document revision.
 Repeat with an unrelated question to confirm that the answer does not cite the
-fixture. PrivateGPT 1.0.1 was started against EggPool with Ollama 0.17.7;
-direct model discovery and embedding calls succeeded, but the documented
-`/v1/artifacts/ingest` call failed when EggPool rejected PrivateGPT's embedding
-request with `Request could not be admitted`. No retrieval or citation check
-was reached, and the request/admission discrepancy is unresolved. The topology
-above remains an operator reference, not a claim that EggPool provides
-document ACLs or citations.
+fixture. An earlier PrivateGPT 1.0.1 run against EggPool with Ollama 0.17.7
+reached `/v1/artifacts/ingest`, where EggPool rejected PrivateGPT's default
+`encoding_format: "base64"` embedding request during admission. E002 corrected
+that incompatibility: EggPool now accepts the captured request shape and
+returns validated little-endian float32 vectors encoded as base64. The
+sanitized regression fixture is
+`rust/tests/fixtures/privategpt_1_0_1_embeddings_request.sanitized.json`.
+The live request then returned HTTP 200, but ingest did not complete because
+the temporary Qdrant collection expected 1024 dimensions while the selected
+embedding model returned 768. No retrieval or citation check has passed yet.
+
+The E002 change is not part of the published EggPool 0.8.3 artifacts. It must
+ship in a newly versioned release after supported native artifact
+qualification. The topology above remains a partial operator reference, not a
+claim that EggPool provides document ACLs or citations.
 
 ## Managed users and MCP retrieval
 
