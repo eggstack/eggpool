@@ -1,0 +1,27 @@
+{
+  "capture": {
+    "source": "PrivateGPT 1.0.1 embedding client via local request capture proxy",
+    "method": "POST",
+    "path": "/v1/embeddings",
+    "content_type": "application/json",
+    "authorization": "redacted; present",
+    "request_keys": ["encoding_format", "input", "model"],
+    "model": "nomic-embed-text:latest",
+    "input_kind": "array",
+    "input_count": 4,
+    "input_utf8_byte_lengths": [146, 146, 87, 33],
+    "dimensions": null,
+    "encoding_format": "base64",
+    "user": "absent"
+  },
+  "replay_body": {
+    "model": "embed-fixture",
+    "input": [
+      "redacted captured input 1",
+      "redacted captured input 2",
+      "redacted captured input 3",
+      "redacted captured input 4"
+    ],
+    "encoding_format": "base64"
+  }
+}

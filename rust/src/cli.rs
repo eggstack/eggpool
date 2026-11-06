@@ -50,6 +50,8 @@ pub enum Command {
     #[command(subcommand)]
     Stats(StatsCommand),
     #[command(subcommand)]
+    Tools(ToolsCommand),
+    #[command(subcommand)]
     Users(UsersCommand),
     Onboard(OnboardArgs),
     Croncheck,
@@ -96,6 +98,16 @@ pub enum Command {
         output_dir: Option<PathBuf>,
     },
     Version,
+}
+
+#[derive(Debug, Subcommand)]
+pub enum ToolsCommand {
+    /// Explicitly probe the configured local Eggsearch MCP service.
+    Doctor {
+        /// Emit the stable machine-readable status object.
+        #[arg(long)]
+        json: bool,
+    },
 }
 
 #[derive(Debug, clap::Args)]
@@ -166,6 +178,9 @@ pub enum UsersCommand {
     /// Create and assign model-policy profiles during the CLI-only M004 phase.
     #[command(subcommand)]
     Policy(UsersPolicyCommand),
+    /// Grant, revoke, and inspect exact Eggsearch tool permissions.
+    #[command(subcommand)]
+    ToolPolicy(UsersToolPolicyCommand),
     /// Set or remove durable per-user budget rules.
     #[command(subcommand)]
     Budget(UsersBudgetCommand),
@@ -288,6 +303,55 @@ pub enum UsersPolicyCommand {
     Prefer(PolicyProfilePreferArgs),
 }
 
+#[derive(Debug, Subcommand)]
+pub enum UsersToolPolicyCommand {
+    /// Set or remove one exact profile tool rule.
+    ProfileRule(ToolProfileRuleArgs),
+    /// Set, deny, or inherit one user's exact tool rule.
+    UserRule(ToolUserRuleArgs),
+    /// Add an instance-wide deny for one tool.
+    InstanceDeny(ToolInstanceArgs),
+    /// Remove an instance-wide deny for one tool.
+    InstanceAllow(ToolInstanceArgs),
+    /// Show effective tool grants for one user (credential scopes excluded).
+    Show(ToolUserShowArgs),
+}
+
+#[derive(Debug, clap::Args)]
+pub struct ToolProfileRuleArgs {
+    pub profile_id: String,
+    pub tool: String,
+    #[arg(value_parser = ["allow", "deny", "inherit"])]
+    pub effect: String,
+    /// Reject the update if the profile changed after it was inspected.
+    #[arg(long)]
+    pub expected_version: Option<i64>,
+    #[arg(long, default_value = "admin")]
+    pub actor: String,
+}
+
+#[derive(Debug, clap::Args)]
+pub struct ToolUserRuleArgs {
+    pub username: String,
+    pub tool: String,
+    #[arg(value_parser = ["allow", "deny", "inherit"])]
+    pub effect: String,
+    #[arg(long, default_value = "admin")]
+    pub actor: String,
+}
+
+#[derive(Debug, clap::Args)]
+pub struct ToolInstanceArgs {
+    pub tool: String,
+    #[arg(long, default_value = "admin")]
+    pub actor: String,
+}
+
+#[derive(Debug, clap::Args)]
+pub struct ToolUserShowArgs {
+    pub username: String,
+}
+
 #[derive(Debug, clap::Args)]
 pub struct PolicyProfileCreateArgs {
     pub id: String,
@@ -373,6 +437,12 @@ pub struct UserTokenArgs {
     /// Allow one-time token output when stdout is not a TTY.
     #[arg(long)]
     pub show_secret: bool,
+    /// Grant this credential Eggsearch catalog discovery authority.
+    #[arg(long)]
+    pub tool_discovery: bool,
+    /// Grant this credential Eggsearch tool invocation authority.
+    #[arg(long)]
+    pub tool_invocation: bool,
 }
 
 #[derive(Debug, clap::Args)]
@@ -697,6 +767,7 @@ impl Command {
             Self::Models(_) => "models",
             Self::Modelinfo(_) => "modelinfo",
             Self::Stats(_) => "stats",
+            Self::Tools(_) => "tools",
             Self::Users(_) => "users",
             Self::Onboard(_) => "onboard",
             Self::Croncheck => "croncheck",

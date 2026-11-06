@@ -9,8 +9,11 @@
 mod auth;
 mod dashboard;
 mod health;
+mod hosted;
 mod inference;
+pub(crate) use inference::filtered_incoming_headers;
 mod middleware;
+pub(crate) mod tools;
 
 use auth::{
     account_page, login_page, login_submit, logout_submit, member_landing_page, password_change,
@@ -33,7 +36,7 @@ use health::{
     healthz, integration_profile, models_api, readyz, runtime_status, status_api, update_status,
     user_budget_api,
 };
-use inference::{chat_completions, messages, responses, responses_compact};
+use inference::{chat_completions, embeddings, messages, responses, responses_compact};
 use middleware::{
     admit_inference_body, authenticate, is_loopback_host, map_generation_error,
     validate_server_access, validate_server_key,
@@ -682,10 +685,15 @@ pub struct ServerState {
     database_path: String,
     trusted_proxy_ips: Vec<String>,
     allow_insecure_web_auth: bool,
+    tool_gateway: tools::Gateway,
     started_at: Instant,
 }
 
 impl ServerState {
+    fn hosted_execution_enabled(&self) -> bool {
+        self.tool_gateway.hosted_execution_enabled()
+    }
+
     fn from_config(config: &Config) -> Self {
         Self {
             api_key: config.resolved_server_api_key(),
@@ -699,6 +707,7 @@ impl ServerState {
                 .into_owned(),
             trusted_proxy_ips: config.security.trusted_proxies.clone(),
             allow_insecure_web_auth: config.security.allow_insecure_web_auth,
+            tool_gateway: tools::Gateway::new(config.tools.clone()),
             started_at: Instant::now(),
         }
     }
@@ -1180,6 +1189,12 @@ pub fn build_router(state: AppState) -> Router {
         .route("/api/status", get(status_api))
         .route("/api/user-budget", get(user_budget_api))
         .route("/v1/chat/completions", post(chat_completions))
+        .route(
+            "/v1/embeddings",
+            post(embeddings).layer(axum::extract::DefaultBodyLimit::max(
+                crate::request::embeddings::MAX_EMBEDDING_BODY_BYTES,
+            )),
+        )
         .route("/v1/messages", post(messages))
         .route("/v1/responses", post(responses))
         .route("/v1/responses/compact", post(responses_compact))
@@ -1188,6 +1203,21 @@ pub fn build_router(state: AppState) -> Router {
         .route("/static/chart.js", get(static_chart_js))
         .route("/static/favicon.svg", get(static_favicon))
         .route("/static/theme.css", get(theme_css));
+
+    if state.server.tool_gateway.enabled() {
+        router = router.route(
+            tools::PATH,
+            post(tools::gateway).layer(tools::request_limit()),
+        );
+    }
+    if state.server.hosted_execution_enabled() {
+        router = router.route(
+            hosted::PATH,
+            post(hosted::run).layer(axum::extract::DefaultBodyLimit::max(
+                hosted::MAX_REQUEST_BYTES,
+            )),
+        );
+    }
 
     router = router
         .route("/login", get(login_page).post(login_submit))
@@ -1325,6 +1355,7 @@ mod tests {
             database_path: ":memory:".to_owned(),
             trusted_proxy_ips: Vec::new(),
             allow_insecure_web_auth: false,
+            tool_gateway: tools::Gateway::new(crate::config::ToolBackendConfig::default()),
             started_at: Instant::now(),
         }
     }
@@ -1355,7 +1386,9 @@ mod tests {
             "/v1/messages",
             "/v1/responses",
             "/v1/responses/compact",
+            hosted::PATH,
             "/api/integrations/v1/profile",
+            hosted::PATH,
             "/api/user-budget",
             "/api/stats/runtime",
             "/api/stats/update",
@@ -1408,6 +1441,7 @@ mod tests {
     fn inference_path_classification_covers_all_public_inference_routes() {
         for path in [
             "/v1/chat/completions",
+            "/v1/embeddings",
             "/v1/messages",
             "/v1/responses",
             "/v1/responses/compact",

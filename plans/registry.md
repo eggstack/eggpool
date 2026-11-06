@@ -12,6 +12,8 @@ Canonical direction:
 - `plans/002-long-term-roadmap.md`
 - `plans/003-planning-process.md`
 
+New optional application-interoperability planning (2026-11-03): [ADR-0007](adrs/ADR-0007-optional-tool-authority-and-hosted-execution-boundary.md) and [ADR-0008](adrs/ADR-0008-embedding-inference-surface-boundary.md) are accepted. M001, M002, and corrective M005 are closed; M003 is conditionally closed after supported Eggsearch 0.4.3 initialize/list/call qualification; M004 is conditionally closed after a live Ollama/model/tool/model run with a local MCP fixture, while an Eggsearch-backed hosted trace and physical SBC evidence remain; E002 closes PrivateGPT base64 embedding admission, but R001 remains blocked on full ingest/retrieve/citation and secure document-delegation qualification; E001 remains conditionally closed after live Ollama qualification. Solo/SBC inference remains the default. Physical SBC evidence gates device-specific footprint claims, not unrelated correctness fixes. No unrelated milestone is reopened.
+
 Legacy archive (pre-251, immutable, top level): `plans/001-*` through
 `plans/250-*` plus `python_hotpath_dispatch_compression_optimization.md`.
 Most recently closed: Request Admission and Wire M008 (remote compaction capability
@@ -86,6 +88,9 @@ No new runtime, schema or performance claim lands with these plans.
 
 | Subsystem | Status | Roadmap | Current milestone | Dependencies or blockers |
 |---|---|---|---|---|
+| Optional tool integration | active | [tool integration roadmap](subsystems/tool-integration-roadmap.md) | M001, M002 and corrective M005 closed; M003 and M004 conditionally closed | M003 and M004 physical SBC footprint evidence remains; M004's live Ollama/model/tool/model cycle passes with a local MCP fixture, while an Eggsearch-backed hosted trace remains unqualified. |
+| Embedding routing | closing | [embedding routing roadmap](subsystems/embedding-routing-roadmap.md) | E001 conditionally closed; corrective E002 closed | E002 compatibility and full Rust/dependency verification are complete; R001 remains blocked on PrivateGPT retrieval/citation and secure document delegation. SBC footprint evidence gates only device-specific deployment claims. |
+| Retrieval interoperability | active | [retrieval interoperability roadmap](subsystems/retrieval-interoperability-roadmap.md) | R001 blocked | EggPool base64 embedding admission is corrected; complete PrivateGPT ingest/retrieve/citation and backend-enforced document ACL/delegation remain unqualified. |
 | Provider transport | closed | `plans/subsystems/provider-transport-roadmap.md` | M006 closed — Eggress 1.0.12 dependency refresh and requalification | M001–M006 closed; no successor registered. |
 | Provider profile metadata corrective | closed | `plans/subsystems/provider-profile-metadata-corrective-roadmap.md` | M001 closed — provider template endpoint/source reconciliation | M001 terminal; no successor registered. |
 | Provider profile metadata planning/documentation reconciliation | closed | `plans/subsystems/provider-profile-metadata-planning-reconciliation-corrective-roadmap.md` | C001 closed — closed-roadmap/source-truth reconciliation | No successor registered. |
@@ -93,7 +98,7 @@ No new runtime, schema or performance claim lands with these plans.
 | Routing selection | active | `plans/subsystems/routing-selection-roadmap.md` | M009 closed — health effect ownership and terminal-withdrawal producer retirement | Reopened on evidence at baseline `e6822d8f78`: M001–M003 remain closed. M004, M005, and M006 are closed through M007. M008 is closed through `plans/closure/routing-selection/008-status.md`. M009 is closed through `plans/closure/routing-selection/009-status.md`. No further milestone is registered in this subsystem. |
 | Runtime efficiency | closed | `plans/subsystems/runtime-efficiency-roadmap.md` | M001–M003 closed — no successor registered | No M003-dependent plan was unblocked. Persistence M007 has since completed Pi 5/MMC qualification and was rejected on WAL convergence gates; production is unchanged. |
 | Persistence | active | `plans/subsystems/persistence-roadmap.md` | M011 closed — post-M010 roadmap/documentation reconciliation | M009/M010 closures accepted. Documentation/tooling-only corrective; production remains WAL/NORMAL. No technical persistence successor is registered. |
-| Deployment and packaging | active | `plans/subsystems/deployment-packaging-roadmap.md` | M008 closed — CI dependency-lock discipline | Reopened on evidence at baseline `e6822d8f78`: M001–M005 remain closed. M006 is closed through M007. M008 is closed; its closure record is `plans/closure/deployment-packaging/008-status.md`, and the Deployment and Packaging M008 row has moved from the "Dependency-ready implementation plans" table to the "Recently closed" table. |
+| Deployment and packaging | active | `plans/subsystems/deployment-packaging-roadmap.md` | M008 and M009 closed | M009 resolves audited dependencies and adapts bounded backup member-name parsing; serial suites and locked release build passed. |
 | Dashboard | closed | `plans/subsystems/dashboard-roadmap.md` | M014 closed — operator surface presentation and accessibility corrective | Reopened on evidence at baseline `e6822d8f78`: M001–M013 remain closed. M014 is closed; the paired browser disposition needs the frozen oracle worktree and a browser, and the stale on-prem browser reference artifact has to be regenerated on hardware. |
 | On-prem user access | closed | `plans/subsystems/on-prem-user-access-roadmap.md` | M024 closed — browser session CSRF delivery and member account surface corrective | Reopened on evidence at baseline `d04ad6831c6e030b7f5fc8a56501fdfecab982bd`: M001–M023 remain closed. `plans/adrs/ADR-0004-browser-session-csrf-delivery-and-account-scoped-sign-in-throttling.md` was accepted on 2026-10-23, and M024 implements that decision; it is closed. |
 | On-prem concurrency performance | active | `plans/subsystems/on-prem-concurrency-performance-roadmap.md` | M002 closed — ordinary-server synthetic baseline recorded | M001's Pi/microSD solo tail attribution stays conditionally closed; M002 authorizes no WAL/SQLite topology change. |
@@ -313,6 +318,7 @@ record is `plans/closure/deployment-packaging/008-status.md`.
 
 | Subsystem | Milestone | Blocker |
 |---|---|---|
+| Retrieval interoperability | [R001 external RAG reference](implementation/retrieval-interoperability/001-external-rag-contract-and-reference.md), [blocked closure record](closure/retrieval-interoperability/001-status.md) | Full PrivateGPT ingest/retrieve/citation remains unqualified after EggPool base64 admission fix; secure backend document ACL/delegation interface is absent; E001 is optional. |
 
 Unblock audit (on-prem user access reopening after M012 closure, baseline
 `3c7def1e`): M001–M013 closure records remain immutable; no
@@ -344,9 +350,16 @@ Historical M007 blocker assessment at baseline `7e241ad` (`plans/closure/persist
 ## Recently closed
 
 | Subsystem / plan | Disposition | Evidence |
+| Tool Integration M004 — Finite hosted tool orchestration | conditionally closed — deterministic flow, authorization, cancellation, result bounds, and default/no-default suites pass; live Ollama with local MCP fixture completed two model turns and one tool call in 40.95s and 65.54s; Eggsearch-backed hosted trace and physical SBC footprint evidence remain | `plans/closure/tool-integration/004-status.md`, implementation `5451be62` |
+| Embedding Routing E001 — OpenAI-compatible embeddings | conditionally closed — explicit configured embedding eligibility, shared coordinator admission/accounting, deterministic and live Ollama compatibility, and default/no-default suites pass; physical SBC footprint evidence remains | `plans/closure/embedding-routing/001-status.md`, implementation `088a1379` |
+| Embedding Routing E002 — PrivateGPT base64 client compatibility | closed — sanitized captured request is supported; unsupported encodings fail before upstream submission; full serial suites, dependency audit, strict CI and locked release build pass | `plans/closure/embedding-routing/002-status.md`, implementation `73eac4c6` |
+| Tool Integration M005 — Canonical tool identity correction | closed — the grant authority and explicit readiness doctor share the exact ten-name Eggsearch 0.4.3 catalog; live initialize/list/call and rebuilt doctor pass; default/no-default strict lint and serial workspace suites pass; M003 promoted to ready | `plans/closure/tool-integration/005-status.md`, implementation `c115fdbc` |
+| Tool Integration M003 — Authenticated MCP gateway | conditionally closed — disabled-by-default authenticated route; per-user grants/scopes/revocation, protocol subset, live Eggsearch 0.4.3 call, bounded/cancelled backend calls and failure isolation pass; physical SBC footprint/contention evidence remains | `plans/closure/tool-integration/003-status.md`, implementation `c61a31a`, hardening `5a24eeb` |
+| Tool Integration M002 — Effective tool grants and credential scopes | closed — additive v65 default-deny policy, explicit discovery/invocation credential scopes, live revocation checks, content-free audit and backup/restore qualification; no invocation route | `plans/closure/tool-integration/002-status.md`, implementation `df2f6bb0`, restore test `cff31bde`, admin denial test `da0450b9` |
 | Routing Selection M009 — health effect ownership and terminal-withdrawal producer retirement | closed — the repository now contains one effect-application path and it is the live one: the parallel `HealthEffectApplier` that had no production caller, disabled jitter where the live path enables it, and wrote the account's escalation rung into a model durable row is deleted with its three public re-exports; the unreachable authoritative-absence producer, the health manager's in-memory terminal set, and the terminal-withdrawal branch they fed are removed; the durable terminal vocabulary is retained, annotated as producer-less, and still parsed and still enforced by the routing eligibility gate, so an existing `terminal_withdrawn` row keeps gating its model exactly as before; the backoff policy table, the reason vocabulary, the scope rules, the escalation rungs, the quarantine state machine, and the routing behaviour of a healthy system are unchanged; three new durable-effects tests, each guard shown failing on a deliberate perturbation | `plans/closure/routing-selection/009-status.md`; implementation `2304d6ca` |
 | Routing Selection M008 — durable health state repair and authentication-failure durability | closed — a legacy `model_unavailable` row with no model identity is skipped and counted at hydration instead of failing the batch, so a database written by a predecessor release no longer prevents EggPool from starting, and the skip is reported with a count and the reason vocabulary only; a skipped row grants neither an account-wide nor a model-wide suppression, because it carries no model identity to scope it by; the durable account-scoped scope is unique under the v64 partial unique index over `(account_id, reason)` where `model_id IS NULL`, with the duplicate rows the NULL-distinct table constraint admitted collapsed first; the live failure path now writes the deadline-less `authentication_failed` row on the `(account_id, NULL, 'authentication_failed')` key, so a rejected credential stays suppressed across a restart and is released by a credential rotation, while every other reason keeps its early return; the backoff policy table, the reason vocabulary, the scope rules, the escalation rungs, the quarantine state machine, and the routing behaviour of a healthy system are unchanged; six new durable-effects tests and one new migration test, each guard shown failing on a deliberate revert | `plans/closure/routing-selection/008-status.md`; implementation `b66373f2` |
 | Deployment and packaging M008 — CI dependency-lock discipline | closed — the four CI gates that install the Python environment now use `uv sync --locked`, so a `pyproject.toml` that has drifted from the committed lockfile fails the job at the environment-install step with a message naming the lockfile and the remedy, instead of the first `uv run` silently re-resolving and rewriting the lockfile; the release-docs guard test now runs the validator under the test suite's own interpreter and spawns no `uv` process; a guard derived from the workflows' own `run:` steps holds every project-environment install to `--locked` while leaving the release workflow's `--no-project --with maturin==1.14.1` isolation alone, and was shown failing on a deliberate revert; the committed `uv.lock` and `pyproject.toml` are byte-identical before and after; the release artifact, the publication gate, the action pins, the release version derivation, and the release documentation contract are unchanged | `plans/closure/deployment-packaging/008-status.md`; implementation `901d5182` |
+| Deployment and packaging M009 — dependency advisory remediation | closed — RustSec advisories resolved without ignores; ZIP restore member names decode fallibly and remain bounded; full serial suites and locked release build pass | `plans/closure/deployment-packaging/009-status.md`, implementation `32f5c66a` |
 | On-prem user access M024 — browser session CSRF delivery and member account surface corrective | closed — the CSRF cookie is delivered on exactly the requests the session cookie is delivered on, so a deep-linked operator's page is actionable; the double-submit token requirement, the server-side origin check, and the transport gate are unchanged; the sign-in throttle bounds an account rather than an (account, source address) pair, and a successful sign-in clears the account bucket only, never the per-peer bucket; one document builder renders every sign-in and member surface, every sign-in response is `no-store`, and a member lands on `/account/landing` that links the member surface; no schema, configuration, dependency, or published API change; ADR-0004 accepted 2026-10-23 with two self-contradicting passages corrected before acceptance | `plans/closure/on-prem-user-access/024-status.md`; implementation `c2ca0a6e`; ADR acceptance `7aa5d2d9` |
 | Dashboard M014 — operator surface presentation and accessibility corrective | closed — every reachable shell links the theme stylesheet and a guard proves every variable the stylesheet reads is published by every bundled theme; the status pills are derived from the theme's own semantic tokens and clear 4.5:1 in all fifty bundled themes where all fifty previously failed, worst case 1.42:1 before and 4.53:1 after, and the guard rejects a deliberate regression; the chart surface terminates in a rendered chart or an explicit failure without re-fetching the payload; every chart canvas has an accessible name, the chart shell and the refresh indicator are live regions, and the skip link is the first focusable element; the retired frontend surface is removed behind a guard that fails on reintroduction; the asset manifest matches the working-tree bytes and the oracle divergence record carries one reason per divergence; the paired browser disposition remains outstanding because it needs the frozen oracle worktree and a browser | `plans/closure/dashboard/014-status.md`; implementation `2db8265a` |
 | Request admission and wire M008 — remote compaction capability contract | closed — a compact request against an installation with no eligible provider surface fails with a typed capability outcome and consumes no provider attempt; the ordinary selection failure stays distinguishable; the bundled profile advertises no capability; nine new tests, each guard shown failing on a deliberate revert | `plans/closure/request-admission-wire/008-status.md` |
@@ -864,3 +877,46 @@ post-change performance comparison remains a closure condition, not a
 dependency for any registered plan. No capacity claim is introduced.
 
 M023 performance closure audit (`plans/closure/on-prem-user-access/023-performance-qualification.md`, baseline `83c0779a`): the modified release binary passed its 27-run no-rule ordinary-server matrix and three active-throttle runs on the attested Ubuntu/NVMe host. Reviewed the on-prem implementation plans, subsystem dependency graph, and dependency-ready, active, and blocked registry tables. M023 has no registered successor or downstream plan; no future work is newly unblocked, no blocked row is promoted, and no other plan status changes. The on-prem user-access roadmap is closed with its historical closure records retained. No capacity SLA is introduced.
+
+Unblock audit (Tool Integration M002 closed, implementation `df2f6bb0`,
+`plans/closure/tool-integration/002-status.md`): reviewed the tool-integration,
+embedding-routing and retrieval-interoperability implementation plans, their
+roadmap dependency graphs, and the dependency-ready, active and blocked
+registry tables. M003's M002 dependency is satisfied, but its supported
+Eggsearch session/transport and live `tools/call` qualification remains
+unsatisfied, so M003 stays blocked. M004 remains blocked on M003 closure and
+coordinator/IR qualification. E001 remains blocked on a qualified live local
+embedding provider; R001 remains blocked on M003 and backend-enforced document
+ACL/delegation evidence. No plan is promoted by this audit.
+
+Embedding Routing E001 readiness audit (baseline `c61a31a`): ADR-0008 is
+accepted, and the local Ollama 0.17.7 `nomic-embed-text:latest` endpoint
+completed a two-input OpenAI-compatible embeddings request with two ordered,
+finite 768-dimensional vectors and usage. This supplies the plan's live
+provider/model contract gate, not EggPool implementation evidence. E001 moves
+from blocked to ready; its roadmap moves from proposed to active. The tool
+integration and retrieval plans have no hard dependency on E001.
+
+Embedding Routing E001 activation audit: E001 is the only registered plan in
+its subsystem and its hard ADR-0008 and live-provider gates are satisfied.
+It moves from ready to active to implement the public endpoint; no dependency
+of the tool-integration or retrieval workstreams is changed.
+
+Tool Integration M004 readiness audit (baseline `a3563c1`): M003's software
+capability is conditionally closed; its only remaining condition is physical
+SBC footprint/contention evidence. ADR-0007 is accepted. The repository
+provides the bounded completed-call IR (`CanonicalToolCallAccumulator` and
+`CompletedToolCall`), a generation-owned `GenerationLease`, the shared
+`execute_endpoint_attributed` coordinator path, and request principal
+attribution. The M004 first work package will expose a crate-private M003
+tool-invocation service for reuse without routing through HTTP. The local
+Eggsearch fixture/live service and Ollama models are available; deterministic
+model behavior will be supplied by M004's test fixture. M004 moves from
+blocked to ready. The SBC operational condition does not change the M003
+software interface used by M004.
+
+Historical Tool Integration M004 activation audit: M004 was the remaining
+active milestone after its M003 software dependency and ADR-0007 decision were
+satisfied. It is now conditionally closed; see
+`plans/closure/tool-integration/004-status.md` for implementation and live
+qualification evidence.

@@ -211,6 +211,8 @@ pub enum FiniteCoordinatorError {
     NoEligibleRoute,
     #[error("remote compaction is not supported by any eligible provider wire surface")]
     RemoteCompactionUnsupported,
+    #[error("no explicitly qualified embeddings provider is available")]
+    EmbeddingsUnsupported,
     #[error("finite request selected unknown provider {provider_id:?}")]
     MissingProvider { provider_id: String },
     #[error("finite request has no configured wire profile for provider {provider_id:?}")]
@@ -289,6 +291,7 @@ pub struct FiniteRequest {
 enum FiniteAdmission {
     Generate(AdmittedRequest),
     Compact(Option<CompactAdmittedRequest>),
+    Embedding(Option<crate::request::embeddings::EmbeddingRequest>),
 }
 
 struct FiniteExecutionInput {
@@ -323,6 +326,7 @@ impl FiniteExecutionInput {
             super::endpoints::InferenceOperation::Compact => {
                 FiniteAdmission::Compact(compact_admission)
             }
+            super::endpoints::InferenceOperation::Embedding => FiniteAdmission::Embedding(None),
         };
         Self {
             proxy_request_id,
@@ -359,11 +363,41 @@ impl FiniteExecutionInput {
         }
     }
 
+    fn embedding(
+        proxy_request_id: String,
+        raw_body: Bytes,
+        incoming_headers: HeaderMap,
+        embedding: crate::request::embeddings::EmbeddingRequest,
+        routing_facts: RoutingRequestFacts,
+    ) -> Self {
+        Self {
+            proxy_request_id,
+            raw_body,
+            incoming_headers,
+            request_id: None,
+            correlation_id: None,
+            client_surface: ClientSurface::ChatCompletions,
+            routing_facts,
+            operation: super::endpoints::InferenceOperation::Embedding,
+            admission: FiniteAdmission::Embedding(Some(embedding)),
+            attribution: None,
+        }
+    }
+
     fn canonical(&self) -> Option<&crate::wire::ir::CanonicalRequest> {
         match &self.admission {
             FiniteAdmission::Generate(admitted) => Some(&admitted.canonical),
             FiniteAdmission::Compact(Some(compact)) => Some(&compact.canonical),
-            FiniteAdmission::Compact(None) => None,
+            FiniteAdmission::Compact(None) | FiniteAdmission::Embedding(_) => None,
+        }
+    }
+
+    fn model_id(&self) -> Option<&str> {
+        match &self.admission {
+            FiniteAdmission::Generate(admitted) => Some(&admitted.canonical.model),
+            FiniteAdmission::Compact(Some(compact)) => Some(&compact.canonical.model),
+            FiniteAdmission::Compact(None) | FiniteAdmission::Embedding(None) => None,
+            FiniteAdmission::Embedding(Some(request)) => Some(&request.model),
         }
     }
 }
@@ -640,17 +674,46 @@ impl FiniteCoordinator {
         self.execute_input(input, attribution).await
     }
 
+    /// Execute a typed embeddings request through the same selection,
+    /// publication, provider retry, and terminal finalization owner as finite
+    /// dialogue requests. Embedding semantics remain outside the dialogue IR.
+    pub(crate) async fn execute_embedding_admitted(
+        &self,
+        proxy_request_id: String,
+        raw_body: Bytes,
+        incoming_headers: HeaderMap,
+        embedding: crate::request::embeddings::EmbeddingRequest,
+        routing_facts: RoutingRequestFacts,
+        attribution: Option<crate::identity::RequestAttribution>,
+    ) -> Result<FiniteExecution, FiniteCoordinatorError> {
+        let mut input = FiniteExecutionInput::embedding(
+            proxy_request_id,
+            raw_body,
+            incoming_headers,
+            embedding,
+            routing_facts,
+        );
+        input.attribution = attribution;
+        let attribution = input.attribution.clone();
+        self.execute_input(input, attribution).await
+    }
+
     async fn execute_input(
         &self,
         mut request: FiniteExecutionInput,
         attribution: Option<crate::identity::RequestAttribution>,
     ) -> Result<FiniteExecution, FiniteCoordinatorError> {
         request.attribution = attribution;
-        let Some(canonical) = request.canonical() else {
+        let Some(model_id) = request.model_id() else {
             return Err(FiniteCoordinatorError::InvalidFacts);
         };
-        if canonical.origin.client_surface() != Some(request.client_surface)
-            || request.routing_facts.canonical_model_id != canonical.model
+        if request.routing_facts.canonical_model_id != model_id
+            || (request.operation != super::endpoints::InferenceOperation::Embedding
+                && request.canonical().is_none_or(|canonical| {
+                    canonical.origin.client_surface() != Some(request.client_surface)
+                }))
+            || (request.operation == super::endpoints::InferenceOperation::Embedding
+                && request.client_surface != ClientSurface::ChatCompletions)
         {
             return Err(FiniteCoordinatorError::InvalidFacts);
         }
@@ -670,6 +733,18 @@ impl FiniteCoordinator {
         // selection failure, and it consumes no claim, no provider attempt, and
         // no quota reservation.
         let is_compact = request.operation == super::endpoints::InferenceOperation::Compact;
+        let is_embedding = request.operation == super::endpoints::InferenceOperation::Embedding;
+        let requested_model = request
+            .model_id()
+            .ok_or(FiniteCoordinatorError::InvalidFacts)?;
+        if is_embedding
+            && !self.providers.values().any(|provider| {
+                provider.embeddings_path.is_some()
+                    && provider.embedding_models.contains(requested_model)
+            })
+        {
+            return Err(FiniteCoordinatorError::EmbeddingsUnsupported);
+        }
         if is_compact
             && !self.providers.is_empty()
             && !remote_compaction_capable(&self.providers, &self.provider_profiles)
@@ -681,6 +756,7 @@ impl FiniteCoordinator {
         // The ordinary selection failure would then be indistinguishable from
         // a missing account, so the capability outcome reports it instead.
         let mut compact_capability_missed = false;
+        let mut embedding_capability_missed = false;
 
         loop {
             let claim = if let Some(account_name) = preferred_account.as_deref() {
@@ -776,6 +852,8 @@ impl FiniteCoordinator {
                     None => {
                         if compact_capability_missed {
                             Err(FiniteCoordinatorError::RemoteCompactionUnsupported)
+                        } else if embedding_capability_missed {
+                            Err(FiniteCoordinatorError::EmbeddingsUnsupported)
                         } else {
                             Err(FiniteCoordinatorError::NoEligibleRoute)
                         }
@@ -788,6 +866,16 @@ impl FiniteCoordinator {
                 claim.rollback_claim()?;
                 return Err(FiniteCoordinatorError::MissingProvider { provider_id });
             };
+            if is_embedding
+                && (provider.embeddings_path.is_none()
+                    || !provider.embedding_models.contains(requested_model))
+            {
+                embedding_capability_missed = true;
+                claim.rollback_claim()?;
+                excluded_accounts.insert(claim.account_name().to_owned());
+                preferred_account = None;
+                continue;
+            }
             let profiles = self
                 .provider_profiles
                 .get(&provider_id)
@@ -830,6 +918,23 @@ impl FiniteCoordinator {
                     continue;
                 }
                 self.attempts.prepare_candidates(compact_profiles, "static")
+            } else if is_embedding {
+                let embedding_profiles = profiles
+                    .iter()
+                    .filter(|profile| {
+                        profile.definition.surface == WireSurface::OpenaiChatCompletions
+                    })
+                    .cloned()
+                    .collect::<Vec<_>>();
+                if embedding_profiles.is_empty() {
+                    embedding_capability_missed = true;
+                    claim.rollback_claim()?;
+                    excluded_accounts.insert(claim.account_name().to_owned());
+                    preferred_account = None;
+                    continue;
+                }
+                self.attempts
+                    .prepare_candidates(embedding_profiles, "static")
             } else {
                 self.attempts
                     .prepare_candidates_borrowed(profiles, "static")
@@ -860,9 +965,14 @@ impl FiniteCoordinator {
                 .iter()
                 .any(|candidate| !attempted.contains(&candidate.surface()));
             let upstream_protocol = protocol_for_surface(candidate.surface());
+            let client_protocol = if is_embedding {
+                "openai_embeddings"
+            } else {
+                request.client_surface.protocol()
+            };
             let mut publication_input = PublicationInput::new(
                 request.proxy_request_id.clone(),
-                request.client_surface.protocol(),
+                client_protocol,
                 upstream_protocol,
                 false,
                 i64::from(attempt_number),
@@ -1004,6 +1114,58 @@ impl FiniteCoordinator {
                             attempt_number,
                             status,
                             "compact request could not be prepared for the selected provider",
+                        );
+                        let data = self.upstream_prep_failure_data(
+                            &identity,
+                            &candidate.profile,
+                            status,
+                            error_class,
+                            request_bytes,
+                        );
+                        return Ok(self.pending_terminal(
+                            published.identity,
+                            Some(published.claim),
+                            response,
+                            data,
+                        ));
+                    }
+                }
+            } else if is_embedding {
+                let FiniteAdmission::Embedding(Some(embedding)) = &request.admission else {
+                    let response = self.error_response(
+                        request.client_surface,
+                        &request.proxy_request_id,
+                        attempt_number,
+                        StatusCode::BAD_REQUEST,
+                        "embedding admission facts are inconsistent with the requested operation",
+                    );
+                    let data = self.local_failure_data(
+                        &identity,
+                        &candidate.profile,
+                        StatusCode::BAD_REQUEST,
+                        "InvalidFacts",
+                        request_bytes,
+                    );
+                    return Ok(self.pending_terminal(
+                        published.identity,
+                        Some(published.claim),
+                        response,
+                        data,
+                    ));
+                };
+                match self
+                    .attempts
+                    .prepare_embedding_borrowed(borrowed_input, embedding)
+                {
+                    Ok(value) => value,
+                    Err(error) => {
+                        let (status, error_class) = wire_prep_failure(&error);
+                        let response = self.error_response(
+                            request.client_surface,
+                            &request.proxy_request_id,
+                            attempt_number,
+                            status,
+                            "embeddings request could not be prepared for the selected provider",
                         );
                         let data = self.upstream_prep_failure_data(
                             &identity,
@@ -1536,6 +1698,167 @@ impl FiniteCoordinator {
                     }
                 }
             }
+            if is_embedding {
+                let FiniteAdmission::Embedding(Some(embedding)) = &request.admission else {
+                    return Err(FiniteCoordinatorError::InvalidFacts);
+                };
+                if !upstream.status.is_success() {
+                    let observation = self
+                        .observation(
+                            &identity,
+                            &candidate.profile,
+                            attempt_number,
+                            FailureSource::ProviderResponse,
+                            Some(upstream.status),
+                            None,
+                            None,
+                            alternate_wire_available,
+                            "embedding_status",
+                        )
+                        .with_retry_after(retry_after_from_headers(
+                            &upstream.headers,
+                            self.retry_policy,
+                        ));
+                    let (effects, first) = self.decide(&observation)?;
+                    if first {
+                        self.apply_effects(&published.claim, &effects).await;
+                    }
+                    if self.should_retry(&effects) {
+                        self.cleanup_failed_attempt(
+                            &published,
+                            self.retry_cleanup_data(
+                                &identity,
+                                upstream_protocol,
+                                &effects,
+                                Some(upstream.status),
+                                upstream.upstream_request_id.clone(),
+                                upstream.headers_elapsed,
+                                request_bytes,
+                                body.len(),
+                            ),
+                        )
+                        .await?;
+                        self.prepare_next(
+                            &mut attempt_number,
+                            &mut preferred_account,
+                            &mut excluded_accounts,
+                            &identity,
+                            &effects,
+                        );
+                        continue;
+                    }
+                    let response = self.client_response(
+                        upstream.status,
+                        &upstream.headers,
+                        body.clone(),
+                        &request.proxy_request_id,
+                        attempt_number,
+                    );
+                    let data = self.failure_data(
+                        &identity,
+                        upstream_protocol,
+                        &effects,
+                        Some(upstream.status),
+                        upstream.upstream_request_id,
+                        upstream.headers_elapsed,
+                        request_bytes,
+                        body.len(),
+                    );
+                    return Ok(self.pending_terminal(
+                        identity,
+                        Some(published.claim),
+                        response,
+                        data,
+                    ));
+                }
+                let decoded = crate::request::embeddings::EmbeddingResponse::parse(
+                    &body,
+                    embedding,
+                    &identity.model_id,
+                );
+                let decoded = match decoded {
+                    Ok(value) => value,
+                    Err(_) => {
+                        let observation = self.observation(
+                            &identity,
+                            &candidate.profile,
+                            attempt_number,
+                            FailureSource::ProviderResponse,
+                            Some(StatusCode::BAD_GATEWAY),
+                            Some(FailureCategory::Fatal),
+                            None,
+                            alternate_wire_available,
+                            "embedding_response",
+                        );
+                        let (effects, first) = self.decide(&observation)?;
+                        if first {
+                            self.apply_effects(&published.claim, &effects).await;
+                        }
+                        let response = self.error_response(
+                            request.client_surface,
+                            &request.proxy_request_id,
+                            attempt_number,
+                            StatusCode::BAD_GATEWAY,
+                            "provider returned an invalid embeddings response",
+                        );
+                        let data = self.failure_data(
+                            &identity,
+                            upstream_protocol,
+                            &effects,
+                            Some(StatusCode::BAD_GATEWAY),
+                            upstream.upstream_request_id,
+                            upstream.headers_elapsed,
+                            request_bytes,
+                            body.len(),
+                        );
+                        return Ok(self.pending_terminal(
+                            identity,
+                            Some(published.claim),
+                            response,
+                            data,
+                        ));
+                    }
+                };
+                self.wire_resolver.accept(
+                    &identity.provider_id,
+                    &identity.model_id,
+                    &resolution.fingerprint,
+                    candidate.surface(),
+                    Instant::now(),
+                );
+                self.router.record_success(&published.claim);
+                let usage = decoded.input_tokens.map(|input_tokens| CanonicalUsage {
+                    input_tokens: Some(input_tokens),
+                    output_tokens: Some(0),
+                    total_tokens: Some(input_tokens),
+                    cache_counter_status: CacheCounterStatus::NotReported,
+                    ..CanonicalUsage::default()
+                });
+                if let Some(usage) = usage.as_ref() {
+                    self.router.record_usage(&published.claim, usage);
+                }
+                let response = self.client_response(
+                    upstream.status,
+                    &upstream.headers,
+                    decoded.body.clone(),
+                    &request.proxy_request_id,
+                    attempt_number,
+                );
+                let data = self.success_data(
+                    &identity,
+                    usage.as_ref(),
+                    upstream.status,
+                    upstream.headers_elapsed,
+                    request_start.elapsed(),
+                    request_bytes,
+                    decoded.body.len(),
+                    upstream.upstream_request_id,
+                );
+                return Ok(self.pending_terminal(identity, Some(published.claim), response, data));
+            }
+            let Some(canonical) = request.canonical() else {
+                return Err(FiniteCoordinatorError::InvalidFacts);
+            };
             let decoded = match self.wire.decode_finite_response_for_request(
                 &body,
                 upstream.status.as_u16(),

@@ -75,9 +75,9 @@ fail closed on validation, commit, or ownership ambiguity.
 `AppError` to `ExitCode` (`Command` code, `Interrupted` → 130, else 1).
 `rust/src/lib.rs` declares the module tree (with `forbid(unsafe_code)`) and
 re-exports the CLI/config/error boundary. `rust/src/cli.rs` owns the Clap
-command tree (35 commands: `serve`, `connect`, `logout`, `check-config`, `edit`, `getkey`,
+command tree (36 commands: `serve`, `connect`, `logout`, `check-config`, `edit`, `getkey`,
 `newkey`, `configsetup`, `configremote`, `deploy`, `accounts`, `dashboard`, `db`, `models`,
-`modelinfo`, `stats`, `users`, `onboard`, `croncheck`, `ensure-running`, `migrate`,
+`modelinfo`, `stats`, `tools`, `users`, `onboard`, `croncheck`, `ensure-running`, `migrate`,
 `stop`, `restart`, `init-config`, `help`, `recover`, `uninstall`, `update`,
 `install-provenance`, `set`, `rehash`, `runtime-status`, `status`, `backup`, `version`).
 `rust/src/runtime.rs` adapts each command to `operations/*`, `config`, and
@@ -98,7 +98,7 @@ Deep dive: [Core](deep-dive-core.md).
 `rust/src/config.rs` is the typed TOML contract (`Config`, `ServerConfig`,
 `UpstreamConfig`, `DatabaseConfig`, `RoutingConfig`, `ModelsConfig`,
 `ProviderConfig`, `DashboardConfig`, `SecurityConfig`, `MetricsConfig`,
-`BackupConfig`, `ModelRouterConfig`, `IntegrationsConfig` (`[integrations].advertise_base_url`),
+`BackupConfig`, `ModelRouterConfig`, `IntegrationsConfig` (`[integrations].advertise_base_url`), `ToolBackendConfig` (`[tools]`, explicit diagnostics, optional gateway, and disabled-by-default hosted execution),
 transcoder/model-info policies) with
 `from_toml`/`validate` and proxy/model-router compilation. Resolution order is
 explicit `--config` > `$EGGPOOL_CONFIG` > `$XDG_CONFIG_HOME`-aware
@@ -145,7 +145,7 @@ compact via finite-only `execute_compact_finite`), `dashboard/`
 (thin route facade plus bounded read projections, static/theme delivery,
 shared formatting, and page-family renderers).
 Route topology (every route registered by `rust/src/server/mod.rs`):
-inference at `/v1/chat/completions`, `/v1/messages`,
+inference at `/v1/chat/completions`, `/v1/embeddings`, `/v1/messages`,
 `/v1/responses`, `/v1/responses/compact` (bounded distinct compaction
 operation, not a Responses alias); discovery and health at `/v1/models`,
 `/v1/healthz`, `/v1/readyz`; observability at `/api/status`,
@@ -184,6 +184,11 @@ token estimates + routing facts). `body.rs` owns deterministic compact JSON
 encoding; `limits.rs` owns overflow-safe media/token/reservation estimators
 and surface-aware output-token resolution; `resource_budget.rs` owns the
 effective body ceiling (`max(64 MiB, live limit)`, capped at 256 MiB).
+The finite `/v1/embeddings` operation uses `request/embeddings.rs` for a
+separate text/vector contract and never enters the dialogue IR. Its endpoint
+reuses principal/model-policy admission, while provider selection requires an
+exact operator-qualified model and fixed embeddings path. Text/vector content
+is not logged or persisted; missing upstream usage remains unknown.
 
 Deep dives: [Request lifecycle](deep-dive-request-lifecycle.md),
 [Transcoding](deep-dive-transcoder.md).
@@ -347,7 +352,7 @@ is the only persistence boundary. `db/` owns only the `backup_to` snapshot
 primitive; backup orchestration lives in `operations/backup.rs` and crash
 repair in `runtime_lifecycle/recovery.rs` plus coordinator reconciliation.
 Migrations (`rust/assets/db/migrations/`,
-currently v1–v64 with `checksums.json`) are embedded and immutable; commit or
+currently v1–v65 with `checksums.json`) are embedded and immutable; commit or
 ownership ambiguity fails closed; startup reconciliation repairs only covered
 states. Repositories accept no unbounded diagnostic content and never store
 credentials, prompts, raw bodies, or cache keys.
@@ -501,8 +506,14 @@ observability JSON (`/api/stats/transcoding`, `/api/stats/cache-observability`,
 observational only.
 - On-prem user access: local downstream identities with Argon2id passwords and
 revocable per-user agent tokens (`eggpool users …`), browser login behind a
-session/CSRF boundary, versioned per-user model policy, and per-user plus
-instance-global daily/monthly budgets; the admin and member surfaces are the
+session/CSRF boundary, versioned per-user model policy, default-deny Eggsearch
+tool grants and explicit per-token tool scopes, a disabled-by-default
+authenticated Eggsearch MCP gateway at `POST /api/tools/v1/mcp`, and a separate
+finite hosted operation at `POST /api/agent/v1/run`; per-user and instance-global
+daily/monthly budgets remain owned by their current authorities. Hosted model
+turns remain coordinator calls, while tool calls reauthorize through the
+gateway's internal bounded invocation service.
+The admin and member surfaces are the
 `/admin/*`, `/users`, `/profiles`, `/account*`, `/my-account*`, and `/usage`
 routes; see [On-prem user access](deep-dive-on-prem-user-access.md).
 - CLI: full command tree in §1 (`status` is the concise provider health

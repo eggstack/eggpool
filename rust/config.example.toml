@@ -507,6 +507,10 @@ enabled = false
 # id = "opencode-go"
 # base_url = "https://opencode.ai/zen/go/v1"
 # protocols = ["openai", "anthropic"]
+# Optional embeddings qualification is independent of chat support. Set both
+# values only after testing the exact provider/model pair:
+# embeddings_path = "/embeddings"
+# embedding_models = ["nomic-embed-text:latest"]
 # routing_priority = 0  # higher = preferred; default 0 means "load balance
 #                       # within this provider using the existing scorer".
 # [providers.opencode-go.stream_timeouts]
@@ -1061,3 +1065,15 @@ protocol = "anthropic"
 # leave unset for loopback-only development.
 # [integrations]
 # advertise_base_url = "https://pool.example.internal/v1"
+
+# ─── Optional Local Tools Backend ───────────────────────────────────
+# Omitted or disabled by default. This does not start Eggsearch or affect
+# inference; `eggpool tools doctor` performs an explicit bounded probe.
+# [tools]
+# enabled = true
+# gateway_enabled = true
+# hosted_execution_enabled = false
+# hosted_models = [] # Exact model IDs qualified by the operator for finite function calls.
+# base_url = "http://127.0.0.1:11320/mcp"
+# connect_timeout_s = 2.0
+# read_timeout_s = 3.0

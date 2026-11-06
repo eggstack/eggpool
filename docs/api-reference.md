@@ -9,6 +9,7 @@ EggPool exposes OpenAI Chat Completions- and Anthropic Messages-compatible paths
 | `GET` | `/v1/models` | List models visible to the authenticated principal; managed users see only models allowed by their effective policy |
 | `GET` | `/api/user-budget` | Authenticated user rules and bounded usage; admins may add `?user_id=<id>` to inspect one user |
 | `POST` | `/v1/chat/completions` | OpenAI Chat Completions-compatible requests |
+| `POST` | `/v1/embeddings` | Bounded OpenAI-compatible text embeddings for explicitly qualified provider/model pairs |
 | `POST` | `/v1/responses` | Stateless OpenAI Responses-compatible requests; canonical adaptation is allowed to eligible upstream surfaces |
 | `POST` | `/v1/responses/compact` | Bounded remote-compaction operation returning replacement history/checkpoint material; native compact-capable upstreams only, otherwise rejected before submission with `501` and the code `remote_compaction_unsupported` |
 | `POST` | `/v1/messages` | Anthropic Messages-compatible requests |
@@ -22,6 +23,26 @@ plus a `compact_path_template` are eligible; without a qualified native
 target the request fails before upstream submission. There is no translated
 compaction fallback. Current Codex custom providers default to local
 compaction, so remote compaction is not required for normal Codex operation.
+
+`POST /v1/embeddings` accepts a non-empty `input` string or array of strings,
+an exact concrete `model`, optional positive `dimensions` (maximum 8192), and
+optional `encoding_format: "float"` or `"base64"` (default `"float"`). Base64
+responses encode each finite float32 vector as little-endian bytes. Requests
+are capped at 64 KiB, 32 inputs, 16 KiB per item, and 64 KiB total UTF-8 input.
+The response is finite JSON with one vector per input, contiguous zero-based
+indices, and a consistent vector size. EggPool sorts rows by index and returns
+the requested client model ID. Token-ID inputs, extra request fields, virtual
+model aliases, image inputs, streaming, and guessed provider routes are
+unsupported.
+
+An operator must configure both `embedding_models` (an exact model-ID
+allowlist) and `embeddings_path` on a provider. Chat support alone never
+qualifies a model. Without an eligible configured pair, the request fails with
+`501 embeddings_unsupported` before any provider attempt. Normal authentication,
+model policy, hard budgets, health, quota, and request finalization still apply.
+Input and vector content are not persisted or logged. Upstream usage is passed
+through when valid; if absent, it stays absent and usage counters remain
+unknown. See [providers](providers.md) for the operator configuration example.
 
 **Capability requirement.** Remote compaction is an operator-configured
 provider wire surface fact, not a bundled one. A provider qualifies only when
@@ -146,6 +167,32 @@ Managed users receive policy-filtered model discovery, and runtime dispatch
 enforces the same rules even when a client submits a hidden model manually.
 The integration profile's ETag includes the policy revision so client caches
 refresh after an administrator changes model access.
+
+Personal credentials may be issued with separate `tools:discover:eggsearch`
+and `tools:invoke:eggsearch` scopes. Existing credentials keep their original
+scopes. Tool grants are independently default-deny and do not affect model
+authorization. With `[tools].enabled = true` and
+`[tools].gateway_enabled = true`, the managed-user-only
+`POST /api/tools/v1/mcp` route exposes authorized Eggsearch tools using MCP
+`2025-03-26`. It supports JSON POST requests for `initialize`,
+`notifications/initialized`, `tools/list`, and `tools/call`; it rejects
+JSON-RPC batches and other methods, does not implement downstream GET/SSE
+streams, resources, prompts, or session resumption, and does not change
+Chat/Responses/Messages tool execution semantics. Request bodies are capped at
+128 KiB, tool arguments at 32 KiB, backend responses at 1 MiB, concurrent
+backend operations at 16, and sessions at 1,024 with a 30-minute idle expiry.
+Only the configured loopback Eggsearch 0.4.3 service is contacted. Credentials
+are never forwarded; trust labels and structured tool results are preserved.
+See the [MCP gateway guide](tool-gateway.md) for the security model and setup.
+
+With `[tools].enabled = true` and `[tools].hosted_execution_enabled = true`,
+managed agent tokens may use the finite EggPool-specific
+`POST /api/agent/v1/run` operation. It requires an operator-qualified exact
+model ID and current per-user Eggsearch invocation grants. The endpoint is
+stateless, non-streaming, and bounded; it does not alter client-executed tool
+calls on the standard inference APIs. See the
+[hosted orchestration guide](hosted-tool-orchestration.md) for its DTO,
+resource caps, and configuration.
 
 `GET /api/user-budget` is available to personal tokens and browser sessions.
 Members can read only their own rules and rollups; an active admin may select a

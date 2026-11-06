@@ -738,6 +738,13 @@ pub struct ProviderConfig {
     pub headers: Vec<ProviderStaticHeaderConfig>,
     pub models_endpoint: Option<ProviderModelsEndpointConfig>,
     pub static_models: Vec<ProviderStaticModelConfig>,
+    /// Exact downstream model identifiers whose upstream embedding endpoint
+    /// and response behavior have been operator-qualified. This is a strict
+    /// allowlist; chat capability never implies embedding support.
+    pub embedding_models: BTreeSet<String>,
+    /// Explicit OpenAI-compatible embeddings route, for example
+    /// `/v1/embeddings`. No route is guessed from the chat path.
+    pub embeddings_path: Option<String>,
     pub verify: ProviderVerifyConfig,
     pub budget: ProviderBudgetConfig,
 }
@@ -772,6 +779,8 @@ impl Default for ProviderConfig {
             headers: Vec::new(),
             models_endpoint: None,
             static_models: Vec::new(),
+            embedding_models: BTreeSet::new(),
+            embeddings_path: None,
             verify: ProviderVerifyConfig::default(),
             budget: ProviderBudgetConfig::default(),
         }
@@ -964,6 +973,35 @@ pub struct UpdateCheckerConfig {
 #[serde(deny_unknown_fields, default)]
 pub struct IntegrationsConfig {
     pub advertise_base_url: Option<String>,
+}
+
+/// Optional operator-owned Eggsearch MCP connection. Merely configuring this
+/// value never starts or probes Eggsearch. The optional authenticated gateway
+/// is separately gated and only opens a request-scoped MCP connection.
+#[derive(Debug, Clone, Deserialize, Serialize)]
+#[serde(deny_unknown_fields, default)]
+pub struct ToolBackendConfig {
+    pub enabled: bool,
+    pub gateway_enabled: bool,
+    pub hosted_execution_enabled: bool,
+    pub hosted_models: Vec<String>,
+    pub base_url: String,
+    pub connect_timeout_s: f64,
+    pub read_timeout_s: f64,
+}
+
+impl Default for ToolBackendConfig {
+    fn default() -> Self {
+        Self {
+            enabled: false,
+            gateway_enabled: false,
+            hosted_execution_enabled: false,
+            hosted_models: Vec::new(),
+            base_url: "http://127.0.0.1:11320/mcp".into(),
+            connect_timeout_s: 2.0,
+            read_timeout_s: 3.0,
+        }
+    }
 }
 
 /// Maximum advertised integration URL bytes (matches portable profile bound).
@@ -1468,6 +1506,7 @@ pub struct Config {
     pub model_info: ModelInfoConfig,
     pub update_checker: UpdateCheckerConfig,
     pub integrations: IntegrationsConfig,
+    pub tools: ToolBackendConfig,
 }
 
 pub type AppConfig = Config;
@@ -1848,6 +1887,7 @@ impl Config {
             let normalized = normalize_advertise_base_url(&raw)?;
             self.integrations.advertise_base_url = Some(normalized);
         }
+        validate_tool_backend(&self.tools)?;
         Ok(())
     }
 
@@ -1915,6 +1955,81 @@ impl Config {
     }
 }
 
+fn validate_tool_backend(backend: &ToolBackendConfig) -> Result<(), ConfigError> {
+    if backend.gateway_enabled && !backend.enabled {
+        return Err(ConfigError::validation(
+            "tools.gateway_enabled requires tools.enabled",
+        ));
+    }
+    if backend.hosted_execution_enabled && !backend.enabled {
+        return Err(ConfigError::validation(
+            "tools.hosted_execution_enabled requires tools.enabled",
+        ));
+    }
+    if backend.hosted_execution_enabled && backend.hosted_models.is_empty() {
+        return Err(ConfigError::validation(
+            "tools.hosted_execution_enabled requires at least one qualified hosted model",
+        ));
+    }
+    if backend.hosted_models.len() > 128 {
+        return Err(ConfigError::validation(
+            "tools.hosted_models exceeds its supported limit",
+        ));
+    }
+    let mut hosted_models = BTreeSet::new();
+    if backend.hosted_models.iter().any(|model| {
+        model.is_empty()
+            || model.len() > 256
+            || model.chars().any(|character| {
+                !(character.is_ascii_alphanumeric()
+                    || matches!(character, '.' | '_' | ':' | '/' | '-'))
+            })
+            || !hosted_models.insert(model)
+    }) {
+        return Err(ConfigError::validation(
+            "tools.hosted_models must contain unique bounded model identifiers",
+        ));
+    }
+    if !backend.connect_timeout_s.is_finite()
+        || !(0.1..=10.0).contains(&backend.connect_timeout_s)
+        || !backend.read_timeout_s.is_finite()
+        || !(0.1..=30.0).contains(&backend.read_timeout_s)
+    {
+        return Err(ConfigError::validation(
+            "tools timeouts must be finite and within their supported bounds",
+        ));
+    }
+    if backend.base_url.len() > 512
+        || backend
+            .base_url
+            .chars()
+            .any(|c| c.is_whitespace() || c.is_control())
+    {
+        return Err(ConfigError::validation("tools.base_url is invalid"));
+    }
+    let uri = backend.base_url.parse::<http::Uri>().map_err(|_| {
+        ConfigError::validation("tools.base_url must be an absolute loopback HTTP MCP URL")
+    })?;
+    let authority = uri.authority().ok_or_else(|| {
+        ConfigError::validation("tools.base_url must include a loopback authority")
+    })?;
+    let host = authority.host().trim_matches(['[', ']']);
+    if uri.scheme_str() != Some("http")
+        || !matches!(host, "127.0.0.1" | "::1")
+        || authority.port_u16().is_none()
+        || authority.port_u16() == Some(0)
+        || uri.path() != "/mcp"
+        || uri.query().is_some()
+        || backend.base_url.contains('#')
+        || backend.base_url.contains('@')
+    {
+        return Err(ConfigError::validation(
+            "tools.base_url must use HTTP, a literal 127.0.0.1 or ::1 address, an explicit port, and the exact /mcp path",
+        ));
+    }
+    Ok(())
+}
+
 fn validate_positive_pair(
     keepalive: u32,
     connections: u32,
@@ -1936,6 +2051,32 @@ fn validate_positive_pair(
 fn validate_enum(value: &str, allowed: &[&str], field: &str) -> Result<(), ConfigError> {
     if !allowed.contains(&value) {
         return Err(ConfigError::validation(format!("{field} is invalid")));
+    }
+    Ok(())
+}
+
+fn validate_embedding_provider_config(provider: &ProviderConfig) -> Result<(), ConfigError> {
+    match provider.embeddings_path.as_deref() {
+        Some(path)
+            if !provider.embedding_models.is_empty()
+                && path.starts_with('/')
+                && !path
+                    .chars()
+                    .any(|character| matches!(character, '?' | '#' | '{' | '}'))
+                && path.len() <= 256 => {}
+        None if provider.embedding_models.is_empty() => {}
+        _ => {
+            return Err(ConfigError::validation(
+                "provider embeddings_path and embedding_models must be configured together with a fixed absolute path",
+            ));
+        }
+    }
+    if provider.embedding_models.iter().any(|model| {
+        model.trim().is_empty() || model.len() > 256 || model.chars().any(char::is_whitespace)
+    }) {
+        return Err(ConfigError::validation(
+            "provider embedding model identifiers must be bounded exact identifiers",
+        ));
     }
     Ok(())
 }
@@ -1986,6 +2127,7 @@ fn validate_provider(
             "Provider protocols must contain only openai or anthropic",
         ));
     }
+    validate_embedding_provider_config(provider)?;
     validate_positive_pair(provider.max_keepalive, provider.max_connections, "provider")?;
     for value in [
         provider.connect_timeout_s,
@@ -2500,6 +2642,23 @@ mod tests {
     }
 
     #[test]
+    fn embeddings_require_an_explicit_fixed_route_and_model_allowlist() {
+        let mut provider = ProviderConfig::default();
+        assert!(validate_embedding_provider_config(&provider).is_ok());
+        provider.embedding_models.insert("embed-model".into());
+        assert!(validate_embedding_provider_config(&provider).is_err());
+        provider.embeddings_path = Some("/v1/embeddings".into());
+        assert!(validate_embedding_provider_config(&provider).is_ok());
+        for path in ["relative", "/v1/{model}", "/v1/embeddings?x=1"] {
+            provider.embeddings_path = Some(path.into());
+            assert!(validate_embedding_provider_config(&provider).is_err());
+        }
+        provider.embeddings_path = Some("/v1/embeddings".into());
+        provider.embedding_models.insert("bad model".into());
+        assert!(validate_embedding_provider_config(&provider).is_err());
+    }
+
+    #[test]
     fn request_body_limit_matches_eggserve_hard_ceiling() {
         let mut config = Config::default();
         config.server.max_request_body_bytes = MAX_SERVER_REQUEST_BODY_BYTES;
@@ -2813,5 +2972,49 @@ mod tests {
         let mut bad = Config::default();
         bad.integrations.advertise_base_url = Some("https://pool.example/custom".to_owned());
         assert!(bad.validate().is_err());
+    }
+
+    #[test]
+    fn tool_backend_config_is_loopback_only_bounded_and_disabled_by_default() {
+        let mut config = Config::default();
+        assert!(!config.tools.enabled);
+        assert!(!config.tools.hosted_execution_enabled);
+        config.validate().expect("default tool config validates");
+        for url in [
+            "https://127.0.0.1:11320/mcp",
+            "http://localhost:11320/mcp",
+            "http://127.0.0.2:11320/mcp",
+            "http://192.168.1.10:11320/mcp",
+            "http://127.0.0.1/mcp",
+            "http://127.0.0.1:11320/other",
+            "http://user:pass@127.0.0.1:11320/mcp",
+            "http://127.0.0.1:11320/mcp?x=1",
+            "http://127.0.0.1:11320/mcp#frag",
+        ] {
+            let mut invalid = Config::default();
+            invalid.tools.base_url = url.to_owned();
+            invalid.tools.enabled = true;
+            assert!(invalid.validate().is_err(), "accepted {url}");
+        }
+        let mut invalid_timeout = Config::default();
+        invalid_timeout.tools.connect_timeout_s = f64::NAN;
+        assert!(invalid_timeout.validate().is_err());
+        let mut invalid_read = Config::default();
+        invalid_read.tools.read_timeout_s = 31.0;
+        assert!(invalid_read.validate().is_err());
+        let mut gateway_without_backend = Config::default();
+        gateway_without_backend.tools.gateway_enabled = true;
+        assert!(gateway_without_backend.validate().is_err());
+        let mut hosted_without_backend = Config::default();
+        hosted_without_backend.tools.hosted_execution_enabled = true;
+        assert!(hosted_without_backend.validate().is_err());
+        let mut hosted_without_models = Config::default();
+        hosted_without_models.tools.enabled = true;
+        hosted_without_models.tools.hosted_execution_enabled = true;
+        assert!(hosted_without_models.validate().is_err());
+        let mut invalid_hosted_models = Config::default();
+        invalid_hosted_models.tools.hosted_models =
+            vec!["model-a".to_owned(), "model-a".to_owned()];
+        assert!(invalid_hosted_models.validate().is_err());
     }
 }

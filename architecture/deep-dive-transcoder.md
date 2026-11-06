@@ -190,6 +190,16 @@ rejected as `StatefulResponsesFeature`), media/document caps, token and reservat
 envelope. It never encodes provider payloads, never plans translations, and never stores credentials, prompts,
 raw bodies, or cache keys.
 
+Embeddings are a deliberately separate finite surface. `request::embeddings`
+bounds text input and validates indexed finite vectors without constructing a
+dialogue canonical request. `coordinator/endpoints.rs` applies the ordinary
+principal and model-policy resolution, and `coordinator/finite.rs` carries the
+operation through selection, publication, provider submission, and
+finalization. Only an exact provider model allowlist plus fixed
+`embeddings_path` qualifies; chat-wire support cannot imply embeddings. The
+operation label is `openai_embeddings`, while usage records input tokens only
+when the provider reports valid usage.
+
 ## Invariants
 
 - Canonical IR before adaptation: every encode builds a fresh target payload from canonical intent; translated payloads are never chained.

@@ -1,7 +1,7 @@
 {
   "schema_version": 1,
   "plan": "O001",
-  "command_count": 72,
+  "command_count": 74,
   "commands": [
     {"path": "accounts", "owner": "O007", "options": []},
     {"path": "accounts explain", "owner": "O007", "options": ["--model", "--provider", "--protocol", "--scores", "--gates"]},
@@ -65,6 +65,8 @@
     {"path": "stats transcoding", "owner": "O007", "options": ["--period", "--json"]},
     {"path": "status", "owner": "O003", "options": ["--json"]},
     {"path": "stop", "owner": "O003", "options": ["--timeout"]},
+    {"path": "tools", "owner": "M001", "options": []},
+    {"path": "tools doctor", "owner": "M001", "options": ["--json"]},
     {"path": "uninstall", "owner": "O009", "options": ["--yes", "--keep-data", "--keep-config", "--keep-path", "--deploy-artifacts"]},
     {"path": "update", "owner": "O008", "options": ["--check", "--from-source"]},
     {"path": "users", "owner": "O004", "options": []},
@@ -73,7 +75,13 @@
     {"path": "users list", "owner": "O004", "options": []},
     {"path": "users reset-password", "owner": "O004", "options": ["--password-stdin", "--show-secret"]},
     {"path": "users revoke", "owner": "O004", "options": []},
-    {"path": "users token", "owner": "O004", "options": ["--label", "--show-secret"]},
+    {"path": "users token", "owner": "O004", "options": ["--label", "--show-secret", "--tool-discovery", "--tool-invocation"]},
+    {"path": "users tool-policy", "owner": "M002", "options": []},
+    {"path": "users tool-policy profile-rule", "owner": "M002", "options": ["--actor", "--expected-version"]},
+    {"path": "users tool-policy user-rule", "owner": "M002", "options": ["--actor"]},
+    {"path": "users tool-policy instance-deny", "owner": "M002", "options": ["--actor"]},
+    {"path": "users tool-policy instance-allow", "owner": "M002", "options": ["--actor"]},
+    {"path": "users tool-policy show", "owner": "M002", "options": []},
     {"path": "version", "owner": "O008", "options": []}
   ],
   "global_options": ["--config"],

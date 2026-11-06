@@ -1145,3 +1145,65 @@ probe before readiness is reopened.
 | `eggpool uninstall --deploy-artifacts` | Also remove systemd unit, logrotate config, watchdog + backup cron blocks, backup script |
 | `eggpool croncheck` | Check if server is running (exit 0/1) — fast-path, no heavy imports |
 | `eggpool ensure-running` | Atomically check-and-start the server; no-op when already alive — fast-path, no heavy imports |
+# Optional Eggsearch service
+
+EggPool can diagnose one operator-configured local Eggsearch Streamable HTTP
+service. This integration is disabled by default and is not part of model
+inference. Install and supervise Eggsearch using its own release and service
+instructions. For a foreground qualification run, Eggsearch documents:
+
+```sh
+eggsearch mcp serve --bind 127.0.0.1:11320 --path /mcp
+```
+
+Then opt in to the connection in EggPool's TOML:
+
+```toml
+[tools]
+enabled = true
+gateway_enabled = true
+hosted_execution_enabled = false
+hosted_models = []
+base_url = "http://127.0.0.1:11320/mcp"
+connect_timeout_s = 2.0
+read_timeout_s = 3.0
+```
+
+Run `eggpool tools doctor --json` to check service identity, negotiated MCP
+version, and the expected tool names. The command is read-only, short-lived,
+bounded to a 1 MiB response, and reports no tool schemas, arguments, or
+results. Only literal `127.0.0.1` or `::1` HTTP URLs with an explicit port
+and `/mcp` path are accepted. `gateway_enabled` is a separate opt-in for the
+authenticated `POST /api/tools/v1/mcp` route; both flags are required. Changes
+to `[tools]` require a server restart. The gateway accepts MCP `2025-03-26`
+JSON POST initialize/list/call operations only. It rejects batch JSON-RPC,
+other MCP methods, GET/SSE streams, and session resumption. It caps requests at
+128 KiB, arguments at 32 KiB, backend responses at 1 MiB, and concurrent
+backend operations at 16. Each user needs a personal token with the relevant
+discovery and/or invocation scope plus matching tool grants. EggPool does not
+start Eggsearch, register a system service, or use tools during ordinary
+inference. A missing or incompatible backend therefore leaves normal model
+routing unchanged.
+
+See the upstream [Eggsearch deployment guide](https://github.com/eggstack/eggsearch/blob/main/docs/deployment.md)
+for its current install and service lifecycle. See the [EggPool MCP gateway
+guide](tool-gateway.md) for supported methods, authorization, and trust rules.
+The separate `POST /api/agent/v1/run` route is disabled unless
+`hosted_execution_enabled = true` and `hosted_models` lists exact operator-
+qualified model IDs. It composes finite coordinator calls with per-user
+authorized Eggsearch operations. See the
+[hosted orchestration guide](hosted-tool-orchestration.md) for its request,
+limits, and firewall implications.
+# Embedding deployment
+
+Embeddings are disabled by default. To enable them, configure a reachable
+OpenAI-compatible text embedding endpoint on a provider using a fixed
+`embeddings_path` and exact `embedding_models` allowlist. The model must also
+be present in the ordinary model catalog. The operator owns model installation,
+availability, and qualification; EggPool does not download weights or store
+input text/vectors. Missing or ineligible embedding providers do not affect
+normal inference. See [provider configuration](providers.md) and the
+[API reference](api-reference.md) for the finite contract and limits.
+For a solo PrivateGPT-style application, see
+[external retrieval interoperability](retrieval-interoperability.md); its
+document store and access controls remain in that application.

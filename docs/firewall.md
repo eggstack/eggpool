@@ -67,6 +67,19 @@ host = "127.0.0.1"
 
 No firewall rules are needed in this case.
 
+## Optional Eggsearch tools
+
+EggPool connects only to an operator-configured Eggsearch MCP service on
+literal loopback (`127.0.0.1` or `::1`). Keep Eggsearch bound to loopback and
+do not open port 11320 to the LAN. Authorized clients use EggPool's existing
+server listener on port 11300 at `POST /api/tools/v1/mcp`; the gateway is
+disabled unless both `[tools].enabled` and `[tools].gateway_enabled` are true.
+Personal-token scopes and per-user grants still apply when the dashboard is
+public.
+Finite hosted execution uses the same EggPool listener and is disabled unless
+`[tools].enabled` and `[tools].hosted_execution_enabled` are true. It does not
+add a listener or expose Eggsearch directly; keep Eggsearch on loopback.
+
 ## Browser administration
 
 Legacy inference clients use the shared server key only while the database is

@@ -67,7 +67,8 @@ pub use endpoints::{
 };
 pub(crate) use endpoints::{
     build_inference_state_with_shared, build_inference_state_with_shared_and_accounts,
-    compile_provider_profiles, execute_compact_finite_attributed, execute_endpoint_attributed,
+    compile_provider_profiles, execute_compact_finite_attributed, execute_embeddings_attributed,
+    execute_endpoint_attributed,
 };
 pub(crate) use finalization::release_claim;
 pub use semantic::{

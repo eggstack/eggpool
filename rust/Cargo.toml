@@ -57,6 +57,7 @@ ssh = ["eggress-outbound/ssh", "eggress-pproxy-compat/ssh"]
 arc-swap = "1.9"
 argon2 = "0.5"
 axum = "0.8"
+base64 = "0.22"
 bytes = "1"
 clap = { version = "4.5", features = ["derive"] }
 eggress-outbound = { version = "=1.0.12", default-features = false, features = [
@@ -110,7 +111,7 @@ tower = { version = "0.5", features = ["util"] }
 tracing = "0.1"
 tracing-subscriber = { version = "0.3", default-features = false, features = ["fmt"] }
 tokio-rusqlite = { version = "0.8.0", features = ["bundled", "backup"] }
-zip = { version = "2.4.2", default-features = false }
+zip = { version = "9.4.1", default-features = false }
 webpki-roots = "1"
 
 [build-dependencies]

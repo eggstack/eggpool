@@ -203,6 +203,15 @@ impl RequestAttribution {
             ..self.clone()
         }
     }
+
+    /// Attribute one finite hosted-orchestration inference turn to its
+    /// initiating user while linking it to a content-free operation ID.
+    pub fn hosted_tool_child(&self, orchestration_id: &str) -> Self {
+        Self {
+            parent_proxy_request_id: Some(orchestration_id.to_owned()),
+            ..self.clone()
+        }
+    }
 }
 
 impl AuthenticatedPrincipal {
@@ -1244,6 +1253,16 @@ pub async fn issue_api_token(
     username: &str,
     label: &str,
 ) -> Result<IssuedCredential, IdentityError> {
+    issue_api_token_with_tool_scopes(database, username, label, false, false).await
+}
+
+pub async fn issue_api_token_with_tool_scopes(
+    database: &Database,
+    username: &str,
+    label: &str,
+    tool_discovery: bool,
+    tool_invocation: bool,
+) -> Result<IssuedCredential, IdentityError> {
     let normalized = validate_username(username)?.to_ascii_lowercase();
     let label = label.trim().to_owned();
     if label.is_empty() || label.len() > 80 {
@@ -1254,6 +1273,14 @@ pub async fn issue_api_token(
     let secret = random_hex(32)?;
     let token = format!("epk1_{selector}_{secret}");
     let digest = digest(&token);
+    let mut scopes = vec!["inference", "discovery", "integrations"];
+    if tool_discovery {
+        scopes.push(crate::tool_policy::DISCOVERY_SCOPE);
+    }
+    if tool_invocation {
+        scopes.push(crate::tool_policy::INVOCATION_SCOPE);
+    }
+    let scopes = scopes.join(",");
     let (id, user_id) = (id.clone(), normalized.clone());
     let normalized_for_error = normalized.clone();
     match database
@@ -1269,8 +1296,12 @@ pub async fn issue_api_token(
                 return Err(tokio_rusqlite::rusqlite::Error::QueryReturnedNoRows);
             };
             connection.execute(
-                "INSERT INTO user_credentials(id, user_id, label, selector, digest, scopes) VALUES (?1, ?2, ?3, ?4, ?5, 'inference,discovery,integrations')",
-                (&id, &user_id, &label, &selector, &digest),
+                "INSERT INTO user_credentials(id, user_id, label, selector, digest, scopes) VALUES (?1, ?2, ?3, ?4, ?5, ?6)",
+                (&id, &user_id, &label, &selector, &digest, &scopes),
+            )?;
+            connection.execute(
+                "INSERT INTO user_admin_audit(actor_id, action, target_kind, target_id) VALUES (?1, 'issue_token', 'credential', ?2)",
+                (&user_id, &id),
             )?;
             Ok(user_id)
         })

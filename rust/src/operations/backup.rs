@@ -419,7 +419,7 @@ fn prepare_restore(archive_path: &Path) -> Result<PreparedRestore, BackupError> 
                 "directories and encrypted members are not allowed".to_owned(),
             ));
         }
-        let name = entry.name().to_owned();
+        let name = entry.name().map_err(BackupError::Archive)?.into_owned();
         if !matches!(
             name.as_str(),
             META_BASENAME | CONFIG_BASENAME | ENV_BASENAME | DB_BASENAME

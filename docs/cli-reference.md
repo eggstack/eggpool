@@ -46,6 +46,21 @@ Command list verified against `eggpool help` (0.8.3).
 | `eggpool stats recompute-costs` | Recompute `cost_microdollars` on historical requests |
 | `eggpool stats explain-dashboard` | Show EXPLAIN QUERY PLAN for dashboard queries |
 
+## Optional tools service
+
+| Command | Description |
+|---------|-------------|
+| `eggpool tools doctor [--json]` | Explicitly check the configured loopback Eggsearch service identity, MCP initialization, and tool catalog |
+
+The probe is disabled unless `[tools].enabled = true`; EggPool never starts
+Eggsearch. See [deployment](deployment.md#optional-eggsearch-service) for
+configuration and the upstream service lifecycle.
+
+The optional MCP route additionally requires `[tools].gateway_enabled = true`
+and a server restart. Issue personal tokens with `--tool-discovery` and/or
+`--tool-invocation` as needed, then grant exact Eggsearch tools with
+`eggpool users tool-policy`. The route is `POST /api/tools/v1/mcp`.
+
 ## Config & keys
 
 | Command | Description |
@@ -63,7 +78,7 @@ Command list verified against `eggpool help` (0.8.3).
 | `eggpool users list` | List local usernames, role and status |
 | `eggpool users disable USER` | Disable a user and revoke their sessions and personal tokens |
 | `eggpool users enable USER` | Reactivate a user; previously revoked tokens remain revoked |
-| `eggpool users token USER` | Issue a personal inference/discovery token (`--label` optional; `--show-secret` allows non-TTY output) |
+| `eggpool users token USER` | Issue a personal inference/discovery token (`--label` optional; `--tool-discovery` and `--tool-invocation` add independent Eggsearch scopes; `--show-secret` allows non-TTY output) |
 | `eggpool users revoke USER` | Revoke all personal API tokens for a user |
 | `eggpool users reset-password USER` | Reset a local password and revoke that user's API tokens and browser sessions (`--password-stdin` supported) |
 | `eggpool users enable-managed` | Explicitly record managed access (`--actor ADMIN`, default `admin`); works even when retired legacy settings remain |
@@ -71,6 +86,10 @@ Command list verified against `eggpool help` (0.8.3).
 | `eggpool users policy rule PROFILE MODEL allow\|deny` | Add or replace one exact model or `model/provider` rule |
 | `eggpool users policy assign USER PROFILE` | Assign a profile to a local user |
 | `eggpool users policy prefer PROFILE [MODEL]` | Set or clear a profile's allowed client recommendation |
+| `eggpool users tool-policy profile-rule PROFILE TOOL allow\|deny\|inherit` | Set/remove one exact Eggsearch tool rule on a profile (`--expected-version` rejects stale edits) |
+| `eggpool users tool-policy user-rule USER TOOL allow\|deny\|inherit` | Override one user's profile rule or inherit it |
+| `eggpool users tool-policy instance-deny TOOL` / `instance-allow TOOL` | Set/remove an instance-wide deny that overrides every user/profile grant |
+| `eggpool users tool-policy show USER` | Show effective tool grants and assigned profile version; credential scopes are excluded |
 | `eggpool users budget set USER --window day\|month` | Set daily/monthly request, token, microdollar, and concurrency limits (`--model-id` scopes an exact model; `--enforcement hard\|estimated`, default `estimated`) |
 | `eggpool users budget remove USER --window day\|month` | Remove the matching user/model budget rule |
 | `eggpool users global-budget set --window day\|month` | Set an instance-wide ceiling intersected with every per-user rule (`--model-id` scopes an exact model; `--enforcement hard\|estimated`, default `estimated`) |
@@ -79,10 +98,14 @@ Command list verified against `eggpool help` (0.8.3).
 | `eggpool dashboard public --on\|--off` | Toggle dashboard key requirement (default public) |
 
 Policy commands remain available as a local operator setup path alongside the
-admin dashboard. They write SQLite policy state directly; model IDs are exact
-and wildcards are rejected. `--actor ADMIN` records the active administrator
-responsible for each change. Restricted profiles should use `deny` as their
-default and add explicit allowed models.
+admin dashboard. They write SQLite policy state directly; model and tool IDs
+are exact and wildcards are rejected. Tool rules are default-deny for every
+user, including administrators, and use instance denial > user override >
+assigned profile > deny. `--actor ADMIN` records the active administrator
+responsible for each change. Tool scopes are added only when explicitly
+requested during token issuance; catalog discovery and invocation use separate
+scopes. These controls prepare authorization for a later gateway milestone;
+M002 adds no tool HTTP route or invocation endpoint.
 
 Local member lifecycle commands run from the machine that owns the EggPool
 data directory. The first successful `users add` moves

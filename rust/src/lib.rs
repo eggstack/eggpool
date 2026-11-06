@@ -6,6 +6,7 @@
 #![forbid(unsafe_code)]
 
 pub mod accounts;
+pub mod agent_orchestration;
 pub mod catalog;
 mod cli;
 pub mod config;
@@ -29,6 +30,7 @@ mod runtime;
 pub mod runtime_lifecycle;
 pub mod server;
 pub mod task_supervisor;
+pub mod tool_policy;
 pub mod user_budget;
 pub mod version;
 pub mod web_session;

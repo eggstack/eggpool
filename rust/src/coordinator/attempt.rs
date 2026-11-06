@@ -500,6 +500,87 @@ impl AttemptBuilder {
             stream: false,
         })
     }
+
+    /// Prepare one operator-qualified OpenAI embeddings request without
+    /// passing its typed payload through the dialogue wire kernel.
+    pub(crate) fn prepare_embedding_borrowed(
+        &self,
+        input: AttemptPreparation<'_>,
+        embedding: &crate::request::embeddings::EmbeddingRequest,
+    ) -> Result<PreparedUpstreamAttempt, AttemptError> {
+        validate_preparation(&input)?;
+        if input.stream || input.client_surface != ClientSurface::ChatCompletions {
+            return Err(AttemptError::InvalidInput(
+                "embeddings operations are finite OpenAI requests".into(),
+            ));
+        }
+        let path = input
+            .provider
+            .embeddings_path
+            .as_deref()
+            .filter(|_| {
+                input
+                    .provider
+                    .embedding_models
+                    .contains(&input.identity.model_id)
+            })
+            .ok_or_else(|| {
+                AttemptError::InvalidInput("embeddings provider is not qualified".into())
+            })?;
+        let body = embedding
+            .upstream_body(&input.identity.upstream_model_id)
+            .map_err(|_| AttemptError::InvalidInput("embeddings request is invalid".into()))?;
+        let mut headers = HeaderMap::new();
+        headers.insert(
+            http::header::CONTENT_TYPE,
+            HeaderValue::from_static("application/json"),
+        );
+        headers.insert(
+            http::header::ACCEPT,
+            HeaderValue::from_static("application/json"),
+        );
+        headers.insert(
+            http::header::USER_AGENT,
+            HeaderValue::from_static(concat!("eggpool-rust/", env!("CARGO_PKG_VERSION"))),
+        );
+        add_forwarded_headers(&mut headers, input.incoming_headers)?;
+        add_request_identity_headers(
+            &mut headers,
+            input.request_id.or_else(|| {
+                (!input.identity.proxy_request_id.is_empty())
+                    .then_some(input.identity.proxy_request_id.as_str())
+            }),
+            input.correlation_id,
+        )?;
+        add_static_headers(&mut headers, &input.provider.headers)?;
+        if let Some(surface) = input
+            .provider
+            .wire_surfaces
+            .get(input.profile.definition.surface.as_str())
+        {
+            add_static_headers(&mut headers, &surface.headers)?;
+            add_auth_header(
+                &mut headers,
+                surface.auth.as_ref().unwrap_or(&input.provider.auth),
+                input.account_api_key,
+            )?;
+        } else {
+            add_auth_header(&mut headers, &input.provider.auth, input.account_api_key)?;
+        }
+        Ok(PreparedUpstreamAttempt {
+            identity: input.identity.clone(),
+            provider_id: input.identity.provider_id.clone(),
+            account_name: input.identity.account_name.clone(),
+            upstream_model_id: input.identity.upstream_model_id.clone(),
+            profile: input.profile.clone(),
+            candidate_fingerprint: input.candidate_fingerprint.to_owned(),
+            method: Method::POST,
+            path: path.to_owned(),
+            headers,
+            body,
+            stream: false,
+        })
+    }
 }
 
 fn validate_input(input: &AttemptInput) -> Result<(), AttemptError> {
