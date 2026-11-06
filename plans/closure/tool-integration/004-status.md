@@ -16,6 +16,7 @@ Implementation commits or pull requests:
 
 - `5451be62` — bounded hosted model/tool/model orchestration and deterministic end-to-end coverage.
 - `088a1379` — additional embedding integration and a smaller live M004 qualification request using bounded `web_fetch` output.
+- `73eac4c6` — a complete live Ollama model→tool→model trace through a local MCP fixture.
 
 ## 1. Executive finding
 
@@ -31,6 +32,15 @@ therefore not claimed as qualified. Conditional closure preserves the
 implemented finite capability while requiring a successful live trace before
 promoting this milestone to unconditionally closed.
 
+A separate live Ollama `qwen3.5:4b` run against a local MCP fixture completed
+two model turns and one tool invocation. The initial run took 40.95 seconds;
+the final no-default-features rerun took 65.54 seconds. Both returned a
+non-empty answer and recorded exactly one backend invocation. The current
+256-token per-turn output cap and 120-second operation deadline were adequate
+for this trace; no limit adjustment is indicated. This qualifies the live
+model/tool/model cycle and its latency, while the real Eggsearch backend trace
+remains a distinct, unresolved integration requirement.
+
 ## 2. Requirement-to-evidence matrix
 
 | Requirement | Evidence | Result | Notes |
@@ -39,6 +49,7 @@ promoting this milestone to unconditionally closed.
 | Model/tool/model flow preserves canonical tool identity and authorization | `rust/tests/mcp_gateway.rs::hosted_endpoint_completes_finite_model_tool_model_flow`; `hosted_endpoint_rejects_unsupported_grammar_and_unauthorized_tools` | pass | Uses deterministic local model and MCP fixtures. |
 | Deadline, cancellation, result bounds, and backend health isolation | `rust/tests/mcp_gateway.rs::hosted_client_disconnect_cancels_in_flight_tool_call`; `unavailable_backend_is_isolated_from_model_health` | pass | The live timeout also exercised the public 120-second timeout response. |
 | Live Eggsearch and compatible model complete a full cycle | Ignored live test run against Eggsearch 0.4.3 and Ollama `qwen3.5:4b` | partial | Two earlier live attempts failed typed validation limits; bounded `web_fetch` run ended with HTTP 504 `hosted_execution_timeout` after 120 seconds. |
+| Live model/tool/model cycle and current output/latency limits | `rust/tests/mcp_gateway.rs::live_ollama_hosted_model_tool_model_with_mcp_fixture` | pass | Live Ollama completed two model turns around one local MCP fixture call in 40.95 seconds and again in 65.54 seconds; 256 output tokens/turn and 120-second operation deadline were sufficient. |
 | Default/no-default compatibility and Rust quality gates | Full suites recorded below; default/no-default Clippy and no-default check passed | pass | No-default parity retained. |
 | Operator and API documentation | `docs/api-reference.md`, `docs/agent-configuration.md`, `docs/deployment.md`, `docs/stateless-responses.md`, `architecture/overview.md` | pass | Ordinary inference semantics and limits are stated separately. |
 
@@ -74,6 +85,10 @@ EGGPOOL_TEST_EGGSEARCH_URL=http://127.0.0.1:11320/mcp cargo test --manifest-path
 - Full no-default suite: 94 targets, 1,242 passed, 4 ignored, 0 failed.
 - Focused MCP gateway suite: 6 passed, 2 ignored, 0 failed.
 - Live qualification command failed its assertion after receiving the expected typed 504 timeout at 120 seconds; earlier live attempts produced the typed result-size/invalid-response failures above.
+- Live local-fixture model/tool/model qualification passed twice: 40.95 seconds
+  in the initial run and 65.54 seconds in the final no-default-features rerun.
+  Both used a real loopback Ollama model and an in-process MCP fixture. Neither
+  is represented as a live Eggsearch qualification.
 
 These are local results, not CI claims.
 
@@ -96,7 +111,8 @@ no-default workspace suites.
 The operation is finite and stateless. Client disconnect cancels an active
 tool call; backend failures do not poison provider health; the global deadline
 returns a typed timeout. A process restart loses in-flight progress and has no
-resume behavior. Live local-model latency and result shape remain an
+resume behavior. The live local-model runs completed within the existing
+deadline; Eggsearch-backed result shape and end-to-end latency remain an
 operational qualification risk, not an unhandled background task.
 
 ## 7. Migration and compatibility review
@@ -124,7 +140,7 @@ inference APIs.
 
 | Severity | Finding | Impact | Required action |
 |---|---|---|---|
-| medium | Live Eggsearch 0.4.3 + Ollama hosted execution did not complete within the 120-second operation deadline; two other live attempts failed typed output validation bounds. | The live two-step capability has deterministic fixture evidence but lacks a successful real-model/backend trace. | Repeat with a pinned compatible model and bounded Eggsearch tool result; capture one successful live model→tool→model response and verify nested usage attribution. |
+| medium | Live Eggsearch 0.4.3 + Ollama hosted execution did not complete within the 120-second operation deadline; two other live attempts failed typed output validation bounds. | The live model/tool/model cycle is qualified with a local MCP fixture, but the Eggsearch backend integration has no successful hosted trace. | Repeat with a pinned compatible model and bounded Eggsearch tool result; capture one successful Eggsearch-backed live model→tool→model response and verify nested usage attribution. |
 | low | Physical SBC disabled/enabled footprint and contention comparison was not run on this x86 host. | The embedded/solo overhead target has no device-specific measurement. | Capture the planned paired physical-SBC measurements before claiming SBC footprint qualification. |
 
 ## 11. Roadmap disposition

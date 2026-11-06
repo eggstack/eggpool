@@ -1,6 +1,6 @@
 # Deployment and Packaging Milestone M009 — Closure Status
 
-Status: conditionally closed
+Status: closed
 
 Source implementation plan:
 
@@ -12,16 +12,16 @@ Source subsystem roadmap:
 
 Repository baseline reviewed: `73eac4c6` plus the implementation commit recorded below.
 
-Implementation commits or pull requests:
+Implementation commits:
 
-- Pending commit — remediate RustSec advisories and adapt backup ZIP member parsing.
+- `32f5c66a` — remediate RustSec advisories and adapt backup ZIP member
+  parsing.
 
 ## 1. Executive finding
 
 Fixed dependency releases are selected and `cargo-deny` now passes without
 advisory exceptions. ZIP restore now propagates the newer fallible member-name
-decoder's error. The full suite and locked release build remain closure
-conditions.
+decoder's error. The full suites and locked release build passed.
 
 ## 2. Requirement-to-evidence matrix
 
@@ -29,7 +29,7 @@ conditions.
 |---|---|---|---|
 | Remove current RustSec advisories | `cargo deny --manifest-path rust/Cargo.toml check` | pass | No ignored advisories were added. |
 | Preserve ZIP restore's bounded member handling | `rust/src/operations/backup.rs::prepare_restore` | pass | Uses `by_index`; decodes each member name fallibly, then applies the existing exact allowlist and size bounds. Never calls extraction-to-directory APIs. |
-| Backup/restore compatibility | `rust/tests/database_compatibility.rs`, `rust/tests/on_prem_budgets.rs` | pending | Full workspace verification is running. |
+| Backup/restore compatibility | `rust/tests/database_compatibility.rs`, `rust/tests/on_prem_budgets.rs` | pass | Default and no-default serial workspace suites pass. |
 | Database migration behavior | No migration change | pass | v65 and all migration assets unchanged. |
 
 ## 3. Production implementation evidence
@@ -52,8 +52,8 @@ cargo check --manifest-path rust/Cargo.toml --workspace --all-targets
 
 - Cargo deny passed after the dependency updates.
 - Workspace all-target check passed with ZIP 9.4.1.
-- Strict Clippy, serial workspace suites, and locked release build remain
-  pending before final closure.
+- Strict Clippy and both serial workspace suites passed. The locked release
+  build completed successfully.
 
 ## 5. Invariant review
 
@@ -65,7 +65,8 @@ archive paths to disk. Existing staged atomic replacement logic is untouched.
 
 Malformed ZIP name metadata returns a typed archive error. No new write or
 restart state was added. Existing restore rollback and final publication paths
-remain unchanged; the focused and serial tests are still required.
+remain unchanged; focused archive compatibility is covered by the completed
+serial workspace suites.
 
 ## 7. Migration and compatibility review
 
@@ -84,21 +85,22 @@ buffers. No new advisory exceptions were introduced.
 ## 9. Documentation and operations
 
 No operator-facing backup format change. The deployment-packaging roadmap and
-registry identify M009 as conditional until the test/release checks finish.
+registry identify M009 as closed after the test/release checks passed.
 
 ## 10. Unresolved findings
 
 | Severity | Finding | Impact | Required action |
 |---|---|---|---|
-| medium | Full backup/restore suite and release build not yet complete against updated lockfile | Dependency compatibility is not fully qualified | Complete the required serial suites and locked release build. |
+| — | No unresolved M009 findings | Dependency and backup compatibility gates passed | Continue normal release qualification. |
 
 ## 11. Roadmap disposition
 
-Conditionally closed pending serial default/no-default suites and locked
-release build. There is no physical SBC gate for this correctness/security
-fix; SBC testing remains required only for device-specific footprint claims.
+Closed after serial default/no-default suites, strict CI, Cargo deny, and the
+locked release build passed. There is no physical SBC gate for this
+correctness/security fix; SBC testing remains required only for
+device-specific footprint claims.
 
 ## 12. Registry updates
 
-Register M009 as conditionally closed in `plans/registry.md` and
-`plans/subsystems/deployment-packaging-roadmap.md` until verification passes.
+M009 is registered as closed in `plans/registry.md` and
+`plans/subsystems/deployment-packaging-roadmap.md`.

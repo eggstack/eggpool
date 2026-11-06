@@ -75,4 +75,4 @@ E001 closure record proves that embeddings use normal identity, policy, quota, f
 | Milestone | Status | Implementation plan | Closure record | Blockers |
 |---|---|---|---|---|
 | E001 embeddings | conditionally closed | plans/implementation/embedding-routing/001-openai-compatible-embeddings.md | plans/closure/embedding-routing/001-status.md | Live Ollama route and software gates pass; physical SBC footprint evidence remains |
-| E002 PrivateGPT base64 compatibility | conditionally closed | plans/implementation/embedding-routing/002-privategpt-base64-compatibility.md | plans/closure/embedding-routing/002-status.md | Full Rust and dependency verification pending |
+| E002 PrivateGPT base64 compatibility | closed | plans/implementation/embedding-routing/002-privategpt-base64-compatibility.md | plans/closure/embedding-routing/002-status.md | Sanitized request regression, default/no-default serial suites, strict CI, dependency audit and locked release build passed; R001 remains blocked on retrieval/citation and document ACL delegation. |

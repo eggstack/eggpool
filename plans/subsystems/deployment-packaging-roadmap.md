@@ -677,4 +677,4 @@ CI environment is built from the committed lockfile or the job fails.
 | 6 | closed | `plans/implementation/deployment-packaging/006-release-artifact-version-derivation-and-artifact-hygiene.md` | `plans/closure/deployment-packaging/006-status.md` | none; closed through M007 |
 | 7 | closed | `plans/implementation/deployment-packaging/007-release-action-pin-enforcement-and-guard-correction.md` | `plans/closure/deployment-packaging/007-status.md` | none |
 | 8 | closed | `plans/implementation/deployment-packaging/008-ci-dependency-lock-discipline.md` | `plans/closure/deployment-packaging/008-status.md` | none |
-| 9 | conditionally closed | `plans/implementation/deployment-packaging/009-dependency-advisory-remediation.md` | `plans/closure/deployment-packaging/009-status.md` | Serial default/no-default suites and locked release build pending |
+| 9 | closed | `plans/implementation/deployment-packaging/009-dependency-advisory-remediation.md` | `plans/closure/deployment-packaging/009-status.md` | RustSec audit, default/no-default serial suites and locked release build passed |

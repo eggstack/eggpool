@@ -1,6 +1,6 @@
 # Embedding Routing Milestone E002 — Closure Status
 
-Status: conditionally closed
+Status: closed
 
 Source implementation plan:
 
@@ -12,10 +12,11 @@ Source subsystem roadmap:
 
 Repository baseline reviewed: `87e5d755` plus the implementation commit recorded below.
 
-Implementation commits or pull requests:
+Implementation commits:
 
-- Pending commit — PrivateGPT base64 embedding compatibility and sanitized
-  capture regression.
+- `73eac4c6` — PrivateGPT base64 embedding compatibility and sanitized capture
+  regression.
+- `32f5c66a` — dependency advisory remediation required by the final gate.
 
 ## 1. Executive finding
 
@@ -61,8 +62,14 @@ cargo test --manifest-path rust/Cargo.toml --test mcp_gateway live_ollama_hosted
   model turns and one local MCP fixture invocation. The model used the current
   256-token per-turn output limit and 120-second operation deadline; no
   truncation or timeout occurred. No limit change is indicated by this run.
-- Full default/no-default and locked dependency checks are recorded after the
-  merge candidate is committed; this closure does not claim them prematurely.
+- Full default and no-default serial workspace suites passed on the merge
+  candidate. The final no-default rerun is recorded below.
+- Strict Clippy, no-default check/clippy, formatter, Cargo deny and the locked
+  release build passed. GitHub PR check run `42285045606` passed the required
+  CI check job; Cargo deny workflow run `42285045461` passed.
+- Final no-default serial suite: `CARGO_INCREMENTAL=0 cargo test
+  --manifest-path rust/Cargo.toml --workspace --all-targets
+  --no-default-features -- --test-threads=1` — exit 0; all targets passed.
 
 ## 5. Invariant review
 
@@ -88,10 +95,14 @@ response remains the default; base64 is additive. Migration v65 is unchanged.
 The sanitized request fixture contains only structural metadata and synthetic
 replay values. No auth value, input text, provider key, or vector output from
 the live capture was retained. Existing exact-model eligibility and request
-bounds remain enforced. A focused review of migration v65, effective tool
-grants, MCP session binding, and per-turn nested budget settlement found no
-cross-user authorization or settlement bypass; findings and code references
-are summarized in the PR review.
+bounds remain enforced. The integrated boundary review found no cross-user
+bypass: migration v65 uses constrained default-deny grants; `ToolPolicyService`
+applies instance denial before user/profile grants and reauthorizes calls;
+MCP sessions bind user, credential and auth epoch and recheck them on reuse;
+each hosted child model turn uses coordinator admission and settles its own
+budget hold. The review covered `rust/src/tool_policy.rs`,
+`rust/src/mcp_gateway.rs`, hosted orchestration, and the serial tool-grant,
+MCP-session and budget suites.
 
 ## 9. Documentation and operations
 
@@ -111,14 +122,14 @@ release gate only for device-specific footprint claims.
 
 ## 11. Roadmap disposition
 
-E002's bounded compatibility objective and regression evidence are complete.
-The full Rust/dependency verification remains the named closure condition.
-R001 remains blocked on end-to-end retrieval/citation evidence
-and secure document delegation. The SBC measurement does not block unrelated
-correctness changes.
+E002's bounded compatibility objective and regression evidence are complete,
+including the required default/no-default suites and dependency/release gates.
+R001 remains blocked on end-to-end retrieval/citation evidence and secure
+document delegation. The SBC measurement does not block unrelated correctness
+changes.
 
 ## 12. Registry updates
 
-Register E002 as closed in `plans/registry.md` and
-`plans/subsystems/embedding-routing-roadmap.md`; preserve E001's prior closure
-record and status.
+E002 is closed in `plans/registry.md` and
+`plans/subsystems/embedding-routing-roadmap.md`; E001's prior closure record
+and status are preserved.
