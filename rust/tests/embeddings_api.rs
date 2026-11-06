@@ -293,6 +293,52 @@ async fn qualified_embedding_models_route_and_return_ordered_openai_vectors() {
 }
 
 #[tokio::test]
+async fn privategpt_base64_embeddings_capture_is_sanitized_and_supported() {
+    let fixture = fixture().await;
+    let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let address = listener.local_addr().unwrap();
+    let runtime = fixture.runtime;
+    let runtime_handle = runtime.handle();
+    let server_task = tokio::spawn(async move { runtime.serve_listener(listener).await });
+
+    let captured: Value = serde_json::from_str(include_str!(
+        "fixtures/privategpt_1_0_1_embeddings_request.sanitized.json"
+    ))
+    .unwrap();
+    assert_eq!(captured["capture"]["encoding_format"], "base64");
+    assert_eq!(captured["capture"]["input_count"], 4);
+    let body = serde_json::to_vec(&captured["replay_body"]).unwrap();
+    let (status, response) = request(address, &body).await;
+    assert_eq!(status, 200, "{response}");
+    assert_eq!(response["data"].as_array().unwrap().len(), 4);
+    let encoded = response["data"][0]["embedding"].as_str().unwrap();
+    let bytes =
+        base64::Engine::decode(&base64::engine::general_purpose::STANDARD, encoded).unwrap();
+    assert_eq!(bytes.len(), 2 * std::mem::size_of::<f32>());
+    assert_eq!(f32::from_le_bytes(bytes[0..4].try_into().unwrap()), 0.25);
+    assert_eq!(f32::from_le_bytes(bytes[4..8].try_into().unwrap()), 0.5);
+
+    {
+        let upstream = fixture
+            .requests
+            .lock()
+            .unwrap_or_else(|error| error.into_inner());
+        assert_eq!(upstream.len(), 1);
+        assert_eq!(upstream[0]["encoding_format"], "float");
+        assert_eq!(upstream[0]["input"].as_array().unwrap().len(), 4);
+    }
+
+    runtime_handle.request_shutdown(ShutdownReason::Requested);
+    tokio::time::timeout(Duration::from_secs(6), server_task)
+        .await
+        .unwrap()
+        .unwrap()
+        .unwrap();
+    fixture.provider_task.abort();
+    fixture.database.close().await.unwrap();
+}
+
+#[tokio::test]
 async fn malformed_or_unqualified_embedding_requests_fail_before_provider_submission() {
     let fixture = fixture().await;
     let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
@@ -310,7 +356,7 @@ async fn malformed_or_unqualified_embedding_requests_fail_before_provider_submis
     assert_eq!(status, 400);
     let (status, _) = request(
         address,
-        br#"{"model":"embed-fixture","input":"hello","encoding_format":"base64"}"#,
+        br#"{"model":"embed-fixture","input":"hello","encoding_format":"binary"}"#,
     )
     .await;
     assert_eq!(status, 400);

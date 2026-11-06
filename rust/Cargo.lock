@@ -992,6 +992,7 @@ dependencies = [
  "arc-swap",
  "argon2 0.5.3",
  "axum",
+ "base64 0.22.1",
  "bytes",
  "clap",
  "eggfetch-core",

@@ -3,6 +3,7 @@
 //! Embeddings do not pass through the dialogue IR. This module owns their
 //! finite, text-only wire contract and keeps input text out of diagnostics.
 
+use base64::{Engine as _, engine::general_purpose::STANDARD};
 use bytes::Bytes;
 use serde_json::{Map, Value, json};
 use thiserror::Error;
@@ -13,6 +14,12 @@ pub const MAX_EMBEDDING_ITEM_BYTES: usize = 16 * 1024;
 pub const MAX_EMBEDDING_TOTAL_INPUT_BYTES: usize = 64 * 1024;
 pub const MAX_EMBEDDING_DIMENSIONS: usize = 8192;
 pub const MAX_EMBEDDING_RESPONSE_BYTES: usize = 8 * 1024 * 1024;
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum EmbeddingEncoding {
+    Float,
+    Base64,
+}
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum EmbeddingInput {
@@ -45,6 +52,7 @@ pub struct EmbeddingRequest {
     pub model: String,
     pub input: EmbeddingInput,
     pub dimensions: Option<usize>,
+    pub encoding_format: EmbeddingEncoding,
 }
 
 impl EmbeddingRequest {
@@ -113,12 +121,12 @@ impl EmbeddingRequest {
         if total_bytes > MAX_EMBEDDING_TOTAL_INPUT_BYTES {
             return Err(EmbeddingRequestError::InputTooLarge);
         }
-        if object
-            .get("encoding_format")
-            .is_some_and(|value| value.as_str() != Some("float"))
-        {
-            return Err(EmbeddingRequestError::UnsupportedEncoding);
-        }
+        let encoding_format = match object.get("encoding_format") {
+            None => EmbeddingEncoding::Float,
+            Some(Value::String(value)) if value == "float" => EmbeddingEncoding::Float,
+            Some(Value::String(value)) if value == "base64" => EmbeddingEncoding::Base64,
+            Some(_) => return Err(EmbeddingRequestError::UnsupportedEncoding),
+        };
         let dimensions = match object.get("dimensions") {
             None => None,
             Some(Value::Number(value)) => value
@@ -133,6 +141,7 @@ impl EmbeddingRequest {
             model,
             input,
             dimensions,
+            encoding_format,
         })
     }
 
@@ -179,7 +188,7 @@ pub enum EmbeddingRequestError {
     TooManyInputs,
     #[error("embedding input exceeds the byte limit")]
     InputTooLarge,
-    #[error("only float encoding is supported")]
+    #[error("embedding request uses an unsupported encoding")]
     UnsupportedEncoding,
     #[error("embedding dimensions are invalid")]
     InvalidDimensions,
@@ -255,7 +264,24 @@ impl EmbeddingResponse {
                 return Err(EmbeddingRequestError::InvalidResponse);
             }
             observed_dimensions = Some(vector.len());
-            indexed.push((index, item.clone()));
+            let mut item = item.clone();
+            if request.encoding_format == EmbeddingEncoding::Base64 {
+                let mut encoded = Vec::with_capacity(vector.len() * std::mem::size_of::<f32>());
+                for value in vector {
+                    let number = value
+                        .as_f64()
+                        .ok_or(EmbeddingRequestError::InvalidResponse)?
+                        as f32;
+                    if !number.is_finite() {
+                        return Err(EmbeddingRequestError::InvalidResponse);
+                    }
+                    encoded.extend_from_slice(&number.to_le_bytes());
+                }
+                item.as_object_mut()
+                    .ok_or(EmbeddingRequestError::InvalidResponse)?
+                    .insert("embedding".into(), Value::String(STANDARD.encode(encoded)));
+            }
+            indexed.push((index, item));
         }
         indexed.sort_by_key(|(index, _)| *index);
         if indexed
@@ -311,7 +337,7 @@ mod tests {
     use super::*;
 
     #[test]
-    fn accepts_single_and_array_text_with_float_encoding() {
+    fn accepts_single_and_array_text_with_float_and_base64_encoding() {
         let single = EmbeddingRequest::parse(br#"{"model":"p/m","input":"hello"}"#).unwrap();
         assert_eq!(single.input.len(), 1);
         let multiple = EmbeddingRequest::parse(
@@ -321,6 +347,15 @@ mod tests {
         let body: Value = serde_json::from_slice(&multiple.upstream_body("m").unwrap()).unwrap();
         assert_eq!(body["input"], json!(["a", "b"]));
         assert_eq!(body["dimensions"], 2);
+        let base64 = EmbeddingRequest::parse(
+            br#"{"model":"p/m","input":["a","b"],"encoding_format":"base64"}"#,
+        )
+        .unwrap();
+        assert_eq!(base64.encoding_format, EmbeddingEncoding::Base64);
+        assert_eq!(
+            base64.upstream_body("m").unwrap().as_ref(),
+            br#"{"encoding_format":"float","input":["a","b"],"model":"m"}"#
+        );
     }
 
     #[test]
@@ -328,7 +363,7 @@ mod tests {
         for body in [
             br#"{"model":"m","input":[]}"#.as_slice(),
             br#"{"model":"m","input":"x","stream":true}"#,
-            br#"{"model":"m","input":"x","encoding_format":"base64"}"#,
+            br#"{"model":"m","input":"x","encoding_format":"binary"}"#,
             br#"{"model":"m","input":{},"dimensions":0}"#,
         ] {
             assert!(EmbeddingRequest::parse(body).is_err());

@@ -127,6 +127,8 @@ pub enum EndpointError {
     ModelForbidden,
     #[error("embedding model aliases are not supported")]
     EmbeddingAliasUnsupported,
+    #[error("invalid embedding request encoding")]
+    InvalidEmbeddingRequest,
     #[error("User budget limit reached")]
     BudgetExceeded,
     #[error(
@@ -193,6 +195,7 @@ impl EndpointError {
             | Self::MissingModel
             | Self::StatelessViolation(_)
             | Self::InvalidStream
+            | Self::InvalidEmbeddingRequest
             | Self::Admission
             | Self::EmbeddingAliasUnsupported => StatusCode::BAD_REQUEST,
             Self::BodyTooLarge => StatusCode::PAYLOAD_TOO_LARGE,
@@ -256,6 +259,10 @@ pub fn endpoint_error_body_for(surface: ClientSurface, error: &EndpointError) ->
         EndpointError::EmbeddingsUnsupported => Some((
             "embeddings_unsupported",
             "No provider has an explicitly qualified embeddings model and endpoint",
+        )),
+        EndpointError::InvalidEmbeddingRequest => Some((
+            "invalid_embedding_request",
+            "The embeddings request uses an unsupported encoding format",
         )),
         _ => None,
     };
@@ -1046,6 +1053,7 @@ pub(crate) async fn execute_embeddings_attributed(
         }
         EmbeddingRequestError::InvalidJson => EndpointError::InvalidJson,
         EmbeddingRequestError::InvalidModel => EndpointError::MissingModel,
+        EmbeddingRequestError::UnsupportedEncoding => EndpointError::InvalidEmbeddingRequest,
         _ => EndpointError::Admission,
     })?;
     if state.registry.get(embedding.model.trim()).is_some() {

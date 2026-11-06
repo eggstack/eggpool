@@ -51,6 +51,9 @@ A typed bounded embedding operation enters through the ordinary authenticated in
 ### E001 — Embeddings route, qualification and accounting
 Class: capability. Bounded end-to-end route, verified eligible models, per-user grants/quotas and usable API error/usage contract. Exit: local live embeddings and negative authorization/unsupported-model/size/unknown-price tests; default/no-default parity and normal protocol regression tests. Deferred: advanced embedding formats and vector search.
 
+### E002 — PrivateGPT base64 client compatibility (corrective)
+Class: capability. Accept the sanitized PrivateGPT 1.0.1 base64 request shape and return validated little-endian float32 vectors without changing provider admission or persistence. Exit: captured-request regression, unsupported-format negative case, full default/no-default suites and dependency checks. This corrective does not qualify PrivateGPT retrieval or team document access.
+
 ## 8. Cross-cutting requirements
 
 Storage: no vector/text storage; additive accounting only if needed; migration/restore qualified. Protocol: OpenAI finite embeddings subset with documented dimensions/encoding policy. Security: early bounded admission and same user authorization as other inference. Concurrency: provider health and finalization intact; no new SQLite connection. Observability: numbers/error classes only, no input/output content. Performance: no large tokenizer dependency or default local model service.
@@ -72,3 +75,4 @@ E001 closure record proves that embeddings use normal identity, policy, quota, f
 | Milestone | Status | Implementation plan | Closure record | Blockers |
 |---|---|---|---|---|
 | E001 embeddings | conditionally closed | plans/implementation/embedding-routing/001-openai-compatible-embeddings.md | plans/closure/embedding-routing/001-status.md | Live Ollama route and software gates pass; physical SBC footprint evidence remains |
+| E002 PrivateGPT base64 compatibility | conditionally closed | plans/implementation/embedding-routing/002-privategpt-base64-compatibility.md | plans/closure/embedding-routing/002-status.md | Full Rust and dependency verification pending |

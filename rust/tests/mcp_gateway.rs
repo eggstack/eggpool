@@ -925,14 +925,14 @@ async fn hosted_endpoint_completes_finite_model_tool_model_flow() {
 }
 
 #[tokio::test]
-#[ignore = "requires Ollama qwen3.5:4b and Eggsearch 0.4.3 at EGGPOOL_TEST_EGGSEARCH_URL"]
+#[ignore = "requires Ollama qwen3.5:4b on loopback"]
 async fn live_ollama_eggsearch_hosted_orchestration() {
-    let backend_url = std::env::var("EGGPOOL_TEST_EGGSEARCH_URL")
-        .expect("set EGGPOOL_TEST_EGGSEARCH_URL to the qualified loopback Eggsearch endpoint");
+    let (backend, backend_task, calls, _, _, _, _) = fixture_server().await;
+    let backend_url = format!("http://{backend}/mcp");
     let provider_url = "http://127.0.0.1:11434/v1";
     let (_directory, database, runtime, tokens) = runtime_fixture(
         &backend_url,
-        "web_fetch",
+        "web_search",
         false,
         true,
         Some((provider_url, "qwen3.5:4b")),
@@ -945,7 +945,7 @@ async fn live_ollama_eggsearch_hosted_orchestration() {
     let response = raw_hosted_request(
         address,
         &tokens[0],
-        r#"{"mode":"eggsearch","model":"qwen3.5:4b","input":"Fetch https://example.com with a compact result limited to 1200 characters, then summarize the fetched page in one sentence.","tools":["web_fetch"],"max_iterations":2,"max_tool_calls":1}"#,
+        r#"{"mode":"eggsearch","model":"qwen3.5:4b","input":"Use web_search for the query 'test'; then summarize the returned result in one sentence.","tools":["web_search"],"max_iterations":2,"max_tool_calls":1}"#,
     )
     .await;
     assert!(response.starts_with("HTTP/1.1 200"), "{response}");
@@ -958,6 +958,7 @@ async fn live_ollama_eggsearch_hosted_orchestration() {
             .as_str()
             .is_some_and(|answer| !answer.is_empty())
     );
+    assert_eq!(calls.load(Ordering::SeqCst), 1);
 
     handle.request_shutdown(ShutdownReason::Requested);
     tokio::time::timeout(Duration::from_secs(6), server_task)
@@ -965,6 +966,7 @@ async fn live_ollama_eggsearch_hosted_orchestration() {
         .unwrap()
         .unwrap()
         .unwrap();
+    backend_task.abort();
     database.close().await.unwrap();
 }
 

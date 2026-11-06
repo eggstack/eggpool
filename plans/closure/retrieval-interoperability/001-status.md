@@ -138,18 +138,18 @@ qualified full RAG deployment while its ingest smoke fails.
 
 | Severity | Finding | Impact | Required action |
 |---|---|---|---|
-| high | PrivateGPT ingestion cannot complete because its embedding request is rejected by EggPool admission, despite a direct embedding smoke succeeding. | The solo end-to-end RAG capability and citation path are not qualified. | Capture the exact sanitized request contract, diagnose admission, add a regression test for the supported client shape, then repeat ingest→retrieve→citation and unrelated-query checks. |
+| high | PrivateGPT full ingestion/retrieval has not completed; the original EggPool admission incompatibility is corrected by E002, while the latest isolated ingest hit a Qdrant vector-width mismatch. | The solo end-to-end RAG capability and citation path are not qualified. | Re-run with a clean PrivateGPT profile whose collection width matches the selected 768-dimensional embedding model; complete ingest→retrieve→citation and unrelated-query checks. |
 | high | No vetted retrieval adapter with per-user document delegation/ACL enforcement exists. | Managed-team retrieval would risk cross-user document disclosure if implemented with a shared identity. | Select or build a separately owned adapter/backend with caller delegation and two-principal negative tests; retain default-deny until then. |
 | medium | No source revision, stale citation, truncation, index outage, revocation, malicious-document, or cancellation qualification was run. | Source integrity and failure semantics are unproven. | Complete those cases against the selected backend as part of a successor implementation plan. |
 
 ## 11. Roadmap disposition
 
-Blocked. The attempted pattern-A smoke exposed an unresolved admission
-interoperability failure, while pattern B lacks its required secure backend
-contract. The plan's stop condition applies: do not add arbitrary retrieval
-credentials or claim team support. Resume only with a diagnosed compatible
-PrivateGPT ingest path and a separately reviewed document delegation/ACL
-design.
+Blocked. The base64 embedding admission incompatibility is corrected and
+covered by E002. Full pattern-A ingestion/retrieval/citation remains
+unqualified due to the temporary PrivateGPT Qdrant width mismatch, while
+pattern B lacks its required secure backend contract. Do not add arbitrary
+retrieval credentials or claim team support. Resume with a clean compatible
+PrivateGPT profile and a separately reviewed document delegation/ACL design.
 
 ## 12. Registry updates
 
@@ -157,3 +157,24 @@ The registry and Retrieval Interoperability roadmap now point to this blocked
 record. ADR-0007 and ADR-0008 are accepted. E001 provides an optional embedding
 interface, and Tool Integration M003 remains conditionally closed; neither
 removes R001's backend ACL or PrivateGPT ingest blockers.
+
+## 13. Post-closure evidence update — 2026-11-06
+
+E002 captured the PrivateGPT 1.0.1 request shape without retaining its text or
+credential: `POST /v1/embeddings`, JSON keys `encoding_format`, `input`, and
+`model`, four input strings, and `encoding_format: "base64"`. The sanitized
+replay fixture is
+`rust/tests/fixtures/privategpt_1_0_1_embeddings_request.sanitized.json`.
+EggPool now accepts that shape, returns little-endian base64 vectors, and the
+capture proxy observed HTTP 200 from EggPool on the synthetic ingest attempt.
+
+After that response, PrivateGPT attempted to upsert 768-wide vectors into a
+1024-wide local Qdrant collection. A fresh isolated profile auto-detected the
+correct 768 width but its startup probe selected the chat model for an
+embedding request, which EggPool correctly rejected as embeddings-unsupported.
+These are temporary PrivateGPT profile/setup issues, not evidence of an
+EggPool admission failure. No successful ingest, retrieval, or citation is
+claimed. Team retrieval still has no backend-enforced document delegation
+interface. E002 adds the regression fixture and compatibility correction;
+R001 remains blocked pending a successful full solo RAG cycle and the secure
+team adapter qualification.

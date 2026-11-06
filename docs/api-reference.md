@@ -26,12 +26,14 @@ compaction, so remote compaction is not required for normal Codex operation.
 
 `POST /v1/embeddings` accepts a non-empty `input` string or array of strings,
 an exact concrete `model`, optional positive `dimensions` (maximum 8192), and
-optional `encoding_format: "float"`. Requests are capped at 64 KiB, 32 inputs,
-16 KiB per item, and 64 KiB total UTF-8 input. The response is finite JSON with
-one finite float vector per input, contiguous zero-based indices, and a
-consistent vector size. EggPool sorts rows by index and returns the requested
-client model ID. `base64`, token-ID inputs, extra request fields, virtual model
-aliases, image inputs, streaming, and guessed provider routes are unsupported.
+optional `encoding_format: "float"` or `"base64"` (default `"float"`). Base64
+responses encode each finite float32 vector as little-endian bytes. Requests
+are capped at 64 KiB, 32 inputs, 16 KiB per item, and 64 KiB total UTF-8 input.
+The response is finite JSON with one vector per input, contiguous zero-based
+indices, and a consistent vector size. EggPool sorts rows by index and returns
+the requested client model ID. Token-ID inputs, extra request fields, virtual
+model aliases, image inputs, streaming, and guessed provider routes are
+unsupported.
 
 An operator must configure both `embedding_models` (an exact model-ID
 allowlist) and `embeddings_path` on a provider. Chat support alone never
