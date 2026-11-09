@@ -134,3 +134,7 @@ unsafe_code = "forbid"
 
 [lints.clippy]
 all = "warn"
+
+# rusqlite 0.41 bundles SQLite 3.54+; tokio-rusqlite 0.8.0 on crates.io is still ^0.40.1.
+[patch.crates-io]
+tokio-rusqlite = { path = "vendor/tokio-rusqlite" }
