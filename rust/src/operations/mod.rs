@@ -19,5 +19,4 @@ pub mod process;
 pub mod provenance;
 pub mod status;
 pub mod terminal;
-pub mod tools;
 pub mod update;

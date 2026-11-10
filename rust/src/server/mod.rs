@@ -9,17 +9,14 @@
 mod auth;
 mod dashboard;
 mod health;
-mod hosted;
 mod inference;
-pub(crate) use inference::filtered_incoming_headers;
 mod middleware;
-pub(crate) mod tools;
 
 use auth::{
     account_page, login_page, login_submit, logout_submit, member_landing_page, password_change,
 };
 use dashboard::{
-    accounts_page, assign_user_profile, audit_page, bandwidth_page, cache_page,
+    accounts_page, assign_user_profile, audit_export, audit_page, bandwidth_page, cache_page,
     create_personal_token, create_profile, create_user, delete_profile, events_page,
     grouped_timeseries_api, issue_admin_token, latency_page, model_detail_page, models_page,
     my_account_page, my_models_page, overview, pings_page, profiles_page, reliability_page,
@@ -685,15 +682,10 @@ pub struct ServerState {
     database_path: String,
     trusted_proxy_ips: Vec<String>,
     allow_insecure_web_auth: bool,
-    tool_gateway: tools::Gateway,
     started_at: Instant,
 }
 
 impl ServerState {
-    fn hosted_execution_enabled(&self) -> bool {
-        self.tool_gateway.hosted_execution_enabled()
-    }
-
     fn from_config(config: &Config) -> Self {
         Self {
             api_key: config.resolved_server_api_key(),
@@ -707,7 +699,6 @@ impl ServerState {
                 .into_owned(),
             trusted_proxy_ips: config.security.trusted_proxies.clone(),
             allow_insecure_web_auth: config.security.allow_insecure_web_auth,
-            tool_gateway: tools::Gateway::new(config.tools.clone()),
             started_at: Instant::now(),
         }
     }
@@ -1188,6 +1179,7 @@ pub fn build_router(state: AppState) -> Router {
         .route("/api/stats/update", get(update_status))
         .route("/api/status", get(status_api))
         .route("/api/user-budget", get(user_budget_api))
+        .route("/api/admin/audit/export", get(audit_export))
         .route("/v1/chat/completions", post(chat_completions))
         .route(
             "/v1/embeddings",
@@ -1203,21 +1195,6 @@ pub fn build_router(state: AppState) -> Router {
         .route("/static/chart.js", get(static_chart_js))
         .route("/static/favicon.svg", get(static_favicon))
         .route("/static/theme.css", get(theme_css));
-
-    if state.server.tool_gateway.enabled() {
-        router = router.route(
-            tools::PATH,
-            post(tools::gateway).layer(tools::request_limit()),
-        );
-    }
-    if state.server.hosted_execution_enabled() {
-        router = router.route(
-            hosted::PATH,
-            post(hosted::run).layer(axum::extract::DefaultBodyLimit::max(
-                hosted::MAX_REQUEST_BYTES,
-            )),
-        );
-    }
 
     router = router
         .route("/login", get(login_page).post(login_submit))
@@ -1355,7 +1332,6 @@ mod tests {
             database_path: ":memory:".to_owned(),
             trusted_proxy_ips: Vec::new(),
             allow_insecure_web_auth: false,
-            tool_gateway: tools::Gateway::new(crate::config::ToolBackendConfig::default()),
             started_at: Instant::now(),
         }
     }
@@ -1386,9 +1362,8 @@ mod tests {
             "/v1/messages",
             "/v1/responses",
             "/v1/responses/compact",
-            hosted::PATH,
+            "/api/admin/audit/export",
             "/api/integrations/v1/profile",
-            hosted::PATH,
             "/api/user-budget",
             "/api/stats/runtime",
             "/api/stats/update",

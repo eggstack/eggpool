@@ -627,7 +627,6 @@ mod tests {
             database_path: ":memory:".to_owned(),
             trusted_proxy_ips: vec!["192.0.2.10".to_owned()],
             allow_insecure_web_auth: false,
-            tool_gateway: super::tools::Gateway::new(crate::config::ToolBackendConfig::default()),
             started_at: Instant::now(),
         }
     }
@@ -979,7 +978,6 @@ mod tests {
             database_path: ":memory:".to_owned(),
             trusted_proxy_ips: vec!["192.0.2.10".to_owned()],
             allow_insecure_web_auth: false,
-            tool_gateway: super::tools::Gateway::new(crate::config::ToolBackendConfig::default()),
             started_at: Instant::now(),
         };
         let mut headers = HeaderMap::new();
@@ -1023,7 +1021,6 @@ mod tests {
             database_path: ":memory:".to_owned(),
             trusted_proxy_ips: vec!["192.0.2.10".to_owned()],
             allow_insecure_web_auth: false,
-            tool_gateway: super::tools::Gateway::new(crate::config::ToolBackendConfig::default()),
             started_at: Instant::now(),
         };
         let connection = |remote_addr| {
@@ -1062,7 +1059,6 @@ mod tests {
             database_path: ":memory:".to_owned(),
             trusted_proxy_ips: vec!["192.0.2.10".to_owned()],
             allow_insecure_web_auth: false,
-            tool_gateway: super::tools::Gateway::new(crate::config::ToolBackendConfig::default()),
             started_at: Instant::now(),
         };
         let trusted_peer = eggserve_primitives::connection_info::ConnectionInfo::new(

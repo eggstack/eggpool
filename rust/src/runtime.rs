@@ -53,7 +53,7 @@ pub async fn run(cli: Cli) -> Result<(), BootstrapError> {
     let config_path = cli.resolved_config_path();
     match cli.command {
         Some(Command::Version) => println!("{PACKAGE_VERSION}"),
-        Some(Command::CheckConfig) => check_config(&config_path)?,
+        Some(Command::CheckConfig(args)) => check_config(&config_path, args.local)?,
         Some(Command::Serve(args)) => serve(&config_path, &args).await?,
         Some(Command::Stop(args)) => stop(&config_path, args.timeout).await?,
         Some(Command::Restart(args)) => restart(&config_path, args.timeout).await?,
@@ -96,8 +96,8 @@ pub async fn run(cli: Cli) -> Result<(), BootstrapError> {
         }
         Some(Command::Modelinfo(command)) => modelinfo(&config_path, command).await?,
         Some(Command::Stats(command)) => stats(&config_path, command).await?,
-        Some(Command::Tools(crate::cli::ToolsCommand::Doctor { json })) => {
-            tools_doctor(&config_path, json).await?
+        Some(Command::Audit(crate::cli::AuditCommand::Export(args))) => {
+            audit_export(&config_path, args).await?
         }
         Some(Command::Deploy(args)) => deploy(&config_path, args).await?,
         Some(Command::Uninstall(args)) => uninstall(&config_path, args).await?,
@@ -110,23 +110,25 @@ pub async fn run(cli: Cli) -> Result<(), BootstrapError> {
     Ok(())
 }
 
-async fn tools_doctor(path: &Path, json_output: bool) -> Result<(), BootstrapError> {
-    let config = crate::config::Config::from_toml(path).map_err(BootstrapError::from)?;
-    let diagnostic = crate::operations::tools::doctor(&config).await;
-    if json_output {
-        println!(
-            "{}",
-            serde_json::to_string(&diagnostic).unwrap_or_else(|_| "{}".into())
-        );
-    } else {
-        println!("Eggsearch backend: {:?}", diagnostic.status);
-        if let Some(version) = diagnostic.service_version {
-            println!("Service version: {version}");
+async fn audit_export(
+    path: &Path,
+    args: crate::cli::AuditExportArgs,
+) -> Result<(), BootstrapError> {
+    let limit = crate::identity::normalize_audit_limit(args.limit)
+        .map_err(|detail| command_error(EXIT_VALIDATION, detail))?;
+    let config = config::Config::from_toml(path)?;
+    let database = open_operational_database(&config, true).await?;
+    let actor = policy_actor_id(&database, &args.actor).await;
+    let export = match actor {
+        Ok(_) => crate::identity::gateway_audit_export(&database, limit).await,
+        Err(error) => {
+            let _ = database.close().await;
+            return Err(error);
         }
-        if let Some(count) = diagnostic.tool_count {
-            println!("Validated tools: {count}");
-        }
-    }
+    };
+    let _ = database.close().await;
+    let export = export.map_err(|error| command_error(EXIT_VALIDATION, error.to_string()))?;
+    print!("{}", export.to_json_lines());
     Ok(())
 }
 
@@ -820,15 +822,10 @@ async fn users(path: &Path, command: crate::cli::UsersCommand) -> Result<(), Boo
             );
         }
         crate::cli::UsersCommand::Token(args) => {
-            let credential = crate::identity::issue_api_token_with_tool_scopes(
-                &database,
-                &args.username,
-                &args.label,
-                args.tool_discovery,
-                args.tool_invocation,
-            )
-            .await
-            .map_err(|error| command_error(EXIT_VALIDATION, error.to_string()))?;
+            let credential =
+                crate::identity::issue_api_token(&database, &args.username, &args.label)
+                    .await
+                    .map_err(|error| command_error(EXIT_VALIDATION, error.to_string()))?;
             println!("Personal API credential for {} created.", args.username);
             print_one_time_secret(&credential.token, args.show_secret);
         }
@@ -879,78 +876,6 @@ async fn users(path: &Path, command: crate::cli::UsersCommand) -> Result<(), Boo
                         .await
                         .map_err(|error| command_error(EXIT_VALIDATION, error.to_string()))?;
                     println!("Preferred model updated for {}.", args.profile_id);
-                }
-            }
-        }
-        crate::cli::UsersCommand::ToolPolicy(command) => {
-            use crate::cli::UsersToolPolicyCommand as ToolPolicy;
-            let service = crate::tool_policy::ToolPolicyService::new(database.clone());
-            match command {
-                ToolPolicy::ProfileRule(args) => {
-                    let actor = policy_actor_id(&database, &args.actor).await?;
-                    let effect = match args.effect.as_str() {
-                        "allow" => Some(crate::tool_policy::GrantEffect::Allow),
-                        "deny" => Some(crate::tool_policy::GrantEffect::Deny),
-                        _ => None,
-                    };
-                    service
-                        .set_profile_rule(
-                            &args.profile_id,
-                            &args.tool,
-                            effect,
-                            args.expected_version,
-                            &actor,
-                        )
-                        .await
-                        .map_err(|error| command_error(EXIT_VALIDATION, error.to_string()))?;
-                    println!("Tool policy rule updated for profile {}.", args.profile_id);
-                }
-                ToolPolicy::UserRule(args) => {
-                    let actor = policy_actor_id(&database, &args.actor).await?;
-                    let effect = match args.effect.as_str() {
-                        "allow" => Some(crate::tool_policy::GrantEffect::Allow),
-                        "deny" => Some(crate::tool_policy::GrantEffect::Deny),
-                        _ => None,
-                    };
-                    service
-                        .set_user_rule(&args.username, &args.tool, effect, &actor)
-                        .await
-                        .map_err(|error| command_error(EXIT_VALIDATION, error.to_string()))?;
-                    println!("Tool policy override updated for {}.", args.username);
-                }
-                ToolPolicy::InstanceDeny(args) => {
-                    let actor = policy_actor_id(&database, &args.actor).await?;
-                    service
-                        .set_instance_denial(&args.tool, true, &actor)
-                        .await
-                        .map_err(|error| command_error(EXIT_VALIDATION, error.to_string()))?;
-                    println!("Instance tool policy updated for {}.", args.tool);
-                }
-                ToolPolicy::InstanceAllow(args) => {
-                    let actor = policy_actor_id(&database, &args.actor).await?;
-                    service
-                        .set_instance_denial(&args.tool, false, &actor)
-                        .await
-                        .map_err(|error| command_error(EXIT_VALIDATION, error.to_string()))?;
-                    println!("Instance tool policy updated for {}.", args.tool);
-                }
-                ToolPolicy::Show(args) => {
-                    let tools = service
-                        .effective_tools_for_user(&args.username)
-                        .await
-                        .map_err(|error| command_error(EXIT_VALIDATION, error.to_string()))?;
-                    let profile = service
-                        .assigned_profile_version(&args.username)
-                        .await
-                        .map_err(|error| command_error(EXIT_VALIDATION, error.to_string()))?;
-                    println!("effective_tool_grants: {}", tools.join(","));
-                    if let Some((profile_id, version)) = profile {
-                        println!("assigned_profile: {profile_id}");
-                        println!("profile_version: {version}");
-                    } else {
-                        println!("assigned_profile: none");
-                    }
-                    println!("credential_scopes_included: false");
                 }
             }
         }
@@ -2432,9 +2357,21 @@ fn lifecycle_error(error: lifecycle::LifecycleError) -> BootstrapError {
     command_error(EXIT_VALIDATION, error.to_string())
 }
 
-fn check_config(path: &Path) -> Result<(), BootstrapError> {
+fn check_config(path: &Path, local: bool) -> Result<(), BootstrapError> {
     let config = config::Config::from_toml(path)?;
     config.validate_account_credentials()?;
+    if local {
+        let keys = config::local_metadata_violations(&config);
+        if !keys.is_empty() {
+            return Err(command_error(
+                EXIT_VALIDATION,
+                format!(
+                    "local profile rejects outbound metadata or update sources: {}",
+                    keys.join(", ")
+                ),
+            ));
+        }
+    }
     let digest = config::content_digest(path)?;
     println!(
         "Configuration loaded successfully from {}\n  Server: {}:{}\n  Accounts: {}\n  Database: {}\n  Content digest: {}",
@@ -2445,6 +2382,9 @@ fn check_config(path: &Path) -> Result<(), BootstrapError> {
         config.database.path,
         digest
     );
+    if local {
+        println!("Outbound metadata and update sources are off.");
+    }
     Ok(())
 }
 

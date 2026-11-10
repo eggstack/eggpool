@@ -1,6 +1,6 @@
 # Retrieval Interoperability Roadmap
 
-Status: active
+Status: closed
 
 Long-term references:
 
@@ -11,12 +11,18 @@ Long-term references:
 
 Related ADRs:
 
-- plans/adrs/ADR-0007-optional-tool-authority-and-hosted-execution-boundary.md (accepted)
-- plans/adrs/ADR-0008-embedding-inference-surface-boundary.md (accepted; optional interface)
+- plans/adrs/ADR-0009-downstream-application-boundary.md (accepted; ends this workstream)
+- plans/adrs/ADR-0008-embedding-inference-surface-boundary.md (accepted; embeddings stay)
+- plans/adrs/ADR-0007-optional-tool-authority-and-hosted-execution-boundary.md (superseded)
 
 ## 1. Purpose and ownership boundary
 
-Close the PrivateGPT-style retrieval interoperability gap without turning EggPool into a document store. EggPool owns only a governed tool/credential interface and model/embeddings routing; an operator-run retrieval companion owns ingestion, parsing, chunking, embeddings/index selection, ACL-enforced retrieval, deletions, and source content storage.
+ADR-0009 ends this workstream. EggPool routes inference and embeddings.
+The calling application owns documents, indexes, citations, and ACLs.
+R002 is closed and was documentation only. The paragraphs
+below through section 10 are the historical R001 contract except where
+this section and sections 7, 11, and 12 say otherwise. Do not implement
+them. The live operator contract is `docs/retrieval-interoperability.md`.
 
 ## 2. Work classification
 
@@ -42,14 +48,20 @@ Two supported deployment patterns: (A) external retrieval app calls EggPool infe
 
 ## 6. Dependency graph
 
-- R001: Tool Integration M003 is conditionally closed, with its software capability/live Eggsearch qualification complete and physical SBC evidence remaining; pattern B still lacks a secure retrieval adapter. Embedding Routing E001 is conditionally closed and provides an optional interface. No hard dependency on hosted orchestration M004.
-- Operational: fixture retrieval service with at least two disjoint principals/collections; working PrivateGPT instance or equivalent for pattern A.
-- No migration/storage dependency on EggPool beyond tool policy already delivered by T002.
+- R002: **hard** accepted ADR-0009. No Rust dependency. Application-boundary M001 is **soft**; R002 deletes gateway retrieval instructions even if M001 has not merged.
+- R001 is superseded for execution. Its historical dependency on tool-integration M003 is vacated with that gateway.
 
 ## 7. Milestones
 
 ### R001 — External RAG contract and reference qualification
-Class: capability. Define one small MCP retrieval contract (search/fetch, citation IDs, bounded text), an operator configuration example, two-user ACL negative suite and a reference PrivateGPT deployment showing inferencing through EggPool. Exit: retrieved citations remain source-grounded and unauthorized documents are not discoverable or retrievable; no EggPool content storage. Deferred: local ingest implementation, richer indexing and generic connectors.
+Class: capability. Historical milestone, superseded for execution by R002.
+Its blocked closure stays as evidence. Do not implement it.
+
+### R002 — Withdraw external retrieval scope
+Class: polish. Record ADR-0009 in the operator doc: embeddings remain a
+routed inference API, and document ingest, indexes, citations, and ACLs
+stay with the calling application. Exit: `docs/retrieval-interoperability.md`
+matches that contract, R001 is not a handoff, and `rust/` is unchanged.
 
 ## 8. Cross-cutting requirements
 
@@ -65,10 +77,13 @@ A retrieval service unable to enforce per-user document ACLs must be explicitly 
 
 ## 11. Completion definition
 
-R001 closure includes a repeatable reference deployment, two-user security regression and documented capability limits. No application-level RAG capability is claimed simply from installing Eggsearch or adding embeddings.
+The workstream completes when R002's closure record is accepted. R001's
+blocked closure remains historical. No application-level RAG capability is
+claimed from embeddings or from Eggsearch.
 
 ## 12. Milestone status
 
 | Milestone | Status | Implementation plan | Closure record | Blockers |
 |---|---|---|---|---|
-| R001 external retrieval | blocked | plans/implementation/retrieval-interoperability/001-external-rag-contract-and-reference.md | plans/closure/retrieval-interoperability/001-status.md | PrivateGPT ingest/admission failure; no backend-enforced document ACL/delegation adapter or two-principal suite |
+| R001 external retrieval | superseded | plans/implementation/retrieval-interoperability/001-external-rag-contract-and-reference.md | plans/closure/retrieval-interoperability/001-status.md | Historical blocked record. Execution superseded by R002. |
+| R002 withdraw external retrieval scope | implemented | plans/implementation/retrieval-interoperability/002-withdraw-external-retrieval-scope.md | plans/closure/retrieval-interoperability/002-status.md | none |

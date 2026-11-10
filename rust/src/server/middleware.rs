@@ -166,8 +166,6 @@ fn legacy_server_key_allowed(access_state: Option<&str>) -> bool {
 fn personal_credential_allowed(path: &str) -> bool {
     (path.starts_with("/v1/") && path != "/v1/healthz" && path != "/v1/readyz")
         || path == "/api/integrations/v1/profile"
-        || path == "/api/tools/v1/mcp"
-        || path == "/api/agent/v1/run"
         || path == "/api/user-budget"
 }
 
@@ -185,6 +183,7 @@ fn requires_browser_session(path: &str) -> bool {
             | "/profiles"
     ) || path.starts_with("/account/tokens")
         || path.starts_with("/admin/")
+        || path == "/api/admin/audit/export"
 }
 
 fn is_unconditionally_public(path: &str) -> bool {
@@ -232,6 +231,7 @@ pub(super) fn requires_auth(path: &str, method: &http::Method, server: &ServerSt
             | "/usage"
     ) || path.starts_with("/account/tokens")
         || path.starts_with("/admin/")
+        || path == "/api/admin/audit/export"
         || matches!(path, "/users" | "/profiles")
     {
         return true;
@@ -500,7 +500,6 @@ pub(super) fn is_inference_path(path: &str) -> bool {
             | "/v1/messages"
             | "/v1/responses"
             | "/v1/responses/compact"
-            | "/api/agent/v1/run"
     )
 }
 
@@ -689,11 +688,18 @@ mod tests {
             "/v1/responses/compact",
             "/v1/models",
             "/api/integrations/v1/profile",
-            "/api/agent/v1/run",
         ] {
             assert!(personal_credential_allowed(path), "{path}");
         }
-        for path in ["/", "/api/status", "/api/stats/runtime", "/api/users"] {
+        for path in [
+            "/",
+            "/api/status",
+            "/api/stats/runtime",
+            "/api/users",
+            "/api/admin/audit/export",
+            "/api/tools/v1/mcp",
+            "/api/agent/v1/run",
+        ] {
             assert!(!personal_credential_allowed(path), "{path}");
         }
         for path in [
@@ -718,7 +724,6 @@ mod tests {
             database_path: ":memory:".to_owned(),
             trusted_proxy_ips: Vec::new(),
             allow_insecure_web_auth: false,
-            tool_gateway: super::tools::Gateway::new(crate::config::ToolBackendConfig::default()),
             started_at: Instant::now(),
         };
         for path in [

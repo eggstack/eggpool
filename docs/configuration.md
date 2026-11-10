@@ -61,24 +61,21 @@ Remote `configremote` profiles use `[integrations].advertise_base_url`, not
 for the bind-vs-advertised contract, validation (`http(s)://.../v1`, no
 credentials/fragment/query), live-reload behavior, and LAN-fallback rules.
 
-## Optional local tools backend
+## Local metadata profile
 
-`[tools]` is disabled by default. When enabled, its `base_url` must be a
-literal loopback HTTP address with an explicit port and the exact `/mcp` path
-(for example `http://127.0.0.1:11320/mcp`). Timeouts are bounded. EggPool
-does not install or start Eggsearch, and ordinary inference never probes it.
-`eggpool tools doctor` explicitly checks `/healthz`, negotiates MCP, and
-validates the expected Eggsearch tool catalog. See
-[deployment](deployment.md#optional-eggsearch-service).
+`rust/config.local.example.toml` turns off external model-info sources,
+pricing catalogs, and the update checker for a gateway in front of local
+models. `eggpool check-config --local` loads the same config as
+`check-config` and fails if any of those sources is enabled, naming the
+key. It does not rewrite the file, does not open a socket, and does not
+treat an operator-configured provider as an EggPool metadata source.
+Plain `check-config` keeps the current defaults, including OpenRouter
+model-info. Copy the example and restart if a restart-required key
+changed.
 
-The gateway is a separate explicit opt-in: set `gateway_enabled = true` as
-well as `enabled = true`. Enabling either tools setting requires a server
-restart. The authenticated `POST /api/tools/v1/mcp` route accepts MCP
-`2025-03-26` `initialize`, `notifications/initialized`, `tools/list`, and
-`tools/call`; it exposes only per-user grants and does not affect inference.
-Finite hosted orchestration is a separate opt-in through
-`hosted_execution_enabled = true` and an explicit `hosted_models` list. This
-list contains exact model IDs the operator has qualified for finite function
-calls; it is empty by default. See the
-[hosted orchestration guide](hosted-tool-orchestration.md) for the request
-contract and limits.
+## Retired tools execution switches
+
+Omit `[tools]`, or leave `enabled`, `gateway_enabled`, and
+`hosted_execution_enabled` false. Any true switch fails `check-config`
+and startup. EggPool does not execute tools. See
+[Tool execution](tool-gateway.md).

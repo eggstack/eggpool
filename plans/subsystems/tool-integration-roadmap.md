@@ -1,6 +1,10 @@
 # Optional Tool Integration Roadmap
 
-Status: active
+Status: closing
+
+ADR-0009 withdraws the gateway and hosted runner. The milestones below
+are historical. Do not extend them. The remaining work is
+application-boundary M001.
 
 Long-term references:
 
@@ -11,7 +15,8 @@ Long-term references:
 
 Related ADRs:
 
-- plans/adrs/ADR-0007-optional-tool-authority-and-hosted-execution-boundary.md (accepted; M002–M004 decision gate)
+- plans/adrs/ADR-0009-downstream-application-boundary.md (accepted; withdraws the gateway and hosted runner)
+- plans/adrs/ADR-0007-optional-tool-authority-and-hosted-execution-boundary.md (superseded)
 
 ## 1. Purpose and ownership boundary
 
@@ -89,3 +94,9 @@ Four distinct milestones receive closure evidence under plans/closure/tool-integ
 | M003 MCP gateway | conditionally closed | plans/implementation/tool-integration/003-authenticated-mcp-gateway.md | plans/closure/tool-integration/003-status.md | Software capability and live Eggsearch qualification pass; physical SBC footprint/contention evidence remains |
 | M004 hosted execution | conditionally closed | plans/implementation/tool-integration/004-finite-hosted-tool-orchestration.md | plans/closure/tool-integration/004-status.md | Live Ollama/model/tool/model cycle passes with local MCP fixture in 40.95s and 65.54s; successful Eggsearch-backed hosted trace and physical SBC footprint evidence remain |
 | M005 canonical tool identity correction | closed | plans/implementation/tool-integration/005-canonical-tool-identity-correction.md | plans/closure/tool-integration/005-status.md | Exact shared identity list matches Eggsearch 0.4.3; M003 promoted to ready |
+
+ADR-0009 vacates the remaining M003 and M004 evidence conditions. Do not
+collect the Eggsearch-backed hosted trace or the SBC footprint for those
+milestones. Application-boundary M001 withdraws the gateway and hosted
+runner. This roadmap closes when that withdrawal closure is accepted.
+No further tool-integration milestone is registered.

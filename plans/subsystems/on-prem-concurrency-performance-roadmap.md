@@ -151,6 +151,10 @@ Closure: `plans/closure/on-prem-concurrency-performance/002-status.md`.
 Future **production** optimization milestone: not registered. Requires a
 separate scope and measurable regression guard; no journal, checkpoint,
 worker, or storage topology change is authorized by either M001 or M002.
+Application-boundary M004
+(`plans/closure/application-boundary/004-status.md`) records `not measured`
+for a mixed downstream call mix. That record does not authorize a change
+here.
 
 ## 8. Cross-cutting requirements
 

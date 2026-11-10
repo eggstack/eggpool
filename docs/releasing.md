@@ -102,10 +102,10 @@ does not carry the derived version fails the wheel qualification and the
 artifact globs. The release artifact naming, the manifest schema, the
 packaging layout, and the publication gate are unchanged.
 
-Changes developed after 0.8.3, including the embeddings, MCP gateway, and
-hosted model/tool/model APIs, are unreleased until a new native release is
-qualified and published. Do not relabel or replace the immutable 0.8.3
-artifacts. At release cut, update `rust/Cargo.toml`, the catalog's candidate
+Changes developed after 0.8.3, including embeddings, are unreleased until a
+new native release is qualified and published. The MCP gateway and hosted
+tool runner from that window are withdrawn and are not release surfaces.
+Do not relabel or replace the immutable 0.8.3 artifacts. At release cut, update `rust/Cargo.toml`, the catalog's candidate
 version authority, and the changelog together; then build and qualify every
 supported target and smoke-test the new API surfaces before publishing. The
 release identity validator must pass against that candidate before a tag is

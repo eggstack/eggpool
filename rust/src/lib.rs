@@ -6,7 +6,6 @@
 #![forbid(unsafe_code)]
 
 pub mod accounts;
-pub mod agent_orchestration;
 pub mod catalog;
 mod cli;
 pub mod config;
@@ -30,7 +29,6 @@ mod runtime;
 pub mod runtime_lifecycle;
 pub mod server;
 pub mod task_supervisor;
-pub mod tool_policy;
 pub mod user_budget;
 pub mod version;
 pub mod web_session;
@@ -63,7 +61,7 @@ where
 mod tests {
     use clap::{Parser, error::ErrorKind};
 
-    use super::{AppError, BootstrapError, Cli, version};
+    use super::{AppError, BootstrapError, Cli, Command, cli, version};
 
     #[test]
     fn parser_supports_help_and_version_probes() {
@@ -74,6 +72,26 @@ mod tests {
         let version = Cli::try_parse_from(["eggpool", "--version"])
             .expect_err("--version should be handled by clap");
         assert_eq!(version.kind(), ErrorKind::DisplayVersion);
+    }
+
+    #[test]
+    fn audit_export_and_local_check_parse_without_tool_commands() {
+        let audit = Cli::try_parse_from(["eggpool", "audit", "export", "--limit", "10"])
+            .expect("audit export parses");
+        match audit.command {
+            Some(Command::Audit(cli::AuditCommand::Export(args))) => {
+                assert_eq!(args.limit, 10);
+                assert_eq!(args.actor, "admin");
+            }
+            other => panic!("unexpected command: {other:?}"),
+        }
+        let local =
+            Cli::try_parse_from(["eggpool", "check-config", "--local"]).expect("local flag");
+        match local.command {
+            Some(Command::CheckConfig(args)) => assert!(args.local),
+            other => panic!("unexpected command: {other:?}"),
+        }
+        assert!(Cli::try_parse_from(["eggpool", "tools", "doctor"]).is_err());
     }
 
     #[test]
