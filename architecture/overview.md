@@ -77,7 +77,7 @@ fail closed on validation, commit, or ownership ambiguity.
 re-exports the CLI/config/error boundary. `rust/src/cli.rs` owns the Clap
 command tree (36 commands: `serve`, `connect`, `logout`, `check-config`, `edit`, `getkey`,
 `newkey`, `configsetup`, `configremote`, `deploy`, `accounts`, `dashboard`, `db`, `models`,
-`modelinfo`, `stats`, `tools`, `users`, `onboard`, `croncheck`, `ensure-running`, `migrate`,
+`modelinfo`, `stats`, `audit`, `users`, `onboard`, `croncheck`, `ensure-running`, `migrate`,
 `stop`, `restart`, `init-config`, `help`, `recover`, `uninstall`, `update`,
 `install-provenance`, `set`, `rehash`, `runtime-status`, `status`, `backup`, `version`).
 `rust/src/runtime.rs` adapts each command to `operations/*`, `config`, and
@@ -159,7 +159,8 @@ managed-user at `/login`, `/logout`, `/account`, `/account/landing`,
 `/account/tokens/revoke`, `/usage`, `/api/user-budget`; dashboard pages at
 `/`, `/accounts`, `/models`, `/models/{*model_id}`, `/latency`, `/events`,
 `/timeseries`, `/bandwidth`, `/pings`, `/reliability`, `/routing`,
-`/traces`, `/runtime`, `/cache`, `/users`, `/profiles`, `/admin/audit`;
+`/traces`, `/runtime`, `/cache`, `/users`, `/profiles`, `/admin/audit`,
+`/api/admin/audit/export`;
 admin actions at `/admin/users/create`, `/admin/users/state`,
 `/admin/users/password`, `/admin/users/token`, `/admin/users/revoke-tokens`,
 `/admin/users/profile`, `/admin/users/override`,
