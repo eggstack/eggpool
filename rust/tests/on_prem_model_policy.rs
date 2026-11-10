@@ -539,12 +539,6 @@ async fn policy_snapshot_matches_a_fresh_load_after_every_revision_class() {
         .unwrap();
     assert_policy_matches_fresh_load(&database, &policy, "member-a").await;
 
-    eggpool::tool_policy::ToolPolicyService::new(database.clone())
-        .set_instance_denial("web_search", true, "admin-a")
-        .await
-        .unwrap();
-    assert_policy_matches_fresh_load(&database, &policy, "member-a").await;
-
     policy
         .set_default_member_profile(Some("restricted"), "admin-a")
         .await

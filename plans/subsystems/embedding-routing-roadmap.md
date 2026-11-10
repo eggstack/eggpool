@@ -43,7 +43,7 @@ A typed bounded embedding operation enters through the ordinary authenticated in
 
 - E001: hard accepted ADR-0008; interface stable current managed identity/budget and coordinator contracts; operational one reachable local embedding backend for live qualification.
 - Tool Integration M001–M004: no hard dependency either way.
-- Retrieval Interoperability R001: soft/interface embedding support; external retrieval service may provide embeddings elsewhere.
+- Retrieval Interoperability R001 is superseded for execution by R002. Embeddings remain an optional interface a caller may use. EggPool does not gain a retrieval service from this roadmap.
 - CodeGG or PrivateGPT adoption is downstream qualification, not an upstream product contract.
 
 ## 7. Milestones
@@ -75,4 +75,4 @@ E001 closure record proves that embeddings use normal identity, policy, quota, f
 | Milestone | Status | Implementation plan | Closure record | Blockers |
 |---|---|---|---|---|
 | E001 embeddings | conditionally closed | plans/implementation/embedding-routing/001-openai-compatible-embeddings.md | plans/closure/embedding-routing/001-status.md | Live Ollama route and software gates pass; physical SBC footprint evidence remains |
-| E002 PrivateGPT base64 compatibility | closed | plans/implementation/embedding-routing/002-privategpt-base64-compatibility.md | plans/closure/embedding-routing/002-status.md | Sanitized request regression, default/no-default serial suites, strict CI, dependency audit and locked release build passed; R001 remains blocked on retrieval/citation and document ACL delegation. |
+| E002 PrivateGPT base64 compatibility | closed | plans/implementation/embedding-routing/002-privategpt-base64-compatibility.md | plans/closure/embedding-routing/002-status.md | Sanitized request regression, default/no-default serial suites, strict CI, dependency audit and locked release build passed. Retrieval execution of the former R001 obligation is superseded by retrieval R002 under ADR-0009. |

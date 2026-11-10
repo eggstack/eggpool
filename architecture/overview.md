@@ -77,7 +77,7 @@ fail closed on validation, commit, or ownership ambiguity.
 re-exports the CLI/config/error boundary. `rust/src/cli.rs` owns the Clap
 command tree (36 commands: `serve`, `connect`, `logout`, `check-config`, `edit`, `getkey`,
 `newkey`, `configsetup`, `configremote`, `deploy`, `accounts`, `dashboard`, `db`, `models`,
-`modelinfo`, `stats`, `tools`, `users`, `onboard`, `croncheck`, `ensure-running`, `migrate`,
+`modelinfo`, `stats`, `audit`, `users`, `onboard`, `croncheck`, `ensure-running`, `migrate`,
 `stop`, `restart`, `init-config`, `help`, `recover`, `uninstall`, `update`,
 `install-provenance`, `set`, `rehash`, `runtime-status`, `status`, `backup`, `version`).
 `rust/src/runtime.rs` adapts each command to `operations/*`, `config`, and
@@ -98,7 +98,7 @@ Deep dive: [Core](deep-dive-core.md).
 `rust/src/config.rs` is the typed TOML contract (`Config`, `ServerConfig`,
 `UpstreamConfig`, `DatabaseConfig`, `RoutingConfig`, `ModelsConfig`,
 `ProviderConfig`, `DashboardConfig`, `SecurityConfig`, `MetricsConfig`,
-`BackupConfig`, `ModelRouterConfig`, `IntegrationsConfig` (`[integrations].advertise_base_url`), `ToolBackendConfig` (`[tools]`, explicit diagnostics, optional gateway, and disabled-by-default hosted execution),
+`BackupConfig`, `ModelRouterConfig`, `IntegrationsConfig` (`[integrations].advertise_base_url`), `ToolBackendConfig` (`[tools]` switches that fail closed when execution is enabled),
 transcoder/model-info policies) with
 `from_toml`/`validate` and proxy/model-router compilation. Resolution order is
 explicit `--config` > `$EGGPOOL_CONFIG` > `$XDG_CONFIG_HOME`-aware
@@ -159,7 +159,8 @@ managed-user at `/login`, `/logout`, `/account`, `/account/landing`,
 `/account/tokens/revoke`, `/usage`, `/api/user-budget`; dashboard pages at
 `/`, `/accounts`, `/models`, `/models/{*model_id}`, `/latency`, `/events`,
 `/timeseries`, `/bandwidth`, `/pings`, `/reliability`, `/routing`,
-`/traces`, `/runtime`, `/cache`, `/users`, `/profiles`, `/admin/audit`;
+`/traces`, `/runtime`, `/cache`, `/users`, `/profiles`, `/admin/audit`,
+`/api/admin/audit/export`;
 admin actions at `/admin/users/create`, `/admin/users/state`,
 `/admin/users/password`, `/admin/users/token`, `/admin/users/revoke-tokens`,
 `/admin/users/profile`, `/admin/users/override`,
@@ -506,13 +507,10 @@ observability JSON (`/api/stats/transcoding`, `/api/stats/cache-observability`,
 observational only.
 - On-prem user access: local downstream identities with Argon2id passwords and
 revocable per-user agent tokens (`eggpool users …`), browser login behind a
-session/CSRF boundary, versioned per-user model policy, default-deny Eggsearch
-tool grants and explicit per-token tool scopes, a disabled-by-default
-authenticated Eggsearch MCP gateway at `POST /api/tools/v1/mcp`, and a separate
-finite hosted operation at `POST /api/agent/v1/run`; per-user and instance-global
-daily/monthly budgets remain owned by their current authorities. Hosted model
-turns remain coordinator calls, while tool calls reauthorize through the
-gateway's internal bounded invocation service.
+session/CSRF boundary, versioned per-user model policy, and per-user and
+instance-global daily/monthly budgets. Tool calls on the inference APIs are
+returned to the client. `GET /api/admin/audit/export` and `eggpool audit export`
+project content-free administration and inference facts for an administrator.
 The admin and member surfaces are the
 `/admin/*`, `/users`, `/profiles`, `/account*`, `/my-account*`, and `/usage`
 routes; see [On-prem user access](deep-dive-on-prem-user-access.md).

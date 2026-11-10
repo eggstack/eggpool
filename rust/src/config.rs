@@ -975,9 +975,9 @@ pub struct IntegrationsConfig {
     pub advertise_base_url: Option<String>,
 }
 
-/// Optional operator-owned Eggsearch MCP connection. Merely configuring this
-/// value never starts or probes Eggsearch. The optional authenticated gateway
-/// is separately gated and only opens a request-scoped MCP connection.
+/// Retired `[tools]` switches. Parsing remains so an old file can be
+/// rejected. True execution switches fail validation; false or absent
+/// starts nothing.
 #[derive(Debug, Clone, Deserialize, Serialize)]
 #[serde(deny_unknown_fields, default)]
 pub struct ToolBackendConfig {
@@ -1955,79 +1955,51 @@ impl Config {
     }
 }
 
+const TOOL_EXECUTION_WITHDRAWN: &str =
+    "tool execution belongs to the client; the EggPool execution surface is withdrawn";
+
 fn validate_tool_backend(backend: &ToolBackendConfig) -> Result<(), ConfigError> {
-    if backend.gateway_enabled && !backend.enabled {
-        return Err(ConfigError::validation(
-            "tools.gateway_enabled requires tools.enabled",
-        ));
+    if backend.enabled {
+        return Err(ConfigError::validation(format!(
+            "tools.enabled is set; {TOOL_EXECUTION_WITHDRAWN}"
+        )));
     }
-    if backend.hosted_execution_enabled && !backend.enabled {
-        return Err(ConfigError::validation(
-            "tools.hosted_execution_enabled requires tools.enabled",
-        ));
+    if backend.gateway_enabled {
+        return Err(ConfigError::validation(format!(
+            "tools.gateway_enabled is set; {TOOL_EXECUTION_WITHDRAWN}"
+        )));
     }
-    if backend.hosted_execution_enabled && backend.hosted_models.is_empty() {
-        return Err(ConfigError::validation(
-            "tools.hosted_execution_enabled requires at least one qualified hosted model",
-        ));
-    }
-    if backend.hosted_models.len() > 128 {
-        return Err(ConfigError::validation(
-            "tools.hosted_models exceeds its supported limit",
-        ));
-    }
-    let mut hosted_models = BTreeSet::new();
-    if backend.hosted_models.iter().any(|model| {
-        model.is_empty()
-            || model.len() > 256
-            || model.chars().any(|character| {
-                !(character.is_ascii_alphanumeric()
-                    || matches!(character, '.' | '_' | ':' | '/' | '-'))
-            })
-            || !hosted_models.insert(model)
-    }) {
-        return Err(ConfigError::validation(
-            "tools.hosted_models must contain unique bounded model identifiers",
-        ));
-    }
-    if !backend.connect_timeout_s.is_finite()
-        || !(0.1..=10.0).contains(&backend.connect_timeout_s)
-        || !backend.read_timeout_s.is_finite()
-        || !(0.1..=30.0).contains(&backend.read_timeout_s)
-    {
-        return Err(ConfigError::validation(
-            "tools timeouts must be finite and within their supported bounds",
-        ));
-    }
-    if backend.base_url.len() > 512
-        || backend
-            .base_url
-            .chars()
-            .any(|c| c.is_whitespace() || c.is_control())
-    {
-        return Err(ConfigError::validation("tools.base_url is invalid"));
-    }
-    let uri = backend.base_url.parse::<http::Uri>().map_err(|_| {
-        ConfigError::validation("tools.base_url must be an absolute loopback HTTP MCP URL")
-    })?;
-    let authority = uri.authority().ok_or_else(|| {
-        ConfigError::validation("tools.base_url must include a loopback authority")
-    })?;
-    let host = authority.host().trim_matches(['[', ']']);
-    if uri.scheme_str() != Some("http")
-        || !matches!(host, "127.0.0.1" | "::1")
-        || authority.port_u16().is_none()
-        || authority.port_u16() == Some(0)
-        || uri.path() != "/mcp"
-        || uri.query().is_some()
-        || backend.base_url.contains('#')
-        || backend.base_url.contains('@')
-    {
-        return Err(ConfigError::validation(
-            "tools.base_url must use HTTP, a literal 127.0.0.1 or ::1 address, an explicit port, and the exact /mcp path",
-        ));
+    if backend.hosted_execution_enabled {
+        return Err(ConfigError::validation(format!(
+            "tools.hosted_execution_enabled is set; {TOOL_EXECUTION_WITHDRAWN}"
+        )));
     }
     Ok(())
+}
+
+/// Config keys that would contact an EggPool-owned external metadata or
+/// update source. The operator's own provider catalog is not one of them.
+pub fn local_metadata_violations(config: &Config) -> Vec<&'static str> {
+    let mut keys = Vec::new();
+    if config.model_info.sources.openrouter.enabled {
+        keys.push("model_info.sources.openrouter.enabled");
+    }
+    if config.model_info.sources.artificial_analysis.enabled {
+        keys.push("model_info.sources.artificial_analysis.enabled");
+    }
+    if config.model_info.sources.huggingface.enabled {
+        keys.push("model_info.sources.huggingface.enabled");
+    }
+    if config.pricing.catalogs.openrouter.enabled {
+        keys.push("pricing.catalogs.openrouter.enabled");
+    }
+    if config.pricing.catalogs.opencode_zen.enabled {
+        keys.push("pricing.catalogs.opencode_zen.enabled");
+    }
+    if config.update_checker.enabled {
+        keys.push("update_checker.enabled");
+    }
+    keys
 }
 
 fn validate_positive_pair(
@@ -2975,46 +2947,96 @@ mod tests {
     }
 
     #[test]
-    fn tool_backend_config_is_loopback_only_bounded_and_disabled_by_default() {
+    fn withdrawn_tool_execution_switches_fail_without_echoing_the_backend() {
         let mut config = Config::default();
         assert!(!config.tools.enabled);
+        assert!(!config.tools.gateway_enabled);
         assert!(!config.tools.hosted_execution_enabled);
-        config.validate().expect("default tool config validates");
-        for url in [
-            "https://127.0.0.1:11320/mcp",
-            "http://localhost:11320/mcp",
-            "http://127.0.0.2:11320/mcp",
-            "http://192.168.1.10:11320/mcp",
-            "http://127.0.0.1/mcp",
-            "http://127.0.0.1:11320/other",
-            "http://user:pass@127.0.0.1:11320/mcp",
-            "http://127.0.0.1:11320/mcp?x=1",
-            "http://127.0.0.1:11320/mcp#frag",
-        ] {
+        config
+            .validate()
+            .expect("absent execution switches validate");
+
+        let secret_url = "http://user:super-secret-token@127.0.0.1:11320/mcp?x=1";
+        let cases = [
+            "tools.enabled",
+            "tools.gateway_enabled",
+            "tools.hosted_execution_enabled",
+        ];
+        for field in cases {
             let mut invalid = Config::default();
-            invalid.tools.base_url = url.to_owned();
-            invalid.tools.enabled = true;
-            assert!(invalid.validate().is_err(), "accepted {url}");
+            invalid.tools.base_url = secret_url.to_owned();
+            match field {
+                "tools.enabled" => invalid.tools.enabled = true,
+                "tools.gateway_enabled" => invalid.tools.gateway_enabled = true,
+                _ => invalid.tools.hosted_execution_enabled = true,
+            }
+            let error = invalid.validate().expect_err(field);
+            let message = error.to_string();
+            assert!(message.contains(field), "{message}");
+            assert!(
+                message.contains("tool execution belongs to the client"),
+                "{message}"
+            );
+            assert!(!message.contains("super-secret-token"), "{message}");
+            assert!(!message.contains(secret_url), "{message}");
         }
-        let mut invalid_timeout = Config::default();
-        invalid_timeout.tools.connect_timeout_s = f64::NAN;
-        assert!(invalid_timeout.validate().is_err());
-        let mut invalid_read = Config::default();
-        invalid_read.tools.read_timeout_s = 31.0;
-        assert!(invalid_read.validate().is_err());
-        let mut gateway_without_backend = Config::default();
-        gateway_without_backend.tools.gateway_enabled = true;
-        assert!(gateway_without_backend.validate().is_err());
-        let mut hosted_without_backend = Config::default();
-        hosted_without_backend.tools.hosted_execution_enabled = true;
-        assert!(hosted_without_backend.validate().is_err());
-        let mut hosted_without_models = Config::default();
-        hosted_without_models.tools.enabled = true;
-        hosted_without_models.tools.hosted_execution_enabled = true;
-        assert!(hosted_without_models.validate().is_err());
-        let mut invalid_hosted_models = Config::default();
-        invalid_hosted_models.tools.hosted_models =
-            vec!["model-a".to_owned(), "model-a".to_owned()];
-        assert!(invalid_hosted_models.validate().is_err());
+
+        let mut disabled = Config::default();
+        disabled.tools.base_url = secret_url.to_owned();
+        disabled.tools.connect_timeout_s = f64::NAN;
+        disabled
+            .validate()
+            .expect("false switches do not start execution");
+    }
+
+    #[test]
+    fn local_metadata_profile_names_external_sources_and_keeps_defaults() {
+        let mut defaults = Config::default();
+        assert!(defaults.validate().is_ok());
+        assert_eq!(
+            local_metadata_violations(&defaults),
+            vec!["model_info.sources.openrouter.enabled"]
+        );
+        let mut local = defaults;
+        local.model_info.sources.openrouter.enabled = false;
+        local.model_info.sources.provider_catalog.enabled = true;
+        assert!(local_metadata_violations(&local).is_empty());
+
+        let mut openrouter = local.clone();
+        openrouter.model_info.sources.openrouter.enabled = true;
+        openrouter.model_info.sources.openrouter.api_key =
+            Some("sk-local-doctor-secret".to_owned());
+        let openrouter_keys = local_metadata_violations(&openrouter);
+        assert_eq!(
+            openrouter_keys,
+            vec!["model_info.sources.openrouter.enabled"]
+        );
+        assert!(!openrouter_keys.join(" ").contains("sk-local-doctor-secret"));
+
+        let mut pricing = local.clone();
+        pricing.pricing.catalogs.openrouter.enabled = true;
+        assert_eq!(
+            local_metadata_violations(&pricing),
+            vec!["pricing.catalogs.openrouter.enabled"]
+        );
+        let mut updates = local.clone();
+        updates.update_checker.enabled = true;
+        assert_eq!(
+            local_metadata_violations(&updates),
+            vec!["update_checker.enabled"]
+        );
+
+        let mut example = Config::from_toml(
+            PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("config.local.example.toml"),
+        )
+        .expect("local example parses");
+        assert!(example.validate().is_ok());
+        assert!(local_metadata_violations(&example).is_empty());
+        let message = format!(
+            "local profile rejects outbound metadata or update sources: {}",
+            local_metadata_violations(&openrouter).join(", ")
+        );
+        assert!(message.contains("model_info.sources.openrouter.enabled"));
+        assert!(!message.contains("sk-local-doctor-secret"));
     }
 }

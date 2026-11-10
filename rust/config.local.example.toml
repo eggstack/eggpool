@@ -1,0 +1,41 @@
+# Local gateway profile.
+#
+# Copy this file when EggPool sits in front of local models and must not
+# contact EggPool-owned model-info, pricing, or update sources.
+# `eggpool check-config --local` fails if any of those sources is enabled.
+# The check does not rewrite this file, does not block a provider you
+# configured, and does not change reload classification. Restart after
+# copying if a restart-required key changed.
+#
+# OpenRouter model-info defaults on, so this file turns that source off
+# explicitly. The operator's own provider catalog is not an EggPool
+# metadata source.
+
+[model_info]
+enabled = false
+
+[model_info.sources.provider_catalog]
+enabled = true
+
+[model_info.sources.openrouter]
+enabled = false
+
+[model_info.sources.artificial_analysis]
+enabled = false
+
+[model_info.sources.huggingface]
+enabled = false
+
+[pricing.catalogs.openrouter]
+enabled = false
+
+[pricing.catalogs.opencode_zen]
+enabled = false
+
+[update_checker]
+enabled = false
+
+[tools]
+enabled = false
+gateway_enabled = false
+hosted_execution_enabled = false

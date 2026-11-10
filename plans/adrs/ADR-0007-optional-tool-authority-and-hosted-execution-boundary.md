@@ -1,6 +1,6 @@
 # ADR-0007: Optional tool authority, MCP gateway, and hosted execution boundary
 
-Status: accepted
+Status: superseded by `plans/adrs/ADR-0009-downstream-application-boundary.md`
 
 Date: 2026-11-03
 
@@ -88,7 +88,11 @@ Require protocol conformance against the installed supported Eggsearch version, 
 
 ## Supersession
 
-None.
+Superseded on 2026-11-10 by
+`plans/adrs/ADR-0009-downstream-application-boundary.md`. The gateway
+and hosted-execution decisions are withdrawn. The rule that ordinary
+inference returns tool calls to the client and does not execute them
+is restated as ADR-0009 decision 1. This body is otherwise unchanged.
 
 ## Acceptance record
 

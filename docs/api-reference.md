@@ -168,31 +168,21 @@ enforces the same rules even when a client submits a hidden model manually.
 The integration profile's ETag includes the policy revision so client caches
 refresh after an administrator changes model access.
 
-Personal credentials may be issued with separate `tools:discover:eggsearch`
-and `tools:invoke:eggsearch` scopes. Existing credentials keep their original
-scopes. Tool grants are independently default-deny and do not affect model
-authorization. With `[tools].enabled = true` and
-`[tools].gateway_enabled = true`, the managed-user-only
-`POST /api/tools/v1/mcp` route exposes authorized Eggsearch tools using MCP
-`2025-03-26`. It supports JSON POST requests for `initialize`,
-`notifications/initialized`, `tools/list`, and `tools/call`; it rejects
-JSON-RPC batches and other methods, does not implement downstream GET/SSE
-streams, resources, prompts, or session resumption, and does not change
-Chat/Responses/Messages tool execution semantics. Request bodies are capped at
-128 KiB, tool arguments at 32 KiB, backend responses at 1 MiB, concurrent
-backend operations at 16, and sessions at 1,024 with a 30-minute idle expiry.
-Only the configured loopback Eggsearch 0.4.3 service is contacted. Credentials
-are never forwarded; trust labels and structured tool results are preserved.
-See the [MCP gateway guide](tool-gateway.md) for the security model and setup.
+EggPool does not execute tools. Chat Completions, Responses, Messages, and
+compact return tool calls to the client. `POST /api/tools/v1/mcp` and
+`POST /api/agent/v1/run` are not routed. New personal tokens are not issued
+tool-execution scopes. See [Tool execution](tool-gateway.md).
 
-With `[tools].enabled = true` and `[tools].hosted_execution_enabled = true`,
-managed agent tokens may use the finite EggPool-specific
-`POST /api/agent/v1/run` operation. It requires an operator-qualified exact
-model ID and current per-user Eggsearch invocation grants. The endpoint is
-stateless, non-streaming, and bounded; it does not alter client-executed tool
-calls on the standard inference APIs. See the
-[hosted orchestration guide](hosted-tool-orchestration.md) for its DTO,
-resource caps, and configuration.
+`GET /api/admin/audit/export` is an administrator browser-session read.
+It returns JSON lines, schema version 1, newest first. Each of the
+administration and inference sections includes at most `limit` rows
+(default 500, maximum 2000). A final `kind` of `export` reports
+`truncated` and `limit`. Fields are identifiers, action names, model id,
+protocol, status, token counts, latency, a bounded reason code when one
+is already stored, and timestamps. The export does not contain prompts,
+tool arguments, tool results, or credentials. Personal API tokens and
+member sessions are denied. EggUI transcripts and CodeGG sessions stay
+in those applications. The same projection is `eggpool audit export`.
 
 `GET /api/user-budget` is available to personal tokens and browser sessions.
 Members can read only their own rules and rollups; an active admin may select a

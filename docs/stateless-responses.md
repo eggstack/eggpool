@@ -118,8 +118,5 @@ complete request/result path is qualified end to end, and the generated
 Codex provider configuration continues to use Codex's local compaction path
 by default.
 
-The separate EggPool-specific `POST /api/agent/v1/run` is a bounded finite
-hosted execution mode behind its own disabled-by-default config flag and
-managed-token tool policy. It does not enable hosted execution on
-`/v1/responses` or change the rule that ordinary Responses tool calls remain
-client-executed. See the [hosted orchestration guide](hosted-tool-orchestration.md).
+Ordinary Responses tool calls remain client-executed. EggPool does not
+host a tool runner. See [Tool execution](tool-gateway.md).

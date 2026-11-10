@@ -369,6 +369,10 @@ enabled = false
 
 [model_info]
 enabled = true
+# For a gateway in front of local models, copy rust/config.local.example.toml
+# and run `eggpool check-config --local`. That profile turns external
+# model-info, pricing, and update sources off. This example keeps the
+# default OpenRouter model-info source.
 
 [update_checker]
 enabled = false
@@ -1066,14 +1070,11 @@ protocol = "anthropic"
 # [integrations]
 # advertise_base_url = "https://pool.example.internal/v1"
 
-# ─── Optional Local Tools Backend ───────────────────────────────────
-# Omitted or disabled by default. This does not start Eggsearch or affect
-# inference; `eggpool tools doctor` performs an explicit bounded probe.
+# ─── Retired tools execution switches ───────────────────────────────
+# Omit this section, or leave every switch false. Setting any of
+# enabled, gateway_enabled, or hosted_execution_enabled to true fails
+# check-config and startup. Tool execution belongs to the client.
 # [tools]
-# enabled = true
-# gateway_enabled = true
+# enabled = false
+# gateway_enabled = false
 # hosted_execution_enabled = false
-# hosted_models = [] # Exact model IDs qualified by the operator for finite function calls.
-# base_url = "http://127.0.0.1:11320/mcp"
-# connect_timeout_s = 2.0
-# read_timeout_s = 3.0

@@ -6,29 +6,11 @@ Codex and OpenCode additionally support a managed lifecycle that installs a gene
 
 `eggpool configremote` is the headless companion: on the EggPool host it exports a small secret-free `epc1` connection profile for Codex/OpenCode running on other machines. Local `configsetup` writes the local filesystem; `configremote` never touches a desktop filesystem and never mutates EggPool config to manufacture a setup.
 
-## Optional EggPool MCP tools
+## Tool calls
 
-The tools gateway is a separate, disabled-by-default MCP endpoint. Configure
-the agent's Streamable HTTP MCP client to use
-`http://<eggpool-host>:11300/api/tools/v1/mcp` (or the HTTPS URL of the
-operator-managed reverse proxy) and provide a personal EggPool token through
-the agent's secret/environment mechanism. The token needs the
-`tools:discover:eggsearch` scope for listing and `tools:invoke:eggsearch` for
-calling, and an administrator must grant the specific tools. The route
-supports MCP `2025-03-26` initialize, list, and call over JSON POST; clients
-that require downstream GET/SSE streams, resources, prompts, or resumable
-sessions are not supported. Ordinary inference tool declarations remain
-client-executed. See the [gateway security and protocol guide](tool-gateway.md).
-
-## Optional finite hosted execution
-
-`POST /api/agent/v1/run` is a distinct EggPool-specific finite operation, not
-part of the generated Codex/OpenCode provider profile. It runs only when the
-operator enables hosted execution and lists an exact qualified model ID. The
-request chooses an explicit subset of Eggsearch tools, and the managed token
-needs inference plus current per-user tool scopes and grants. It has no
-conversation persistence or streaming/resume support. See the
-[hosted orchestration guide](hosted-tool-orchestration.md).
+Generated provider profiles use EggPool for model calls. The client
+executes tool calls. EggPool does not expose an MCP gateway or a hosted
+tool runner. See [Tool execution](tool-gateway.md).
 
 ## Supported Targets
 
@@ -289,5 +271,5 @@ operation. Managed-user model policy applies to the submitted model exactly as
 it does to other inference routes; a permitted chat model is not necessarily
 embedding-enabled. The operator must explicitly qualify that model/provider
 pair as described in [providers](providers.md).
-For the PrivateGPT-style deployment pattern and its user-isolation limits, see
-[external retrieval interoperability](retrieval-interoperability.md).
+EggPool does not retrieve private documents. See
+[Retrieval](retrieval-interoperability.md).

@@ -141,6 +141,10 @@ owner through a bounded indexed repository and excludes internal selector
 children from logical-request views. Routine metrics, routing traces, and
 diagnostics still omit user IDs, credential IDs, scopes, prompts, and tokens.
 
+`eggpool audit export` and `GET /api/admin/audit/export` are a projection
+of existing administration and logical request rows. They are not a new
+telemetry pipeline, and they do not store prompts or tool payloads.
+
 ## Verification
 
 ```bash

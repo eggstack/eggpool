@@ -1,6 +1,8 @@
 # Retrieval Interoperability R001 — External RAG contract and reference deployment
 
-Status: blocked
+Status: superseded by `plans/implementation/retrieval-interoperability/002-withdraw-external-retrieval-scope.md`
+
+The body below is the historical blocked contract and is not an execution handoff.
 
 Repository baseline: `0e021c1ffe55803aff5f325033e65313dca9f1dc` (planning, 2026-11-03)
 

@@ -38,6 +38,8 @@ pub enum IdentityError {
     InvalidPassword,
     #[error("credential label must contain between 1 and 80 bytes")]
     InvalidCredentialLabel,
+    #[error("audit export limit must be between 1 and 2000")]
+    InvalidAuditLimit,
     #[error("an administrator is already initialized")]
     AdminAlreadyInitialized,
     #[error("identity access state cannot be moved to managed")]
@@ -137,6 +139,197 @@ pub async fn recent_user_requests(
         .map_err(IdentityError::Database)
 }
 
+pub const GATEWAY_AUDIT_SCHEMA_VERSION: u32 = 1;
+pub const GATEWAY_AUDIT_DEFAULT_LIMIT: u32 = 500;
+pub const GATEWAY_AUDIT_MAX_LIMIT: u32 = 2000;
+pub const GATEWAY_AUDIT_KEYS: &[&str] = &[
+    "schema_version",
+    "kind",
+    "actor_id",
+    "action",
+    "target_kind",
+    "target_id",
+    "created_at",
+    "proxy_request_id",
+    "user_id",
+    "credential_id",
+    "model_id",
+    "protocol",
+    "status",
+    "input_tokens",
+    "output_tokens",
+    "latency_ms",
+    "reason_code",
+    "started_at",
+    "truncated",
+    "limit",
+];
+
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize)]
+pub struct GatewayAuditAdministration {
+    pub schema_version: u32,
+    pub kind: &'static str,
+    pub actor_id: String,
+    pub action: String,
+    pub target_kind: String,
+    pub target_id: String,
+    pub created_at: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize)]
+pub struct GatewayAuditInference {
+    pub schema_version: u32,
+    pub kind: &'static str,
+    pub proxy_request_id: Option<String>,
+    pub user_id: Option<String>,
+    pub credential_id: Option<String>,
+    pub model_id: String,
+    pub protocol: String,
+    pub status: String,
+    pub input_tokens: i64,
+    pub output_tokens: i64,
+    pub latency_ms: i64,
+    pub reason_code: Option<String>,
+    pub started_at: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize)]
+pub struct GatewayAuditTrailer {
+    pub schema_version: u32,
+    pub kind: &'static str,
+    pub truncated: bool,
+    pub limit: u32,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct GatewayAuditExport {
+    pub administration: Vec<GatewayAuditAdministration>,
+    pub inference: Vec<GatewayAuditInference>,
+    pub truncated: bool,
+    pub limit: u32,
+}
+
+impl GatewayAuditExport {
+    pub fn to_json_lines(&self) -> String {
+        let mut lines = Vec::with_capacity(self.administration.len() + self.inference.len() + 1);
+        for row in &self.administration {
+            lines.push(serde_json::to_string(row).unwrap_or_else(|_| "{}".to_owned()));
+        }
+        for row in &self.inference {
+            lines.push(serde_json::to_string(row).unwrap_or_else(|_| "{}".to_owned()));
+        }
+        lines.push(
+            serde_json::to_string(&GatewayAuditTrailer {
+                schema_version: GATEWAY_AUDIT_SCHEMA_VERSION,
+                kind: "export",
+                truncated: self.truncated,
+                limit: self.limit,
+            })
+            .unwrap_or_else(|_| "{}".to_owned()),
+        );
+        lines.push(String::new());
+        lines.join("\n")
+    }
+}
+
+pub fn normalize_audit_limit(limit: u32) -> Result<u32, &'static str> {
+    if (1..=GATEWAY_AUDIT_MAX_LIMIT).contains(&limit) {
+        Ok(limit)
+    } else {
+        Err("audit export limit must be between 1 and 2000")
+    }
+}
+
+fn bounded_reason_code(value: Option<String>) -> Option<String> {
+    let value = value?;
+    if (1..=64).contains(&value.len())
+        && value
+            .bytes()
+            .all(|byte| byte.is_ascii_alphanumeric() || byte == b'_')
+    {
+        Some(value)
+    } else {
+        None
+    }
+}
+
+/// Content-free administrator projection of administration audit rows and
+/// logical inference attribution. Each section is capped independently.
+pub async fn gateway_audit_export(
+    database: &Database,
+    limit: u32,
+) -> Result<GatewayAuditExport, IdentityError> {
+    let limit = normalize_audit_limit(limit).map_err(|_| IdentityError::InvalidAuditLimit)?;
+    let fetch = i64::from(limit) + 1;
+    database
+        .call(move |connection| {
+            let mut administration_statement = connection.prepare(
+                "SELECT actor_id, action, target_kind, target_id, created_at FROM ( \
+                   SELECT actor_id, action, target_kind, target_id, created_at, id AS row_id \
+                   FROM user_admin_audit \
+                   UNION ALL \
+                   SELECT actor_id, action, 'budget_rule' AS target_kind, CAST(user_id AS TEXT), \
+                          created_at, id AS row_id FROM user_budget_rule_audit \
+                 ) ORDER BY created_at DESC, row_id DESC LIMIT ?1",
+            )?;
+            let administration_rows = administration_statement
+                .query_map([fetch], |row| {
+                    Ok(GatewayAuditAdministration {
+                        schema_version: GATEWAY_AUDIT_SCHEMA_VERSION,
+                        kind: "administration",
+                        actor_id: row.get(0)?,
+                        action: row.get(1)?,
+                        target_kind: row.get(2)?,
+                        target_id: row.get(3)?,
+                        created_at: row.get(4)?,
+                    })
+                })?
+                .collect::<Result<Vec<_>, _>>()?;
+            let mut inference_statement = connection.prepare(
+                "SELECT proxy_request_id, user_id, credential_id, model_id, \
+                        COALESCE(protocol, 'openai'), status, \
+                        COALESCE(input_tokens, 0), COALESCE(output_tokens, 0), \
+                        COALESCE(CAST(ROUND(upstream_latency_ms) AS INTEGER), 0), \
+                        error_class, started_at \
+                 FROM requests WHERE request_kind = 'logical' \
+                 ORDER BY started_at DESC, id DESC LIMIT ?1",
+            )?;
+            let inference_rows = inference_statement
+                .query_map([fetch], |row| {
+                    let reason_code: Option<String> = row.get(9)?;
+                    Ok(GatewayAuditInference {
+                        schema_version: GATEWAY_AUDIT_SCHEMA_VERSION,
+                        kind: "inference",
+                        proxy_request_id: row.get(0)?,
+                        user_id: row.get(1)?,
+                        credential_id: row.get(2)?,
+                        model_id: row.get(3)?,
+                        protocol: row.get(4)?,
+                        status: row.get(5)?,
+                        input_tokens: row.get(6)?,
+                        output_tokens: row.get(7)?,
+                        latency_ms: row.get(8)?,
+                        reason_code: bounded_reason_code(reason_code),
+                        started_at: row.get(10)?,
+                    })
+                })?
+                .collect::<Result<Vec<_>, _>>()?;
+            let administration_truncated = administration_rows.len() > limit as usize;
+            let inference_truncated = inference_rows.len() > limit as usize;
+            Ok(GatewayAuditExport {
+                administration: administration_rows
+                    .into_iter()
+                    .take(limit as usize)
+                    .collect(),
+                inference: inference_rows.into_iter().take(limit as usize).collect(),
+                truncated: administration_truncated || inference_truncated,
+                limit,
+            })
+        })
+        .await
+        .map_err(IdentityError::Database)
+}
+
 #[derive(Clone, PartialEq, Eq)]
 pub struct IssuedCredential {
     pub user_id: String,
@@ -200,15 +393,6 @@ impl RequestAttribution {
         Self {
             request_kind: AttributedRequestKind::InternalSelector,
             parent_proxy_request_id: Some(parent_proxy_request_id.to_owned()),
-            ..self.clone()
-        }
-    }
-
-    /// Attribute one finite hosted-orchestration inference turn to its
-    /// initiating user while linking it to a content-free operation ID.
-    pub fn hosted_tool_child(&self, orchestration_id: &str) -> Self {
-        Self {
-            parent_proxy_request_id: Some(orchestration_id.to_owned()),
             ..self.clone()
         }
     }
@@ -1253,16 +1437,6 @@ pub async fn issue_api_token(
     username: &str,
     label: &str,
 ) -> Result<IssuedCredential, IdentityError> {
-    issue_api_token_with_tool_scopes(database, username, label, false, false).await
-}
-
-pub async fn issue_api_token_with_tool_scopes(
-    database: &Database,
-    username: &str,
-    label: &str,
-    tool_discovery: bool,
-    tool_invocation: bool,
-) -> Result<IssuedCredential, IdentityError> {
     let normalized = validate_username(username)?.to_ascii_lowercase();
     let label = label.trim().to_owned();
     if label.is_empty() || label.len() > 80 {
@@ -1273,14 +1447,7 @@ pub async fn issue_api_token_with_tool_scopes(
     let secret = random_hex(32)?;
     let token = format!("epk1_{selector}_{secret}");
     let digest = digest(&token);
-    let mut scopes = vec!["inference", "discovery", "integrations"];
-    if tool_discovery {
-        scopes.push(crate::tool_policy::DISCOVERY_SCOPE);
-    }
-    if tool_invocation {
-        scopes.push(crate::tool_policy::INVOCATION_SCOPE);
-    }
-    let scopes = scopes.join(",");
+    let scopes = "inference,discovery,integrations".to_owned();
     let (id, user_id) = (id.clone(), normalized.clone());
     let normalized_for_error = normalized.clone();
     match database

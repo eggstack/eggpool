@@ -1,5 +1,10 @@
 use super::*;
-use axum::{Extension, Form, extract::State, http::HeaderMap, response::Redirect};
+use axum::{
+    Extension, Form,
+    extract::{Query, State},
+    http::HeaderMap,
+    response::Redirect,
+};
 use serde::Deserialize;
 use tokio_rusqlite::rusqlite::params;
 
@@ -343,6 +348,57 @@ pub(in crate::server) async fn usage_page(
     html_response(render_usage_admin(&rows, "", theme))
 }
 
+#[derive(Debug, Default, serde::Deserialize)]
+pub(in crate::server) struct AuditExportQuery {
+    limit: Option<u32>,
+}
+
+pub(in crate::server) async fn audit_export(
+    State(state): State<AppState>,
+    Extension(principal): Extension<crate::identity::AuthenticatedPrincipal>,
+    Query(query): Query<AuditExportQuery>,
+) -> Response {
+    if principal.kind != crate::identity::PrincipalKind::BrowserSession
+        || principal.role.as_deref() != Some("admin")
+    {
+        return (
+            StatusCode::FORBIDDEN,
+            axum::Json(json!({ "detail": "Administrator access required" })),
+        )
+            .into_response();
+    }
+    let limit = query
+        .limit
+        .unwrap_or(crate::identity::GATEWAY_AUDIT_DEFAULT_LIMIT);
+    if crate::identity::normalize_audit_limit(limit).is_err() {
+        return (
+            StatusCode::BAD_REQUEST,
+            axum::Json(json!({ "detail": "audit export limit must be between 1 and 2000" })),
+        )
+            .into_response();
+    }
+    let export = match crate::identity::gateway_audit_export(&state.database, limit).await {
+        Ok(export) => export,
+        Err(_) => {
+            return (
+                StatusCode::SERVICE_UNAVAILABLE,
+                axum::Json(json!({ "detail": "audit export unavailable" })),
+            )
+                .into_response();
+        }
+    };
+    let body = export.to_json_lines();
+    (
+        StatusCode::OK,
+        [(
+            axum::http::header::CONTENT_TYPE,
+            "application/x-ndjson; charset=utf-8",
+        )],
+        body,
+    )
+        .into_response()
+}
+
 pub(in crate::server) async fn audit_page(
     State(state): State<AppState>,
     Query(query): Query<ThemeQuery>,
@@ -375,7 +431,7 @@ pub(in crate::server) async fn audit_page(
         "usage",
         theme,
         &format!(
-            "<section class=\"panel\"><h1>Administrative audit</h1><div class=\"table-scroll\" tabindex=\"0\" role=\"region\" aria-label=\"Administrative audit\">{DASHBOARD_TABLE_OPEN}<thead><tr><th>UTC time</th><th>Actor ID</th><th>Action</th><th>Target type</th><th>Target ID</th></tr></thead><tbody>{rows}</tbody></table></div><p><a href=\"/users\">Users</a></p></section>"
+            "<section class=\"panel\"><h1>Administrative audit</h1><div class=\"table-scroll\" tabindex=\"0\" role=\"region\" aria-label=\"Administrative audit\">{DASHBOARD_TABLE_OPEN}<thead><tr><th>UTC time</th><th>Actor ID</th><th>Action</th><th>Target type</th><th>Target ID</th></tr></thead><tbody>{rows}</tbody></table></div><p><a href=\"/api/admin/audit/export\">Export gateway audit</a></p><p><a href=\"/users\">Users</a></p></section>"
         ),
     ))
 }
