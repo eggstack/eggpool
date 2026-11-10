@@ -44,7 +44,7 @@ use crate::{
     quota::{AccountQuota, QuotaEstimator},
     request::{
         AdmissionError, ParsedRequestBody, StaticRoutingFacts, admit_compact_parsed_request,
-        admit_parsed_request, canonical_request_from_object, parse_request_body,
+        admit_parsed_request, canonical_request_from_object, parse_request_body_off_thread,
         validate_responses_stateless_policy,
     },
     routing::{DurableHealth, EligibilityPolicy, RoutingRequestFacts, RoutingRouter},
@@ -1034,15 +1034,14 @@ pub(crate) async fn execute_embeddings_attributed(
     };
 
     let body_limit = state.max_body_bytes.min(MAX_EMBEDDING_BODY_BYTES);
-    let parsed =
-        crate::request::parse_request_body(raw_body.clone(), body_limit).map_err(|error| {
-            match error {
-                AdmissionError::BodyTooLarge { .. } => EndpointError::BodyTooLarge,
-                AdmissionError::InvalidJson(_) | AdmissionError::TopLevelNotObject => {
-                    EndpointError::InvalidJson
-                }
-                _ => EndpointError::Admission,
+    let parsed = crate::request::parse_request_body_off_thread(raw_body.clone(), body_limit)
+        .await
+        .map_err(|error| match error {
+            AdmissionError::BodyTooLarge { .. } => EndpointError::BodyTooLarge,
+            AdmissionError::InvalidJson(_) | AdmissionError::TopLevelNotObject => {
+                EndpointError::InvalidJson
             }
+            _ => EndpointError::Admission,
         })?;
     let mut embedding = EmbeddingRequest::parse_value(&Value::Object(
         parsed.object().map_err(EndpointError::from)?.clone(),
@@ -1138,8 +1137,9 @@ pub(crate) async fn execute_endpoint_attributed(
     proxy_request_id: String,
     attribution: Option<crate::identity::RequestAttribution>,
 ) -> Result<EndpointExecution, EndpointError> {
-    let parsed =
-        parse_request_body(raw_body, state.max_body_bytes).map_err(|error| match error {
+    let parsed = parse_request_body_off_thread(raw_body, state.max_body_bytes)
+        .await
+        .map_err(|error| match error {
             AdmissionError::BodyTooLarge { .. } => EndpointError::BodyTooLarge,
             AdmissionError::InvalidJson(_) => EndpointError::InvalidJson,
             AdmissionError::TopLevelNotObject => EndpointError::InvalidJson,
@@ -1255,8 +1255,9 @@ pub(crate) async fn execute_compact_finite_attributed(
     attribution: Option<crate::identity::RequestAttribution>,
 ) -> Result<(FiniteExecution, Option<VirtualResolution>), EndpointError> {
     const SURFACE: ClientSurface = ClientSurface::Responses;
-    let parsed =
-        parse_request_body(raw_body, state.max_body_bytes).map_err(|error| match error {
+    let parsed = parse_request_body_off_thread(raw_body, state.max_body_bytes)
+        .await
+        .map_err(|error| match error {
             AdmissionError::BodyTooLarge { .. } => EndpointError::BodyTooLarge,
             AdmissionError::InvalidJson(_) => EndpointError::InvalidJson,
             AdmissionError::TopLevelNotObject => EndpointError::InvalidJson,

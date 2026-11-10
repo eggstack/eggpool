@@ -418,3 +418,146 @@ async fn revoked_admin_session_cannot_commit_a_policy_mutation() {
     );
     database.close().await.unwrap();
 }
+
+fn policy_decision(snapshot: &eggpool::model_policy::ModelPolicySnapshot) -> (i64, bool, bool) {
+    (
+        snapshot.revision(),
+        snapshot.allows("model-a", None),
+        snapshot.allows("other-model", None),
+    )
+}
+
+async fn assert_policy_matches_fresh_load(
+    database: &Database,
+    service: &ModelPolicyService,
+    user_id: &str,
+) {
+    let live = service.snapshot(user_id).await;
+    let fresh = ModelPolicyService::new(database.clone())
+        .snapshot(user_id)
+        .await;
+    match (live, fresh) {
+        (Ok(live), Ok(fresh)) => assert_eq!(policy_decision(&live), policy_decision(&fresh)),
+        (Err(live), Err(fresh)) => assert_eq!(live.to_string(), fresh.to_string()),
+        (live, fresh) => panic!("policy snapshot diverged from a fresh load: {live:?} {fresh:?}"),
+    }
+}
+
+#[tokio::test]
+async fn policy_snapshot_matches_a_fresh_load_after_every_revision_class() {
+    let database = database().await;
+    add_user(&database, "admin-a", "admin").await;
+    add_user(&database, "member-a", "member").await;
+    let policy = ModelPolicyService::new(database.clone());
+    assert_policy_matches_fresh_load(&database, &policy, "member-a").await;
+
+    policy
+        .create_profile("restricted", "Restricted", "deny", "admin-a")
+        .await
+        .unwrap();
+    policy
+        .set_profile_rule("restricted", "model-a", "allow", "admin-a")
+        .await
+        .unwrap();
+    policy
+        .assign_profile("member-a", "restricted", "admin-a")
+        .await
+        .unwrap();
+    assert_policy_matches_fresh_load(&database, &policy, "member-a").await;
+
+    policy
+        .set_user_override("member-a", "other-model", "allow", "admin-a")
+        .await
+        .unwrap();
+    assert_policy_matches_fresh_load(&database, &policy, "member-a").await;
+
+    let admitted = policy.snapshot("member-a").await.unwrap();
+    policy
+        .set_instance_denial("model-a", "admin-a", true)
+        .await
+        .unwrap();
+    let denied = policy.snapshot("member-a").await.unwrap();
+    assert_ne!(
+        policy_decision(&admitted),
+        policy_decision(&denied),
+        "a stale admitted snapshot must fail comparison with the current revision"
+    );
+    assert!(
+        admitted.allows("model-a", None),
+        "an in-flight admitted snapshot stays immutable"
+    );
+    assert!(!denied.allows("model-a", None));
+    assert_policy_matches_fresh_load(&database, &policy, "member-a").await;
+
+    database
+        .call(|connection| {
+            connection.execute("UPDATE users SET role = 'member' WHERE id = 'admin-a'", [])?;
+            Ok(())
+        })
+        .await
+        .unwrap();
+    assert_policy_matches_fresh_load(&database, &policy, "admin-a").await;
+    database
+        .call(|connection| {
+            connection.execute("UPDATE users SET role = 'admin' WHERE id = 'admin-a'", [])?;
+            connection.execute(
+                "UPDATE users SET auth_epoch = auth_epoch + 1 WHERE id = 'member-a'",
+                [],
+            )?;
+            Ok(())
+        })
+        .await
+        .unwrap();
+    assert_policy_matches_fresh_load(&database, &policy, "member-a").await;
+
+    eggpool::user_budget::UserBudgetService::new(database.clone())
+        .set_rule(
+            "admin-a",
+            "member-a",
+            None,
+            eggpool::user_budget::BudgetWindow::Day,
+            eggpool::user_budget::BudgetLimits {
+                requests: Some(4),
+                ..eggpool::user_budget::BudgetLimits::default()
+            },
+        )
+        .await
+        .unwrap();
+    assert_policy_matches_fresh_load(&database, &policy, "member-a").await;
+
+    eggpool::instance_budget::InstanceBudgetService::new(database.clone())
+        .set_rule(
+            "admin-a",
+            None,
+            eggpool::user_budget::BudgetWindow::Day,
+            eggpool::user_budget::BudgetLimits {
+                requests: Some(4),
+                ..eggpool::user_budget::BudgetLimits::default()
+            },
+        )
+        .await
+        .unwrap();
+    assert_policy_matches_fresh_load(&database, &policy, "member-a").await;
+
+    eggpool::tool_policy::ToolPolicyService::new(database.clone())
+        .set_instance_denial("web_search", true, "admin-a")
+        .await
+        .unwrap();
+    assert_policy_matches_fresh_load(&database, &policy, "member-a").await;
+
+    policy
+        .set_default_member_profile(Some("restricted"), "admin-a")
+        .await
+        .unwrap();
+    assert_policy_matches_fresh_load(&database, &policy, "member-a").await;
+
+    let before_disable = policy.snapshot("member-a").await.unwrap();
+    identity::set_user_enabled(&database, "admin-a", "member-a", false)
+        .await
+        .unwrap();
+    assert!(before_disable.allows("other-model", None));
+    assert_policy_matches_fresh_load(&database, &policy, "member-a").await;
+    let denied_user = policy.snapshot("member-a").await.unwrap_err();
+    assert!(matches!(denied_user, ModelPolicyError::UserUnavailable));
+    database.close().await.unwrap();
+}

@@ -288,7 +288,9 @@ pub enum CatalogCacheError {
 #[derive(Debug, Clone, Default)]
 pub struct ModelCatalogCache {
     models: BTreeMap<String, ModelIdentity>,
-    provider_models: BTreeMap<(String, String), ProviderModelIdentity>,
+    /// Provider rows keyed by model id, then provider id. Nested ordered maps
+    /// keep `(model_id, provider_id)` iteration and accept borrowed lookups.
+    provider_models: BTreeMap<String, BTreeMap<String, ProviderModelIdentity>>,
     account_support: BTreeMap<String, BTreeSet<String>>,
     account_providers: BTreeMap<String, String>,
     account_provider_keys: BTreeMap<String, BTreeSet<(String, String)>>,
@@ -365,10 +367,7 @@ impl ModelCatalogCache {
                 first_seen_at: parse_timestamp(&row.first_seen_at)?,
                 last_seen_at: parse_timestamp(&row.last_seen_at)?,
             };
-            self.provider_models.insert(
-                (identity.model_id.clone(), identity.provider_id.clone()),
-                identity,
-            );
+            self.provider_models_insert(identity);
         }
         for (id, (name, provider, enabled)) in &account_by_id {
             if *enabled {
@@ -386,10 +385,7 @@ impl ModelCatalogCache {
             };
             // Skip stale cross-provider rows: only admit support when the
             // (model, account.provider) pair exists in provider_models.
-            if !self
-                .provider_models
-                .contains_key(&(row.model_id.clone(), provider.clone()))
-            {
+            if !self.provider_models_contains(&row.model_id, provider) {
                 continue;
             }
             if *enabled {
@@ -520,7 +516,7 @@ impl ModelCatalogCache {
                     .iter()
                     .any(|(other, keys)| other != account_name && keys.contains(stale))
                 {
-                    self.provider_models.remove(stale);
+                    self.provider_models_remove(&stale.0, &stale.1);
                 }
             }
             self.account_provider_keys
@@ -533,9 +529,8 @@ impl ModelCatalogCache {
         let mut added = 0;
         let mut updated = 0;
         for model in models {
-            let key = (model.model_id.clone(), provider_id.into());
             let merged = self.merge_provider_input(model, provider_id, now, destructive);
-            self.provider_models.insert(key.clone(), merged.clone());
+            self.provider_models_insert(merged.clone());
             let global = self.models.get_mut(&model.model_id);
             match global {
                 None => {
@@ -608,8 +603,7 @@ impl ModelCatalogCache {
         now: i64,
         destructive: bool,
     ) -> ProviderModelIdentity {
-        let key = (input.model_id.clone(), provider_id.into());
-        let old = self.provider_models.get(&key);
+        let old = self.provider_models_get(&input.model_id, provider_id);
         let mut result = ProviderModelIdentity {
             model_id: input.model_id.clone(),
             provider_id: provider_id.into(),
@@ -710,7 +704,7 @@ impl ModelCatalogCache {
             .iter()
             .filter(|(_, accounts)| !accounts.is_empty())
             .map(|(model, _)| model.clone())
-            .chain(self.provider_models.keys().map(|(model, _)| model.clone()))
+            .chain(self.provider_models.keys().cloned())
             .collect();
         let stale: Vec<String> = self
             .models
@@ -734,13 +728,14 @@ impl ModelCatalogCache {
     pub fn get_all_models(&self) -> Vec<&ModelIdentity> {
         self.models.values().collect()
     }
+    /// Look up one provider row by borrowed ids. The nested map does not
+    /// allocate an owned key on a hit or a miss.
     pub fn get_provider_model(
         &self,
         model_id: &str,
         provider_id: &str,
     ) -> Option<&ProviderModelIdentity> {
-        self.provider_models
-            .get(&(model_id.into(), provider_id.into()))
+        self.provider_models_get(model_id, provider_id)
     }
     pub fn get_provider_model_entry(
         &self,
@@ -750,7 +745,7 @@ impl ModelCatalogCache {
         self.get_provider_model(model_id, provider_id)
     }
     pub fn get_provider_model_entries(&self) -> Vec<&ProviderModelIdentity> {
-        self.provider_models.values().collect()
+        self.provider_model_values().collect()
     }
     pub fn supporting_accounts(&self, model_id: &str) -> Vec<&str> {
         self.account_support
@@ -815,10 +810,62 @@ impl ModelCatalogCache {
     pub fn model_count(&self) -> usize {
         self.models.len()
     }
+
+    fn provider_models_get(
+        &self,
+        model_id: &str,
+        provider_id: &str,
+    ) -> Option<&ProviderModelIdentity> {
+        self.provider_models.get(model_id)?.get(provider_id)
+    }
+
+    fn provider_models_contains(&self, model_id: &str, provider_id: &str) -> bool {
+        self.provider_models
+            .get(model_id)
+            .is_some_and(|providers| providers.contains_key(provider_id))
+    }
+
+    fn provider_models_insert(&mut self, identity: ProviderModelIdentity) {
+        let model_id = identity.model_id.clone();
+        let provider_id = identity.provider_id.clone();
+        self.provider_models
+            .entry(model_id)
+            .or_default()
+            .insert(provider_id, identity);
+    }
+
+    fn provider_models_remove(&mut self, model_id: &str, provider_id: &str) {
+        let empty = if let Some(providers) = self.provider_models.get_mut(model_id) {
+            providers.remove(provider_id);
+            providers.is_empty()
+        } else {
+            false
+        };
+        if empty {
+            self.provider_models.remove(model_id);
+        }
+    }
+
+    fn provider_model_key_pairs(&self) -> Vec<(String, String)> {
+        self.provider_models
+            .iter()
+            .flat_map(|(model_id, providers)| {
+                providers
+                    .keys()
+                    .map(move |provider_id| (model_id.clone(), provider_id.clone()))
+            })
+            .collect()
+    }
+
+    fn provider_model_values(&self) -> impl Iterator<Item = &ProviderModelIdentity> {
+        self.provider_models
+            .values()
+            .flat_map(|providers| providers.values())
+    }
     pub fn snapshot(&self) -> CacheSnapshot {
         CacheSnapshot {
             model_ids: self.models.keys().cloned().collect(),
-            provider_model_keys: self.provider_models.keys().cloned().collect(),
+            provider_model_keys: self.provider_model_key_pairs(),
             account_support: self
                 .account_support
                 .iter()
@@ -838,7 +885,7 @@ impl ModelCatalogCache {
     pub(crate) fn diff_projection(&self) -> CacheDiffProjection {
         CacheDiffProjection {
             model_ids: self.models.keys().cloned().collect(),
-            provider_model_keys: self.provider_models.keys().cloned().collect(),
+            provider_model_keys: self.provider_model_key_pairs().into_iter().collect(),
         }
     }
 
@@ -866,8 +913,7 @@ impl ModelCatalogCache {
             });
         }
         let provider_models = self
-            .provider_models
-            .values()
+            .provider_model_values()
             .filter(|row| persisted_ids.contains(&row.model_id))
             .map(|row| ProviderModelWrite {
                 model_id: row.model_id.clone(),
@@ -928,16 +974,14 @@ impl ModelCatalogCache {
     ) -> Option<EffectiveModelLimits> {
         if let Some(provider) = provider_id {
             return self
-                .provider_models
-                .get(&(model_id.into(), provider.into()))
+                .provider_models_get(model_id, provider)
                 .map(|entry| self.apply_overrides(&entry.limits, model_id, Some(provider)));
         }
         let rows: Vec<&ProviderModelIdentity> = self
             .provider_models
-            .iter()
-            .filter(|((candidate_model, _), _)| candidate_model == model_id)
-            .map(|(_, entry)| entry)
-            .collect();
+            .get(model_id)
+            .map(|providers| providers.values().collect())
+            .unwrap_or_default();
         if rows.is_empty() {
             return self
                 .models
@@ -963,8 +1007,7 @@ impl ModelCatalogCache {
         model_id: &str,
         provider_id: &str,
     ) -> Option<ModelCapabilities> {
-        self.provider_models
-            .get(&(model_id.into(), provider_id.into()))
+        self.provider_models_get(model_id, provider_id)
             .map(|entry| {
                 self.apply_capability_overrides(&entry.capabilities, model_id, Some(provider_id))
             })
@@ -983,10 +1026,15 @@ impl ModelCatalogCache {
         }
         let rows: Vec<ModelCapabilities> = self
             .provider_models
-            .iter()
-            .filter(|((candidate_model, _), _)| candidate_model == model_id)
-            .map(|((_, provider), entry)| {
-                self.apply_capability_overrides(&entry.capabilities, model_id, Some(provider))
+            .get(model_id)
+            .into_iter()
+            .flat_map(|providers| providers.iter())
+            .map(|(provider, entry)| {
+                self.apply_capability_overrides(
+                    &entry.capabilities,
+                    model_id,
+                    Some(provider.as_str()),
+                )
             })
             .collect();
         if rows.is_empty() {
@@ -1482,5 +1530,62 @@ mod projection_tests {
         assert!(projected.support.contains(&(12, "model-0599".into())));
         assert_eq!(projected.models[0].source_metadata["index"], 0);
         assert_eq!(projected.models[1].capabilities["supports_tools"], false);
+    }
+}
+
+#[cfg(test)]
+mod borrowed_lookup_tests {
+    use super::*;
+
+    fn cache_with(pairs: &[(&str, &str)]) -> ModelCatalogCache {
+        let mut cache = ModelCatalogCache::default();
+        for (model_id, provider_id) in pairs {
+            cache.set_account_provider(format!("account-{provider_id}"), *provider_id);
+            let mut model = ModelInput::new((*model_id).to_owned());
+            model.protocol = Some("openai".into());
+            model.protocol_source = Some("fixture".into());
+            model.resolution_status = ProtocolResolutionStatus::Resolved;
+            cache
+                .update_from_account(
+                    &format!("account-{provider_id}"),
+                    provider_id,
+                    &[model],
+                    true,
+                    true,
+                )
+                .expect("provider model");
+        }
+        cache
+    }
+
+    #[test]
+    fn borrowed_lookup_matches_owned_key_oracle_including_slash_ids() {
+        let pairs = [
+            ("model-a", "provider-a"),
+            ("model-a", "provider-b"),
+            ("model/with/slash", "provider/a"),
+            ("absent", "provider-a"),
+        ];
+        let cache = cache_with(&pairs[..3]);
+        let mut owned = std::collections::BTreeMap::<(String, String), String>::new();
+        for (model_id, provider_id) in &pairs[..3] {
+            owned.insert(
+                ((*model_id).to_owned(), (*provider_id).to_owned()),
+                format!("{model_id}\0{provider_id}"),
+            );
+        }
+        for (model_id, provider_id) in pairs {
+            let borrowed = cache
+                .get_provider_model(model_id, provider_id)
+                .map(|row| (row.model_id.as_str(), row.provider_id.as_str()));
+            let owned_hit = owned
+                .get(&(model_id.to_owned(), provider_id.to_owned()))
+                .map(|_| (model_id, provider_id));
+            assert_eq!(borrowed, owned_hit);
+        }
+        let keys = cache.provider_model_key_pairs();
+        let mut owned_keys: Vec<_> = owned.keys().cloned().collect();
+        owned_keys.sort();
+        assert_eq!(keys, owned_keys);
     }
 }

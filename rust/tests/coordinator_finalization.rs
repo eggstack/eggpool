@@ -29,7 +29,11 @@ struct Fixture {
 }
 
 async fn fixture() -> Fixture {
-    let database = Database::open(DatabaseConfig::default())
+    open_fixture(DatabaseConfig::default()).await
+}
+
+async fn open_fixture(database_config: DatabaseConfig) -> Fixture {
+    let database = Database::open(database_config)
         .await
         .expect("database opens");
     MigrationRunner::new(&database)
@@ -979,5 +983,93 @@ async fn refused_registration_releases_the_selection_claim() {
     held_result.expect("held job completes");
     assert_eq!(supervisor.snapshot().active_jobs, 0);
     assert_eq!(fixture.router.active_request_count("account-a"), 0);
+    fixture.database.close().await.expect("database closes");
+}
+
+#[tokio::test]
+async fn file_backed_cached_finalization_rows_match_a_second_execution() {
+    let directory = tempfile::tempdir().expect("file-backed database directory");
+    let config = DatabaseConfig {
+        path: directory
+            .path()
+            .join("finalization.sqlite")
+            .display()
+            .to_string(),
+        ..DatabaseConfig::default()
+    };
+    let fixture = open_fixture(config).await;
+    let finalizer = DurableFinalizer::new(fixture.database.clone());
+    let data = FinalizationData {
+        outcome: FinalizationOutcome::Completed,
+        input_tokens: 3,
+        output_tokens: 5,
+        cost_microdollars: 7,
+        release_reason: Some("completed".into()),
+        ..FinalizationData::default()
+    };
+    for proxy_request_id in ["finalize-parity-a", "finalize-parity-b"] {
+        let published = published(&fixture, proxy_request_id).await;
+        let result = finalizer
+            .finalize_request(&published.identity, data.clone(), Some(published.claim))
+            .await
+            .expect("finalization succeeds");
+        assert!(result.request_transitioned);
+    }
+    let rows = fixture
+        .database
+        .call(|connection| {
+            let mut statement = connection.prepare(
+                "SELECT status, input_tokens, output_tokens, cost_microdollars \
+                 FROM requests ORDER BY proxy_request_id",
+            )?;
+            let requests = statement
+                .query_map([], |row| {
+                    Ok((
+                        row.get::<_, String>(0)?,
+                        row.get::<_, i64>(1)?,
+                        row.get::<_, i64>(2)?,
+                        row.get::<_, i64>(3)?,
+                    ))
+                })?
+                .collect::<Result<Vec<_>, _>>()?;
+            let mut statement = connection.prepare(
+                "SELECT status_code IS NULL, error_class IS NULL, release_reason \
+                 FROM request_attempts ORDER BY id",
+            )?;
+            let attempts = statement
+                .query_map([], |row| {
+                    Ok((
+                        row.get::<_, i64>(0)?,
+                        row.get::<_, i64>(1)?,
+                        row.get::<_, Option<String>>(2)?,
+                    ))
+                })?
+                .collect::<Result<Vec<_>, _>>()?;
+            let mut statement = connection
+                .prepare("SELECT status, release_reason FROM reservations ORDER BY id")?;
+            let reservations = statement
+                .query_map([], |row| {
+                    Ok((row.get::<_, String>(0)?, row.get::<_, Option<String>>(1)?))
+                })?
+                .collect::<Result<Vec<_>, _>>()?;
+            let budgets: i64 = connection.query_row(
+                "SELECT COUNT(*) FROM user_budget_reservations",
+                [],
+                |row| row.get(0),
+            )?;
+            Ok((requests, attempts, reservations, budgets))
+        })
+        .await
+        .expect("finalized rows");
+    let (requests, attempts, reservations, budgets) = rows;
+    assert_eq!(requests.len(), 2);
+    assert_eq!(requests[0], requests[1]);
+    assert_eq!(requests[0].0, "completed");
+    assert_eq!(attempts.len(), 2);
+    assert_eq!(attempts[0], attempts[1]);
+    assert_eq!(reservations.len(), 2);
+    assert_eq!(reservations[0], reservations[1]);
+    assert_eq!(reservations[0].0, "released");
+    assert_eq!(budgets, 0);
     fixture.database.close().await.expect("database closes");
 }

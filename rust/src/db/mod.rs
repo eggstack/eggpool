@@ -4,6 +4,7 @@
 //! manifest so the runtime cannot silently grow a second schema source.
 
 mod connection;
+pub(crate) mod hot_statements;
 pub mod migrations;
 #[cfg(feature = "qualification-db-diagnostics")]
 mod qualification;

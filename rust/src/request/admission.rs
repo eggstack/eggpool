@@ -308,6 +308,32 @@ pub(crate) fn parse_request_body(
     Ok(ParsedRequestBody { raw_body, value })
 }
 
+/// Parse one size-checked body on Tokio's blocking pool.
+///
+/// The size check runs before the task is spawned, so an oversize body is
+/// never parsed. Dropping the caller leaves an already-started parse of a
+/// buffered body to finish and does not invent an admission error. Callers
+/// on the inference path await this before taking a database permit, the
+/// routing selection lock, or a catalog lock.
+pub(crate) async fn parse_request_body_off_thread(
+    raw_body: bytes::Bytes,
+    max_body_bytes: usize,
+) -> Result<ParsedRequestBody, AdmissionError> {
+    if raw_body.len() > max_body_bytes {
+        return Err(AdmissionError::BodyTooLarge {
+            length: raw_body.len(),
+            limit: max_body_bytes,
+        });
+    }
+    let bytes = raw_body.clone();
+    let joined = tokio::task::spawn_blocking(move || parse_once(&bytes)).await;
+    let value = match joined {
+        Ok(result) => result?,
+        Err(error) => std::panic::resume_unwind(error.into_panic()),
+    };
+    Ok(ParsedRequestBody { raw_body, value })
+}
+
 /// Admit a body after it has crossed the bounded parse/depth boundary.
 pub(crate) fn admit_parsed_request(
     parsed: ParsedRequestBody,
@@ -835,5 +861,88 @@ mod tests {
             compact.routing_facts(&inputs),
             equivalent.routing_facts(&inputs)
         );
+    }
+
+    fn admission_facts(
+        body: &[u8],
+        limit: usize,
+    ) -> Result<(String, bool, Option<u64>, u64), String> {
+        match admit_request(
+            body,
+            AdmissionOptions {
+                max_body_bytes: limit,
+                ..AdmissionOptions::default()
+            },
+        ) {
+            Ok(admitted) => Ok((
+                admitted.canonical.model,
+                admitted.canonical.stream,
+                admitted.canonical.max_output_tokens,
+                admitted.reservation_tokens,
+            )),
+            Err(error) => Err(error.to_string()),
+        }
+    }
+
+    #[test]
+    fn admission_parity_covers_normal_malformed_depth_and_size() {
+        let normal = br#"{"model":"parity-model","stream":true,"max_tokens":16,"messages":[{"role":"user","content":"hi"}]}"#;
+        let mut deep = vec![b'['];
+        deep.extend(std::iter::repeat_n(b'[', 65));
+        deep.extend(std::iter::repeat_n(b']', 66));
+        let cases: &[(&[u8], usize)] = &[
+            (normal, 1024),
+            (b"{", 1024),
+            (&deep, 1024),
+            (b"{\"model\":\"too-big\"}", 4),
+        ];
+        for (body, limit) in cases {
+            assert_eq!(admission_facts(body, *limit), admission_facts(body, *limit));
+        }
+        let normal_facts = admission_facts(normal, 1024).expect("normal body admits");
+        assert_eq!(normal_facts.0, "parity-model");
+        assert!(normal_facts.1);
+        assert_eq!(normal_facts.2, Some(16));
+        assert!(matches!(
+            admission_facts(b"{", 1024),
+            Err(message) if message.contains("invalid")
+        ));
+        assert!(matches!(
+            admission_facts(&deep, 1024),
+            Err(message) if message.contains("nesting")
+        ));
+        assert!(matches!(
+            admission_facts(b"{\"model\":\"too-big\"}", 4),
+            Err(message) if message.contains("limit")
+        ));
+    }
+
+    #[tokio::test]
+    async fn off_thread_parse_matches_the_inline_parse() {
+        let normal = br#"{"model":"parity-model","messages":[{"role":"user","content":"hi"}]}"#;
+        let mut deep = vec![b'['];
+        deep.extend(std::iter::repeat_n(b'[', 65));
+        deep.extend(std::iter::repeat_n(b']', 66));
+        let cases: &[(&[u8], usize)] = &[
+            (normal, 1024),
+            (b"{", 1024),
+            (deep.as_slice(), 1024),
+            (br#"{"model":"too-big"}"#, 4),
+        ];
+        for (body, limit) in cases {
+            let inline = parse_request_body(bytes::Bytes::copy_from_slice(body), *limit);
+            let off_thread =
+                parse_request_body_off_thread(bytes::Bytes::copy_from_slice(body), *limit).await;
+            match (inline, off_thread) {
+                (Ok(inline), Ok(off_thread)) => {
+                    assert_eq!(inline.value, off_thread.value);
+                    assert_eq!(inline.raw_body, off_thread.raw_body);
+                }
+                (Err(inline), Err(off_thread)) => {
+                    assert_eq!(inline.to_string(), off_thread.to_string());
+                }
+                (inline, off_thread) => panic!("parse diverged: {inline:?} vs {off_thread:?}"),
+            }
+        }
     }
 }

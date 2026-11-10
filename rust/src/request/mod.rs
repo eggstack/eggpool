@@ -23,7 +23,7 @@ pub(crate) use admission_fairness::{
 
 pub(crate) use admission::{
     ParsedRequestBody, admit_compact_parsed_request, admit_parsed_request,
-    canonical_request_from_object, parse_request_body,
+    canonical_request_from_object, parse_request_body_off_thread,
 };
 pub use body::{
     BodyEncodingError, EncodedJsonBody, encode_compact_json, encode_compact_json_bounded,

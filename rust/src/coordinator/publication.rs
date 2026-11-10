@@ -497,8 +497,8 @@ impl PublicationService {
         let result = database
             .with_named_transaction(crate::db::TransactionKind::Publication, move |connection| {
                 if let Some(user_id) = attribution.user_id.as_deref() {
-                    let current: Option<(String, i64)> = connection
-                        .query_row(
+                    let current: Option<(String, i64)> = crate::db::hot_statements::query_row(
+                        connection,
                             "SELECT state, auth_epoch FROM users WHERE id = ?1",
                             [user_id],
                             |row| Ok((row.get(0)?, row.get(1)?)),
@@ -511,14 +511,14 @@ impl PublicationService {
                     }
                     if let Some(credential_id) = attribution.credential_id.as_deref() {
                         let credential_active: bool = match attribution.principal_kind {
-                            crate::identity::PrincipalKind::AgentToken => connection.query_row(
+                            crate::identity::PrincipalKind::AgentToken => crate::db::hot_statements::query_row(connection,
                                 "SELECT EXISTS(SELECT 1 FROM user_credentials \
                                  WHERE id = ?1 AND user_id = ?2 AND revoked_at IS NULL \
                                  AND (expires_at IS NULL OR expires_at > CURRENT_TIMESTAMP))",
                                 (credential_id, user_id),
                                 |row| row.get(0),
                             )?,
-                            crate::identity::PrincipalKind::BrowserSession => connection.query_row(
+                            crate::identity::PrincipalKind::BrowserSession => crate::db::hot_statements::query_row(connection,
                                 "SELECT EXISTS(SELECT 1 FROM web_sessions \
                                  WHERE id = ?1 AND user_id = ?2 AND revoked_at IS NULL \
                                  AND expires_at > CURRENT_TIMESTAMP \
@@ -533,8 +533,8 @@ impl PublicationService {
                         }
                     }
                 }
-                let existing = connection
-                    .query_row(
+                let existing = crate::db::hot_statements::query_row(
+                    connection,
                         "SELECT id, account_id, model_id, provider_id, protocol, streamed, status,\n\
                                 user_id, credential_id, auth_epoch, principal_kind, request_kind, parent_proxy_request_id\n\
                          FROM requests WHERE proxy_request_id = ?1",
@@ -590,8 +590,8 @@ impl PublicationService {
                     if existing_status != "pending" {
                         return Ok(TransactionOutcome::Conflict);
                     }
-                    let existing_attempt = connection
-                        .query_row(
+                    let existing_attempt = crate::db::hot_statements::query_row(
+                        connection,
                             "SELECT a.id, a.account_id, a.provider_id, a.model_id,\n\
                                     a.protocol, r.id\n\
                              FROM request_attempts a\n\
@@ -632,7 +632,7 @@ impl PublicationService {
                         let Some(reservation_id) = reservation_id else {
                             return Ok(TransactionOutcome::Conflict);
                         };
-                        let existing_account_name = connection.query_row(
+                        let existing_account_name = crate::db::hot_statements::query_row(connection,
                             "SELECT name FROM accounts WHERE id = ?1",
                             [existing_account_id],
                             |row| row.get::<_, String>(0),
@@ -659,8 +659,8 @@ impl PublicationService {
                         })));
                     }
                     if input.attempt_number > 1 {
-                        let prior_attempt = connection
-                            .query_row(
+                        let prior_attempt = crate::db::hot_statements::query_row(
+                            connection,
                                 "SELECT a.completed_at, r.status
                                  FROM request_attempts a
                                  LEFT JOIN reservations r ON r.request_id = a.request_id
@@ -744,7 +744,7 @@ impl PublicationService {
                     // A retry attempt on an existing pending request is valid
                     // only after the previous attempt's durable and local
                     // release boundary has converged.
-                    connection.execute(
+                    crate::db::hot_statements::execute(connection,
                         "UPDATE requests SET account_id = ?, reserved_microdollars = ?,\n\
                          provider_id = ? WHERE id = ? AND status = 'pending'",
                         params![account_id, projected_cost, provider_id, request_id],
@@ -817,7 +817,7 @@ impl PublicationService {
                     transaction_injector.as_ref(),
                     PublicationStage::RequestInsert,
                 )?;
-                connection.execute(
+                crate::db::hot_statements::execute(connection,
                     "INSERT INTO requests\n\
                      (account_id, model_id, status, protocol, streamed,\n\
                       reserved_microdollars, proxy_request_id, provider_id, first_attempt_at,\n\
@@ -941,14 +941,16 @@ impl PublicationService {
         let identity = identity.clone();
         self.database
             .with_named_transaction(crate::db::TransactionKind::Other, move |connection| {
-                connection.execute(
+                crate::db::hot_statements::execute(
+                    connection,
                     "UPDATE request_attempts SET error_class = 'PublicationInterrupted',\n\
                      release_reason = 'publication_interrupted',\n\
                      completed_at = CURRENT_TIMESTAMP\n\
                      WHERE id = ?1 AND completed_at IS NULL",
                     [identity.attempt_id],
                 )?;
-                connection.execute(
+                crate::db::hot_statements::execute(
+                    connection,
                     "UPDATE reservations SET status = 'released',\n\
                      released_at = CURRENT_TIMESTAMP,\n\
                      release_reason = 'publication_interrupted'\n\
@@ -1209,7 +1211,8 @@ fn insert_attempt_rows(
     rows: AttemptRows<'_>,
 ) -> Result<TransactionOutcome, tokio_rusqlite::rusqlite::Error> {
     fail_sql(injector, PublicationStage::ReservationInsert)?;
-    connection.execute(
+    crate::db::hot_statements::execute(
+        connection,
         "INSERT INTO reservations\n\
          (request_id, account_id, model_id, reserved_microdollars,\n\
           estimated_tokens, expires_at)\n\
@@ -1226,7 +1229,8 @@ fn insert_attempt_rows(
     let reservation_id = connection.last_insert_rowid();
 
     fail_sql(injector, PublicationStage::AttemptInsert)?;
-    connection.execute(
+    crate::db::hot_statements::execute(
+        connection,
         "INSERT INTO request_attempts\n\
          (request_id, attempt_number, account_id, provider_id, model_id, protocol, streamed)\n\
          VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)",
@@ -1243,7 +1247,8 @@ fn insert_attempt_rows(
     let attempt_id = connection.last_insert_rowid();
 
     fail_sql(injector, PublicationStage::RoutingDecisionInsert)?;
-    connection.execute(
+    crate::db::hot_statements::execute(
+        connection,
         "INSERT INTO routing_decisions\n\
          (request_id, attempt_number, model_id, provider_id, protocol,\n\
           selected_account_id, selected_account_name, selected_tier, selected_score,\n\

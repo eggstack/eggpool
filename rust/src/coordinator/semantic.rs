@@ -703,19 +703,36 @@ impl SemanticSelector {
             .ok_or_else(|| {
                 SelectorDispatchError::Admission("selector body budget exhausted".into())
             })?;
-        let mut request = FiniteRequest::new(
+        let raw_body = Bytes::from(body);
+        let parsed = crate::request::parse_request_body_off_thread(
+            raw_body.clone(),
+            crate::request::AdmissionOptions::default().max_body_bytes,
+        )
+        .await
+        .map_err(|error| SelectorDispatchError::Admission(error.to_string()))?;
+        let admitted = crate::request::admit_parsed_request(
+            parsed,
+            crate::request::AdmissionOptions {
+                client_surface: ClientSurface::ChatCompletions,
+                ..crate::request::AdmissionOptions::default()
+            },
+        )
+        .map_err(|error| SelectorDispatchError::Admission(error.to_string()))?;
+        let routing_facts = admitted.routing_facts(&StaticRoutingFacts {
+            known_provider_ids: self.known_providers.clone(),
+            requested_protocol: Some("openai".into()),
+            transcode_protocols: Vec::new(),
+            catalog_stale_after_s: None,
+            capability_policy: BTreeMap::new(),
+            now: 0,
+        });
+        let mut request = FiniteRequest::from_admitted(
             next_selector_request_id(&router.virtual_model),
-            Bytes::from(body),
+            raw_body,
             HeaderMap::new(),
             ClientSurface::ChatCompletions,
-            StaticRoutingFacts {
-                known_provider_ids: self.known_providers.clone(),
-                requested_protocol: Some("openai".into()),
-                transcode_protocols: Vec::new(),
-                catalog_stale_after_s: None,
-                capability_policy: BTreeMap::new(),
-                now: 0,
-            },
+            admitted,
+            routing_facts,
         )
         .map_err(|error| SelectorDispatchError::Admission(error.to_string()))?;
         request.routing_facts.provider_id = provider_pin;

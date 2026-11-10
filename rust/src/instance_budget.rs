@@ -371,11 +371,13 @@ pub(crate) fn check_initial(
     microdollars: i64,
     proof: Option<&BudgetProof>,
 ) -> Result<(BudgetCheck, Option<InstancePermit>, BudgetHold), tokio_rusqlite::rusqlite::Error> {
-    let (policy_version, day_start, month_start): (i64, String, String) = connection.query_row(
-        "SELECT revision, date('now'), strftime('%Y-%m-01', 'now') FROM policy_state WHERE singleton = 1",
-        [],
-        |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)),
-    )?;
+    let (policy_version, day_start, month_start): (i64, String, String) =
+        crate::db::hot_statements::query_row(
+            connection,
+            "SELECT revision, date('now'), strftime('%Y-%m-01', 'now') FROM policy_state WHERE singleton = 1",
+            [],
+            |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)),
+        )?;
     let permit = InstancePermit {
         policy_version,
         day_start,
@@ -424,21 +426,21 @@ pub(crate) fn check_retry(
     microdollars: i64,
     proof: Option<&BudgetProof>,
 ) -> Result<(BudgetCheck, Option<BudgetHold>), tokio_rusqlite::rusqlite::Error> {
-    let reservation = connection
-        .query_row(
-            "SELECT model_id, policy_version, day_start, month_start
+    let reservation = crate::db::hot_statements::query_row(
+        connection,
+        "SELECT model_id, policy_version, day_start, month_start
              FROM instance_budget_reservations WHERE request_id = ?1 AND status = 'active'",
-            [request_id],
-            |row| {
-                Ok((
-                    row.get::<_, String>(0)?,
-                    row.get::<_, i64>(1)?,
-                    row.get::<_, String>(2)?,
-                    row.get::<_, String>(3)?,
-                ))
-            },
-        )
-        .optional()?;
+        [request_id],
+        |row| {
+            Ok((
+                row.get::<_, String>(0)?,
+                row.get::<_, i64>(1)?,
+                row.get::<_, String>(2)?,
+                row.get::<_, String>(3)?,
+            ))
+        },
+    )
+    .optional()?;
     let Some((model_id, policy_version, day_start, month_start)) = reservation else {
         return Ok((BudgetCheck::Allowed, None));
     };
@@ -490,7 +492,8 @@ pub(crate) fn insert_reservation(
     spec: InstanceReservationSpec<'_>,
     permit: &InstancePermit,
 ) -> Result<(), tokio_rusqlite::rusqlite::Error> {
-    connection.execute(
+    crate::db::hot_statements::execute(
+        connection,
         "INSERT INTO instance_budget_reservations(
             request_id, model_id, policy_version, day_start, month_start,
             held_tokens, held_microdollars, status, expires_at,
@@ -521,7 +524,8 @@ pub(crate) fn extend_reservation(
     tokens: i64,
     microdollars: i64,
 ) -> Result<(), tokio_rusqlite::rusqlite::Error> {
-    let changed = connection.execute(
+    let changed = crate::db::hot_statements::execute(
+        connection,
         "UPDATE instance_budget_reservations SET held_tokens = held_tokens + ?1,
              held_microdollars = held_microdollars + ?2
           WHERE request_id = ?3 AND status = 'active'",
@@ -539,7 +543,8 @@ fn load_matching_rules(
     connection: &tokio_rusqlite::rusqlite::Connection,
     model_id: &str,
 ) -> Result<Vec<LoadedInstanceRule>, tokio_rusqlite::rusqlite::Error> {
-    let mut statement = connection.prepare(
+    let mut statement = crate::db::hot_statements::prepare(
+        connection,
         "SELECT model_id, window, max_requests, max_tokens, max_microdollars,
                 max_concurrent, enforcement
           FROM instance_budget_rules WHERE model_id IS NULL OR model_id = ?1",
@@ -595,7 +600,8 @@ fn rules_exceeded(
         };
         let (used_requests, used_tokens, used_cost): (i64, i64, i64) =
             if let Some(model) = rule.scope_model.as_deref() {
-                connection.query_row(
+                crate::db::hot_statements::query_row(
+                    connection,
                     "SELECT coalesce(sum(request_count), 0), coalesce(sum(token_count), 0),
                         coalesce(sum(cost_microdollars), 0)
                   FROM instance_budget_usage WHERE model_id = ?1
@@ -604,7 +610,8 @@ fn rules_exceeded(
                     |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)),
                 )?
             } else {
-                connection.query_row(
+                crate::db::hot_statements::query_row(
+                    connection,
                     "SELECT coalesce(sum(request_count), 0), coalesce(sum(token_count), 0),
                         coalesce(sum(cost_microdollars), 0)
                   FROM instance_budget_usage WHERE window = ?1 AND window_start = ?2",
@@ -618,7 +625,8 @@ fn rules_exceeded(
         // indexed lookups; no full history scan runs under the writer gate.
         let (held_requests, held_tokens, held_cost, active_count): (i64, i64, i64, i64) =
             if let Some(model) = rule.scope_model.as_deref() {
-                connection.query_row(
+                crate::db::hot_statements::query_row(
+                    connection,
                     "SELECT coalesce(sum(CASE WHEN (?2 = 'day' AND day_start = ?3)
                                               OR (?2 = 'month' AND month_start = ?3)
                                          THEN held_requests ELSE 0 END), 0),
@@ -634,7 +642,8 @@ fn rules_exceeded(
                     |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?, row.get(3)?)),
                 )?
             } else {
-                connection.query_row(
+                crate::db::hot_statements::query_row(
+                    connection,
                     "SELECT coalesce(sum(CASE WHEN (?1 = 'day' AND day_start = ?2)
                                               OR (?1 = 'month' AND month_start = ?2)
                                          THEN held_requests ELSE 0 END), 0),
@@ -684,24 +693,24 @@ pub(crate) fn record_attempt_and_maybe_settle(
         terminalize_request,
         ..
     } = settlement;
-    let reservation = connection
-        .query_row(
-            "SELECT model_id, day_start, month_start, held_tokens,
+    let reservation = crate::db::hot_statements::query_row(
+        connection,
+        "SELECT model_id, day_start, month_start, held_tokens,
                     held_microdollars, status
              FROM instance_budget_reservations WHERE request_id = ?1",
-            [request_id],
-            |row| {
-                Ok((
-                    row.get::<_, String>(0)?,
-                    row.get::<_, String>(1)?,
-                    row.get::<_, String>(2)?,
-                    row.get::<_, i64>(3)?,
-                    row.get::<_, i64>(4)?,
-                    row.get::<_, String>(5)?,
-                ))
-            },
-        )
-        .optional()?;
+        [request_id],
+        |row| {
+            Ok((
+                row.get::<_, String>(0)?,
+                row.get::<_, String>(1)?,
+                row.get::<_, String>(2)?,
+                row.get::<_, i64>(3)?,
+                row.get::<_, i64>(4)?,
+                row.get::<_, String>(5)?,
+            ))
+        },
+    )
+    .optional()?;
     let Some((model_id, day_start, month_start, held_tokens, held_cost, status)) = reservation
     else {
         return Ok(());
@@ -721,7 +730,8 @@ pub(crate) fn record_attempt_and_maybe_settle(
         i64,
         i64,
         i64,
-    ) = connection.query_row(
+    ) = crate::db::hot_statements::query_row(
+        connection,
         "SELECT coalesce(sum(input_tokens + output_tokens), 0),
                     coalesce(sum(cost_microdollars), 0),
                     coalesce(sum(provider_reported_microdollars), 0),
@@ -753,7 +763,7 @@ pub(crate) fn record_attempt_and_maybe_settle(
     };
     let fallback_cost = (charged_cost - provider_cost - local_cost).max(0);
     for (window, start) in [("day", day_start.as_str()), ("month", month_start.as_str())] {
-        connection.execute(
+        crate::db::hot_statements::execute(connection,
             "INSERT INTO instance_budget_usage(
                 model_id, window, window_start, request_count, token_count,
                 cost_microdollars, provider_reported_microdollars,
@@ -784,7 +794,7 @@ pub(crate) fn record_attempt_and_maybe_settle(
             ],
         )?;
     }
-    connection.execute(
+    crate::db::hot_statements::execute(connection,
         "UPDATE instance_budget_reservations SET status = 'settled', settled_at = CURRENT_TIMESTAMP,
               observed_tokens = ?1, observed_microdollars = ?2,
               token_usage_complete = ?3, cost_usage_complete = ?4

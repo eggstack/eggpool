@@ -87,7 +87,7 @@ user, token, and profile administration mutations.
 
 ## Publication and finalization transactions
 
-Durable publication prepares its deterministic routing-decision row before acquiring the gate (persistence M002): `PreparedRoutingDecisionRow` in `coordinator/publication.rs` serializes exclusion/selected-score facts from the borrowed selection snapshot, and only those minimal owned facts enter the worker transaction. Publication and durable finalization use named `TransactionKind::{Publication, Finalization, Other}` entry points; the public `with_transaction` API and the single gate are unchanged.
+Durable publication prepares its deterministic routing-decision row before acquiring the gate (persistence M002): `PreparedRoutingDecisionRow` in `coordinator/publication.rs` serializes exclusion/selected-score facts from the borrowed selection snapshot, and only those minimal owned facts enter the worker transaction. Publication and durable finalization use named `TransactionKind::{Publication, Finalization, Other}` entry points; the public `with_transaction` API and the single gate are unchanged. Hot statements inside those two transactions, including the budget SQL they already run, are prepared through the worker connection's bounded statement cache; the gate, WAL, and `NORMAL` synchronous level are unchanged.
 
 ## Passive checkpoint maintenance (M001)
 

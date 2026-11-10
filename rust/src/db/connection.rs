@@ -1493,6 +1493,9 @@ impl Database {
         #[cfg(feature = "qualification-db-diagnostics")]
         let wal_autocheckpoint_override = qualification_wal_autocheckpoint_override()?;
         self.call(move |connection| {
+            connection.set_prepared_statement_cache_capacity(
+                super::hot_statements::HOT_STATEMENT_CACHE_CAPACITY,
+            );
             connection.execute_batch("PRAGMA foreign_keys = ON")?;
             connection.pragma_update(None, "busy_timeout", config.busy_timeout_ms)?;
             #[cfg(feature = "qualification-persist-journal")]

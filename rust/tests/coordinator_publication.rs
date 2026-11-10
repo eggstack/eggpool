@@ -30,7 +30,11 @@ struct Fixture {
 }
 
 async fn fixture() -> Fixture {
-    let database = Database::open(DatabaseConfig::default())
+    open_fixture(DatabaseConfig::default()).await
+}
+
+async fn open_fixture(database_config: DatabaseConfig) -> Fixture {
+    let database = Database::open(database_config)
         .await
         .expect("database opens");
     MigrationRunner::new(&database)
@@ -875,4 +879,165 @@ async fn prepared_routing_row_persists_multi_exclusion_and_score_facts() {
             .expect("score serializes")
     );
     fixture.database.close().await.expect("database closes");
+}
+
+#[tokio::test]
+async fn file_backed_cached_publication_rows_match_a_second_execution() {
+    let directory = tempfile::tempdir().expect("file-backed database directory");
+    let config = DatabaseConfig {
+        path: directory
+            .path()
+            .join("publication.sqlite")
+            .display()
+            .to_string(),
+        ..DatabaseConfig::default()
+    };
+    let fixture = open_fixture(config).await;
+    fixture
+        .database
+        .call(|connection| {
+            connection.execute(
+                "INSERT INTO users (id, username, normalized_username, role, password_hash) \
+                 VALUES ('admin-a', 'admin-a', 'admin-a', 'admin', 'hash')",
+                [],
+            )?;
+            connection.execute(
+                "INSERT INTO users (id, username, normalized_username, role, password_hash) \
+                 VALUES ('user-a', 'user-a', 'user-a', 'member', 'hash')",
+                [],
+            )?;
+            connection.execute(
+                "INSERT INTO user_credentials (id, user_id, label, selector, digest) \
+                 VALUES ('credential-a', 'user-a', 'test', 'credential-a', 'digest')",
+                [],
+            )?;
+            Ok(())
+        })
+        .await
+        .expect("users insert");
+    eggpool::user_budget::UserBudgetService::new(fixture.database.clone())
+        .set_rule(
+            "admin-a",
+            "user-a",
+            None,
+            eggpool::user_budget::BudgetWindow::Day,
+            eggpool::user_budget::BudgetLimits {
+                requests: Some(10),
+                ..eggpool::user_budget::BudgetLimits::default()
+            },
+        )
+        .await
+        .expect("budget rule");
+    let service = PublicationService::new(fixture.database.clone());
+    let attribution = AuthenticatedPrincipal {
+        user_id: Some("user-a".into()),
+        credential_id: Some("credential-a".into()),
+        role: Some("agent".into()),
+        scopes: vec!["inference".into()],
+        auth_epoch: Some(1),
+        kind: PrincipalKind::AgentToken,
+    }
+    .request_attribution();
+    for proxy_request_id in ["proxy-parity-a", "proxy-parity-b"] {
+        let mut publication = input(1);
+        publication.proxy_request_id = proxy_request_id.into();
+        let outcome = service
+            .publish_attributed(
+                claim(&fixture).await,
+                publication,
+                Some(attribution.clone()),
+            )
+            .await
+            .expect("publication succeeds");
+        let PublicationOutcome::Published(published) = outcome else {
+            panic!("expected a new publication");
+        };
+        published
+            .claim
+            .release_active_claim()
+            .expect("claim releases");
+    }
+    let rows = fixture
+        .database
+        .call(|connection| {
+            let direct_name: String = connection.query_row(
+                "SELECT name FROM accounts WHERE id = ?1",
+                [1_i64],
+                |row| row.get(0),
+            )?;
+            let cached_name: String = connection
+                .prepare_cached("SELECT name FROM accounts WHERE id = ?1")?
+                .query_row([1_i64], |row| row.get(0))?;
+            assert_eq!(direct_name, cached_name);
+            Ok((
+                text_rows(
+                    connection,
+                    "SELECT account_id, model_id, provider_id, protocol, streamed, status, \
+                     reserved_microdollars, user_id, credential_id, auth_epoch, principal_kind, \
+                     request_kind FROM requests ORDER BY proxy_request_id",
+                )?,
+                text_rows(
+                    connection,
+                    "SELECT account_id, provider_id, model_id, protocol, streamed, attempt_number \
+                     FROM request_attempts ORDER BY id",
+                )?,
+                text_rows(
+                    connection,
+                    "SELECT account_id, model_id, reserved_microdollars, estimated_tokens, status \
+                     FROM reservations ORDER BY id",
+                )?,
+                text_rows(
+                    connection,
+                    "SELECT model_id, provider_id, protocol, selected_account_name, selected_tier, \
+                     eligible_count, scored_count, attempted_excluded_count \
+                     FROM routing_decisions ORDER BY id",
+                )?,
+                text_rows(
+                    connection,
+                    "SELECT user_id, model_id, held_tokens, held_microdollars, status, enforcement \
+                     FROM user_budget_reservations ORDER BY request_id",
+                )?,
+                connection.query_row(
+                    "SELECT COUNT(*) FROM instance_budget_reservations",
+                    [],
+                    |row| row.get::<_, i64>(0),
+                )?,
+            ))
+        })
+        .await
+        .expect("row comparison");
+    let (requests, attempts, reservations, decisions, budgets, instance_budgets) = rows;
+    assert_eq!(requests.len(), 2);
+    assert_eq!(requests[0], requests[1]);
+    assert_eq!(attempts.len(), 2);
+    assert_eq!(attempts[0], attempts[1]);
+    assert_eq!(reservations.len(), 2);
+    assert_eq!(reservations[0], reservations[1]);
+    assert_eq!(decisions.len(), 2);
+    assert_eq!(decisions[0], decisions[1]);
+    assert_eq!(
+        budgets.len(),
+        2,
+        "each attributed request holds a user budget"
+    );
+    assert_eq!(budgets[0], budgets[1]);
+    assert_eq!(instance_budgets, 0);
+    fixture.database.close().await.expect("database closes");
+}
+
+fn text_rows(
+    connection: &tokio_rusqlite::rusqlite::Connection,
+    sql: &str,
+) -> Result<Vec<Vec<String>>, tokio_rusqlite::rusqlite::Error> {
+    let mut statement = connection.prepare(sql)?;
+    let width = statement.column_count();
+    let rows = statement.query_map([], |row| {
+        let mut values = Vec::with_capacity(width);
+        for index in 0..width {
+            let value: tokio_rusqlite::rusqlite::types::Value = row.get(index)?;
+            values.push(format!("{value:?}"));
+        }
+        Ok(values)
+    })?;
+    rows.collect()
 }

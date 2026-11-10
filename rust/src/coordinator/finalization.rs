@@ -340,8 +340,8 @@ impl DurableFinalizer {
         let result = self.database.with_named_transaction(
             crate::db::TransactionKind::Finalization,
             move |connection| {
-            let request = connection
-                .query_row(
+            let request = crate::db::hot_statements::query_row(
+                connection,
                     "SELECT account_id, model_id, provider_id, protocol, streamed, status,
                             user_id, credential_id, auth_epoch, principal_kind, request_kind, parent_proxy_request_id
                      FROM requests WHERE id = ?1",
@@ -415,7 +415,7 @@ impl DurableFinalizer {
                     return Ok(TxnResult::Conflict(current));
                 }
                 if !request_terminal {
-                    let changed = connection.execute(
+                    let changed = crate::db::hot_statements::execute(connection,
                     "UPDATE requests SET status = ?1, completed_at = CURRENT_TIMESTAMP,
                          input_tokens = ?2, output_tokens = ?3, cost_microdollars = ?4,
                          status_code = ?5, error_class = ?6, error_detail = ?7,
@@ -483,8 +483,8 @@ impl DurableFinalizer {
                     )?;
                     request_transitioned = changed == 1;
                     if !request_transitioned {
-                        let observed: Option<String> = connection
-                            .query_row(
+                        let observed: Option<String> = crate::db::hot_statements::query_row(
+                            connection,
                                 "SELECT status FROM requests WHERE id = ?1",
                                 [identity.db_request_id],
                                 |row| row.get(0),
@@ -507,8 +507,8 @@ impl DurableFinalizer {
                 });
             }
 
-            let attempt = connection
-                .query_row(
+            let attempt = crate::db::hot_statements::query_row(
+                connection,
                     "SELECT request_id, account_id, provider_id, model_id, protocol,
                             completed_at, status_code, error_class
                      FROM request_attempts WHERE id = ?1",
@@ -554,7 +554,7 @@ impl DurableFinalizer {
                     reason: "terminal facts conflict".into(),
                 });
             }
-            let attempt_changed = connection.execute(
+            let attempt_changed = crate::db::hot_statements::execute(connection,
                 "UPDATE request_attempts SET completed_at = CURRENT_TIMESTAMP,
                  status_code = ?1, error_class = ?2, error_detail = ?3,
                  release_reason = ?4, bytes_received = ?5, bytes_emitted = ?6,
@@ -569,16 +569,16 @@ impl DurableFinalizer {
                 ],
             )?;
             if attempt_changed == 0 {
-                let still_terminal: Option<String> = connection
-                    .query_row("SELECT completed_at FROM request_attempts WHERE id = ?1", [identity.attempt_id], |row| row.get(0))
+                let still_terminal: Option<String> = crate::db::hot_statements::query_row(
+                    connection, "SELECT completed_at FROM request_attempts WHERE id = ?1", [identity.attempt_id], |row| row.get(0))
                     .optional()?;
                 if still_terminal.is_none() {
                     return Ok(TxnResult::Invariant { entity: "attempt", id: identity.attempt_id, reason: "zero-row attempt transition did not converge".into() });
                 }
             }
 
-            let reservation = connection
-                .query_row(
+            let reservation = crate::db::hot_statements::query_row(
+                connection,
                     "SELECT request_id, account_id, model_id, status FROM reservations WHERE id = ?1",
                     [identity.reservation_id],
                     |row| Ok((row.get::<_, i64>(0)?, row.get::<_, i64>(1)?, row.get::<_, String>(2)?, row.get::<_, String>(3)?)),
@@ -594,7 +594,7 @@ impl DurableFinalizer {
                 return Ok(TxnResult::Invariant { entity: "reservation", id: identity.reservation_id, reason: "identity relationship does not match".into() });
             }
             let reservation_changed = if reservation_status == "active" {
-                connection.execute(
+                crate::db::hot_statements::execute(connection,
                     "UPDATE reservations SET status = 'released', released_at = CURRENT_TIMESTAMP,
                      release_reason = ?1 WHERE id = ?2 AND status = 'active'",
                     tokio_rusqlite::rusqlite::params![data.release_reason.as_deref().unwrap_or("finalized"), identity.reservation_id],
@@ -605,7 +605,7 @@ impl DurableFinalizer {
                 return Ok(TxnResult::Invariant { entity: "reservation", id: identity.reservation_id, reason: "unknown terminal status".into() });
             };
             if reservation_changed == 0 && reservation_status == "active" {
-                let observed: Option<String> = connection.query_row("SELECT status FROM reservations WHERE id = ?1", [identity.reservation_id], |row| row.get(0)).optional()?;
+                let observed: Option<String> = crate::db::hot_statements::query_row(connection, "SELECT status FROM reservations WHERE id = ?1", [identity.reservation_id], |row| row.get(0)).optional()?;
                 if !matches!(observed.as_deref(), Some("released" | "expired")) {
                     return Ok(TxnResult::Invariant { entity: "reservation", id: identity.reservation_id, reason: "zero-row reservation transition did not converge".into() });
                 }
