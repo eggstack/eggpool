@@ -96,7 +96,7 @@ No new runtime, schema or performance claim lands with these plans.
 | Provider profile metadata planning/documentation reconciliation | closed | `plans/subsystems/provider-profile-metadata-planning-reconciliation-corrective-roadmap.md` | C001 closed — closed-roadmap/source-truth reconciliation | No successor registered. |
 | Shared provider profile contract | closed | `plans/subsystems/shared-provider-profile-contract-roadmap.md` | M002 closed — OpenCode Go wire hints for the current first-party endpoint table | M001 and M002 closed; the roadmap re-opened on evidence and closed again on the same evidence. The four placed-but-unhinted models now resolve on their reviewed surfaces — `beam-free`, `minimax-m3.1-flash-free` and `step-5-preview` on Chat Completions, `claude-haiku-5-5` on Anthropic Messages. `gemini-4-argon-contributor` and the five unplaced catalog ids stay unresolved. The six entries the current table no longer places keep their hints with a recorded disposition, and a drift guard compares the wire map, the reviewed record and a dated catalog snapshot, failing closed on an unexplained delta. CodeGG consumption of M001 remains unblocked at immutable revision `9ac6a131`; CodeGG consumption of M002 is pinned to the M002 closure revision. `longcat-2.5-preview-free` stays withdrawn upstream and is not M002's to restore. |
 | Routing selection | active | `plans/subsystems/routing-selection-roadmap.md` | M009 closed — health effect ownership and terminal-withdrawal producer retirement | Reopened on evidence at baseline `e6822d8f78`: M001–M003 remain closed. M004, M005, and M006 are closed through M007. M008 is closed through `plans/closure/routing-selection/008-status.md`. M009 is closed through `plans/closure/routing-selection/009-status.md`. No further milestone is registered in this subsystem. |
-| Runtime efficiency | closed | `plans/subsystems/runtime-efficiency-roadmap.md` | M001–M003 closed — no successor registered | No M003-dependent plan was unblocked. Persistence M007 has since completed Pi 5/MMC qualification and was rejected on WAL convergence gates; production is unchanged. |
+| Runtime efficiency | closed | `plans/subsystems/runtime-efficiency-roadmap.md` | M004 closed — behavior-identical request-path cost removal; policy revision probe declined | M001–M004 closed. No successor is registered. `eggpool users` can commit a policy revision while `serve` is running, so the per-request revision read stays. Persistence M007 remains rejected; production storage is unchanged. |
 | Persistence | active | `plans/subsystems/persistence-roadmap.md` | M011 closed — post-M010 roadmap/documentation reconciliation | M009/M010 closures accepted. Documentation/tooling-only corrective; production remains WAL/NORMAL. No technical persistence successor is registered. |
 | Deployment and packaging | active | `plans/subsystems/deployment-packaging-roadmap.md` | M008 and M009 closed | M009 resolves audited dependencies and adapts bounded backup member-name parsing; serial suites and locked release build passed. |
 | Dashboard | closed | `plans/subsystems/dashboard-roadmap.md` | M014 closed — operator surface presentation and accessibility corrective | Reopened on evidence at baseline `e6822d8f78`: M001–M013 remain closed. M014 is closed; the paired browser disposition needs the frozen oracle worktree and a browser, and the stale on-prem browser reference artifact has to be regenerated on hardware. |
@@ -308,6 +308,12 @@ record is `plans/closure/deployment-packaging/008-status.md`.
 | Subsystem | Milestone | Status | Implementation plan | Dependencies / handoff note |
 |---|---|---|---|---|
 
+Runtime efficiency M004 closure audit: searched the runtime-efficiency roadmap,
+`plans/implementation/runtime-efficiency/`, and the ready, active, and blocked
+registry tables. M004 has no registered successor and no other plan was blocked
+on it. Nothing is promoted. The persistence checkpoint tail stays owned by the
+persistence roadmap.
+
 ## Active implementation plans
 
 | Subsystem | Milestone | Status | Implementation plan | Handoff note |
@@ -350,6 +356,7 @@ Historical M007 blocker assessment at baseline `7e241ad` (`plans/closure/persist
 ## Recently closed
 
 | Subsystem / plan | Disposition | Evidence |
+| Runtime Efficiency M004 — behavior-identical request-path cost removal | closed — borrowed provider-model lookup, bounded statement cache on the existing worker, and off-thread admission parse; the policy revision probe is declined because `eggpool users` can commit a revision while `serve` is running; default and no-default serial suites, strict Clippy, and the locked release build pass; no latency claim | `plans/closure/runtime-efficiency/004-status.md`, implementation `6464060e` |
 | Tool Integration M004 — Finite hosted tool orchestration | conditionally closed — deterministic flow, authorization, cancellation, result bounds, and default/no-default suites pass; live Ollama with local MCP fixture completed two model turns and one tool call in 40.95s and 65.54s; Eggsearch-backed hosted trace and physical SBC footprint evidence remain | `plans/closure/tool-integration/004-status.md`, implementation `5451be62` |
 | Embedding Routing E001 — OpenAI-compatible embeddings | conditionally closed — explicit configured embedding eligibility, shared coordinator admission/accounting, deterministic and live Ollama compatibility, and default/no-default suites pass; physical SBC footprint evidence remains | `plans/closure/embedding-routing/001-status.md`, implementation `088a1379` |
 | Embedding Routing E002 — PrivateGPT base64 client compatibility | closed — sanitized captured request is supported; unsupported encodings fail before upstream submission; full serial suites, dependency audit, strict CI and locked release build pass | `plans/closure/embedding-routing/002-status.md`, implementation `73eac4c6` |

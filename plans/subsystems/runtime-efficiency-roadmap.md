@@ -111,8 +111,11 @@ work and all reads occupy the serialized database worker/gate.
 - A future active-request snapshot/claim-book optimization remains deferred:
   changing that boundary can alter lock tenure/order and requires dedicated
   contention evidence.
+- M004 has no hard dependency. It consumes the closed M001–M003 contracts
+  and the current admission, catalog, publication, finalization, and model-policy
+  owners. It may land only changes whose observable results match the baseline.
 - A future Tokio multi-thread, stream-bridge, routing-lock, or dashboard
-  read-connection change remains deferred and requires a new plan.
+  read-connection change remains deferred and is not authorized by M004.
 
 ## 6. Milestones
 
@@ -195,10 +198,69 @@ Exit conditions:
   production SQLite-topology change is introduced;
 - if evidence is weak, M003 closes with a documented keep decision.
 
+### Milestone 004 — Behavior-identical request-path cost removal
+
+Class: polish. Status: closed.
+
+Implementation plan:
+
+- `plans/implementation/runtime-efficiency/004-behavior-identical-request-path-cost-removal.md`
+
+Closure record:
+
+- `plans/closure/runtime-efficiency/004-status.md`
+
+Objective:
+
+Remove request-path CPU and gate acquisitions that the baseline repeats
+without changing any client, routing, policy, budget, or accounting result.
+A change that cannot be shown equivalent to the baseline is not landed.
+
+Dependencies:
+
+- Hard: none. M001–M003 are closed and are not reopened.
+- The single SQLite gate, WAL/NORMAL, `current_thread` runtime, routing
+  selection lock, and streaming handoff stay as specified in
+  `plans/000-long-term-specification.md#5-performance-posture`.
+
+Deliverable boundary:
+
+- `rust/src/catalog/cache.rs` borrowed provider-model lookup.
+- Statement preparation inside the existing publication and finalization
+  transactions, including the budget SQL those transactions already run.
+- `rust/src/model_policy.rs` per-request revision probe, and only when every
+  revision writer in this process publishes the committed revision.
+- Admission parsing moved off the runtime thread only when admission results
+  stay identical.
+
+User or operator value:
+
+Identical responses, with less avoidable work on the inference path. No new
+capacity claim and no change to the known storage tail.
+
+Exit conditions:
+
+- Selected account, exclusions, scores, publication rows, finalization rows,
+  budget holds, policy allow/deny, admission errors, and HTTP status match
+  the baseline for the required parity tests.
+- Finite success is still withheld until durable finalization succeeds.
+- No schema, config, protocol, or public API change.
+- The policy revision probe is either replaced by a coherent in-process
+  revision or explicitly declined with the unhooked writer named.
+- Default and `--no-default-features` suites pass.
+
+Deferred work:
+
+Returning a finite body before finalization commits. Narrowing the selection
+candidate set. Skipping budget SQL when no rules are cached. A second SQLite
+connection. Multi-thread Tokio. Removing the selection lock or the streaming
+bridge. Checkpoint or journal-mode experiments.
+
 ## 7. Cross-cutting requirements
 
 Storage/migration: M001/M002 require no migration. M003 is query-only; if a new
 index/schema change proves necessary, stop and open a separate migration plan.
+M004 requires no migration and no journal, checkpoint, or connection change.
 
 Protocol/API: no HTTP, CLI, config, provider, wire, or public Rust API removal
 or incompatible signature change.
@@ -206,7 +268,9 @@ or incompatible signature change.
 Concurrency: borrowing introduced by M001 must end before provider I/O awaits.
 M002 projections must be constructed under existing short synchronous locks and
 owned before async persistence. M003 must not bypass the database gate or add a
-read connection.
+read connection. M004 may shorten time spent on the existing gate. It may not
+take a second connection, skip a budget or publication statement, or return a
+finite provider body before finalization commits.
 
 Security: performance evidence is aggregate/structural only. Do not record
 credentials, prompts, raw bodies, account/provider names from real
@@ -215,7 +279,7 @@ configurations, or database paths.
 Performance evidence: source-proven allocation/complexity removal is sufficient
 for M001/M002 when semantic parity is exhaustive. M003 requires file-backed
 measurement because its value depends on SQLite query planning and history
-size. None of these milestones may claim target-class elimination of the
+size. M004 uses exhaustive parity tests rather than a new benchmark. None of these milestones may claim target-class elimination of the
 known persistence tail without the M007 physical corpus.
 
 ## 8. Verification strategy
@@ -246,14 +310,23 @@ change is expected.
   work is outside M003.
 - If any proposed improvement changes public API or durable concurrency
   ownership, stop and re-plan rather than widening these milestones.
+- M004 must not treat a faster policy cache as equivalent until every
+  `policy_state.revision` writer in the running process publishes the
+  committed revision. A missed trigger is a stale allow/deny and is a failed
+  milestone, not a follow-up.
+- M004 must not encode two catalog ids into one lookup string. A separator
+  that can appear in an id changes which model is selected.
 
 ## 10. Completion definition
 
-This roadmap is closed: M001–M003 each have accepted closure records. Closing
-this roadmap did not close or modify persistence M007. M007 subsequently
-completed its separate Pi 5/MMC evidence gate and was rejected; the known
-foreground SQLite checkpoint tail therefore remains owned by the active
-persistence roadmap and requires a new bounded successor design.
+This roadmap is closed. M001–M004 each have accepted closure records. M004
+landed the borrowed catalog lookup, the bounded publication and finalization
+statement cache, and the off-thread admission parse. It declined the
+process-local policy revision because `serve` can observe a revision committed
+by `eggpool users`. Closing M001–M003 did not close or modify persistence M007.
+M007 subsequently completed its separate Pi 5/MMC evidence gate and was
+rejected; the known foreground SQLite checkpoint tail therefore remains owned
+by the active persistence roadmap. M004 does not claim to remove that tail.
 
 ## 11. Milestone status
 
@@ -261,4 +334,5 @@ persistence roadmap and requires a new bounded successor design.
 |---|---|---|---|---|
 | 001 — provider/wire-resolver hot-path ownership and cache cleanup | closed | `plans/implementation/runtime-efficiency/001-provider-wire-resolver-hotpath-cleanup.md` | `plans/closure/runtime-efficiency/001-status.md` | none; M002/M003 remain independently ready |
 | 002 — catalog refresh projection and lock-tenure cleanup | closed | `plans/implementation/runtime-efficiency/002-catalog-refresh-projection-lock-tenure-cleanup.md` | `plans/closure/runtime-efficiency/002-status.md` | none; M003 remains ready |
-| 003 — dashboard TTFT percentile query qualification and bounded rewrite | closed | `plans/implementation/runtime-efficiency/003-dashboard-ttft-percentile-query-qualification.md` | `plans/closure/runtime-efficiency/003-status.md` | none; no successor registered |
+| 003 — dashboard TTFT percentile query qualification and bounded rewrite | closed | `plans/implementation/runtime-efficiency/003-dashboard-ttft-percentile-query-qualification.md` | `plans/closure/runtime-efficiency/003-status.md` | none |
+| 004 — behavior-identical request-path cost removal | closed | `plans/implementation/runtime-efficiency/004-behavior-identical-request-path-cost-removal.md` | `plans/closure/runtime-efficiency/004-status.md` | none; policy revision probe declined |
