@@ -353,7 +353,7 @@ is the only persistence boundary. `db/` owns only the `backup_to` snapshot
 primitive; backup orchestration lives in `operations/backup.rs` and crash
 repair in `runtime_lifecycle/recovery.rs` plus coordinator reconciliation.
 Migrations (`rust/assets/db/migrations/`,
-currently v1–v65 with `checksums.json`) are embedded and immutable; commit or
+currently v1–v66 with `checksums.json`) are embedded and immutable; commit or
 ownership ambiguity fails closed; startup reconciliation repairs only covered
 states. Repositories accept no unbounded diagnostic content and never store
 credentials, prompts, raw bodies, or cache keys.

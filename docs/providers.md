@@ -73,6 +73,13 @@ eggpool connect list
 eggpool connect
 ```
 
+A granted member can add one bundled-provider account from My account, and an
+administrator can add one with `eggpool users upstream add`. The key is written
+only to the config-adjacent `.env` as `api_key_env`. SQLite stores the
+secret-free binding. The account is selectable only by that user. An account
+with no binding stays shared. Members cannot supply a URL, proxy, header, or
+weight. Amazon Bedrock is not a bundled provider and cannot be added this way.
+
 ### Manual Configuration
 
 Add a provider block to `config.toml`:

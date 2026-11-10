@@ -1747,3 +1747,99 @@ async fn backup_during_active_reservation_captures_hold_verbatim() {
     assert_eq!(hold_status(&reopened, request_id).await.0, "released");
     reopened.close().await.expect("restored database closes");
 }
+
+#[tokio::test]
+async fn usage_windows_are_not_added_and_remaining_subtracts_holds() {
+    let fixture = fixture().await;
+    fixture
+        .database
+        .call(|connection| {
+            connection.execute(
+                "INSERT INTO users(id, username, normalized_username, role, password_hash)
+                 VALUES ('budget-other', 'budget-other', 'budget-other', 'member', 'test-hash')",
+                [],
+            )?;
+            connection.execute(
+                "INSERT INTO user_budget_usage(
+                    user_id, model_id, window, window_start, request_count)
+                 VALUES ('budget-member', 'model-a', 'day', date('now'), 40),
+                        ('budget-member', 'model-a', 'month', strftime('%Y-%m-01', 'now'), 40),
+                        ('budget-member', 'model-a', 'day', '2000-01-01', 40),
+                        ('budget-other', 'model-a', 'day', date('now'), 99)",
+                [],
+            )?;
+            for _ in 0..10 {
+                connection.execute(
+                    "INSERT INTO requests(account_id, model_id, status) VALUES (1, 'model-a', 'pending')",
+                    [],
+                )?;
+                connection.execute(
+                    "INSERT INTO user_budget_reservations(
+                        request_id, user_id, model_id, policy_version, day_start, month_start,
+                        held_requests, held_tokens, held_microdollars, status, expires_at)
+                     VALUES (last_insert_rowid(), 'budget-member', 'model-a', 1, date('now'),
+                             strftime('%Y-%m-01', 'now'), 1, 0, 0, 'active', '2999-01-01')",
+                    [],
+                )?;
+            }
+            Ok(())
+        })
+        .await
+        .expect("usage fixture inserts");
+    let budgets = UserBudgetService::new(fixture.database.clone());
+    budgets
+        .set_rule(
+            "budget-admin",
+            "budget-member",
+            Some("model-a"),
+            BudgetWindow::Day,
+            BudgetLimits {
+                requests: Some(100),
+                tokens: None,
+                microdollars: None,
+                concurrent: None,
+                enforcement: BudgetEnforcement::Estimated,
+            },
+        )
+        .await
+        .expect("request ceiling is recorded");
+    let allowance = budgets
+        .current_allowance("budget-member")
+        .await
+        .expect("allowance reads");
+    assert_eq!(allowance.len(), 1);
+    assert_eq!(allowance[0].requests.settled, 40);
+    assert_eq!(allowance[0].requests.held, 10);
+    assert_eq!(allowance[0].requests.remaining, Some(50));
+    assert_eq!(allowance[0].tokens.ceiling, None);
+    assert_eq!(allowance[0].tokens.remaining, None);
+    let other = budgets
+        .current_allowance("budget-other")
+        .await
+        .expect("other allowance reads");
+    assert!(other.is_empty());
+    let snapshot = budgets
+        .admin_usage_by_window(500)
+        .await
+        .expect("admin windows read");
+    let current_day: i64 = snapshot
+        .rows
+        .iter()
+        .filter(|row| {
+            row.window == BudgetWindow::Day
+                && row.window_start == snapshot.day_start
+                && row.username == "budget-member"
+        })
+        .map(|row| row.request_count)
+        .sum();
+    let current_month: i64 = snapshot
+        .rows
+        .iter()
+        .filter(|row| row.window == BudgetWindow::Month && row.window_start == snapshot.month_start)
+        .map(|row| row.request_count)
+        .sum();
+    assert_eq!(current_day, 40);
+    assert_eq!(current_month, 40);
+    assert_ne!(current_day + current_month, current_day);
+    fixture.database.close().await.unwrap();
+}

@@ -1345,6 +1345,7 @@ pub async fn execute_stream(
 /// account registry from durable accounts, and wires the finite/streaming
 /// coordinators with the configured retry budget. Failures to resolve
 /// provider wire profiles are fail-closed.
+#[allow(clippy::too_many_arguments)]
 pub(crate) async fn build_inference_state_with_shared(
     config: &Config,
     database: &Database,
@@ -1353,6 +1354,7 @@ pub(crate) async fn build_inference_state_with_shared(
     affinity: Arc<ModelRouterAffinity>,
     model_registry: ModelRouterRegistry,
     provider_profiles: BTreeMap<String, Vec<ConfiguredWireProfile>>,
+    config_path: Option<&std::path::Path>,
 ) -> Result<InferenceState, String> {
     build_inference_state_with_shared_and_accounts(
         config,
@@ -1363,6 +1365,7 @@ pub(crate) async fn build_inference_state_with_shared(
         model_registry,
         provider_profiles,
         None,
+        config_path,
     )
     .await
 }
@@ -1381,8 +1384,9 @@ pub(crate) async fn build_inference_state_with_shared_and_accounts(
     model_registry: ModelRouterRegistry,
     provider_profiles: BTreeMap<String, Vec<ConfiguredWireProfile>>,
     durable_accounts_override: Option<Vec<Account>>,
+    config_path: Option<&std::path::Path>,
 ) -> Result<InferenceState, String> {
-    let credentials = CredentialStore::from_config(config);
+    let credentials = CredentialStore::from_config_near(config, config_path);
     let durable_accounts: Vec<Account> = match durable_accounts_override {
         Some(accounts) => accounts,
         None => database
@@ -1534,6 +1538,9 @@ pub(crate) async fn build_inference_state_with_shared_and_accounts(
     )
     .await
     .map_err(|error| format!("durable health hydration failed: {error}"))?;
+    let personal_bindings = crate::personal_upstream::load_snapshot(database)
+        .await
+        .map_err(|error| format!("personal upstream snapshot failed: {error}"))?;
     let router = RoutingRouter::with_shared_catalog(
         registry,
         shared_catalog,
@@ -1541,6 +1548,7 @@ pub(crate) async fn build_inference_state_with_shared_and_accounts(
         Some(health),
         EligibilityPolicy::from_config(config),
     )
+    .with_personal_bindings(personal_bindings)
     .with_quarantine(quarantine)
     .with_durable_health(DurableHealth::new(
         backoff_repository,

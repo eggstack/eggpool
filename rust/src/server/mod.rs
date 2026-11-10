@@ -16,15 +16,16 @@ use auth::{
     account_page, login_page, login_submit, logout_submit, member_landing_page, password_change,
 };
 use dashboard::{
-    accounts_page, assign_user_profile, audit_export, audit_page, bandwidth_page, cache_page,
-    create_personal_token, create_profile, create_user, delete_profile, events_page,
-    grouped_timeseries_api, issue_admin_token, latency_page, model_detail_page, models_page,
-    my_account_page, my_models_page, overview, pings_page, profiles_page, reliability_page,
-    remove_instance_budget, remove_profile_rule, remove_user_override, reset_user_password,
-    revoke_personal_token, revoke_user_tokens, routing_page, runtime_page,
-    set_default_member_profile, set_instance_budget, set_profile_preference, set_profile_rule,
-    set_user_budget, set_user_override, set_user_state, static_chart_js, static_css,
-    static_favicon, static_js, stats_cache_observability, stats_cache_stability,
+    accounts_page, add_member_upstream, assign_user_profile, audit_export, audit_page,
+    bandwidth_page, cache_page, create_personal_token, create_profile, create_user, delete_profile,
+    events_page, grouped_timeseries_api, issue_admin_token, latency_page, model_detail_page,
+    models_page, my_account_page, my_models_page, overview, pings_page, profiles_page,
+    reliability_page, remove_instance_budget, remove_member_upstream, remove_profile_rule,
+    remove_upstream_account, remove_user_override, reset_user_password, revoke_personal_token,
+    revoke_user_tokens, routing_page, runtime_page, set_default_member_profile,
+    set_instance_budget, set_profile_preference, set_profile_rule, set_upstream_default,
+    set_upstream_grant, set_user_budget, set_user_override, set_user_state, static_chart_js,
+    static_css, static_favicon, static_js, stats_cache_observability, stats_cache_stability,
     stats_request_segmentation, stats_request_shaping, stats_transcoding, summary, sync_accounts,
     theme_css, timeseries_api, timeseries_page, traces_page, update_profile, usage_page,
     users_page,
@@ -715,6 +716,12 @@ pub struct AppState {
 }
 
 impl AppState {
+    pub(crate) fn config_path(&self) -> Option<&std::path::Path> {
+        self.process
+            .as_ref()
+            .and_then(|process| process.config_path())
+    }
+
     /// Construct router state around an already published manager. This is
     /// intended for embedded/test callers; production startup constructs the
     /// manager in `run_with_digest` before creating `ServerRuntime`.
@@ -1236,6 +1243,14 @@ pub fn build_router(state: AppState) -> Router {
             .route("/admin/users/override", post(set_user_override))
             .route("/admin/users/override/remove", post(remove_user_override))
             .route("/admin/users/budget", post(set_user_budget))
+            .route("/admin/users/upstream/default", post(set_upstream_default))
+            .route("/admin/users/upstream/grant", post(set_upstream_grant))
+            .route(
+                "/admin/users/upstream/remove",
+                post(remove_upstream_account),
+            )
+            .route("/my-account/upstreams", post(add_member_upstream))
+            .route("/my-account/upstreams/remove", post(remove_member_upstream))
             .route("/admin/budget/instance", post(set_instance_budget))
             .route(
                 "/admin/budget/instance/remove",

@@ -667,6 +667,7 @@ impl RuntimeGenerationFactory {
                     model_registry,
                     provider_profiles,
                     Some(accounts),
+                    process.config_path(),
                 )
                 .await
             }
@@ -679,6 +680,7 @@ impl RuntimeGenerationFactory {
                     affinity,
                     model_registry,
                     provider_profiles,
+                    process.config_path(),
                 )
                 .await
             }

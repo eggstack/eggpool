@@ -226,3 +226,160 @@ async fn password_reset_revokes_api_credentials_and_rejects_bad_passwords() {
     );
     database.close().await.unwrap();
 }
+
+#[tokio::test]
+async fn personal_upstream_grant_defaults_to_deny_and_a_failed_publish_is_not_shared() {
+    let database = database().await;
+    identity::mark_fresh_uninitialized(&database).await.unwrap();
+    let (admin, _) = identity::bootstrap_admin(&database, "admin", "correct horse battery staple")
+        .await
+        .unwrap();
+    let member = identity::create_member(
+        &database,
+        &admin.id,
+        "member",
+        "temporary member password 123",
+    )
+    .await
+    .unwrap();
+    assert_eq!(
+        eggpool::personal_upstream::instance_grant(&database)
+            .await
+            .unwrap(),
+        eggpool::personal_upstream::GrantEffect::Deny
+    );
+    assert_eq!(
+        eggpool::personal_upstream::effective_grant(&database, &member.id)
+            .await
+            .unwrap(),
+        eggpool::personal_upstream::GrantEffect::Deny
+    );
+    let directory = std::env::temp_dir().join(format!(
+        "eggpool-upstream-{}-{}",
+        std::process::id(),
+        std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .as_nanos()
+    ));
+    std::fs::create_dir_all(&directory).unwrap();
+    let config_path = directory.join("config.toml");
+    let env_path = directory.join(".env");
+    let original = include_str!("../config.example.toml");
+    std::fs::write(&config_path, original).unwrap();
+    let secret = "sk-personal-sentinel-value";
+    let failed = eggpool::personal_upstream::add_personal_account_publishing(
+        &database,
+        eggpool::personal_upstream::PersonalAccountWrite {
+            actor_id: &admin.id,
+            user_id: &member.id,
+            provider_id: "opencode-go",
+            account_name: "personal-go",
+            secret,
+            config_path: &config_path,
+            env_path: &env_path,
+            require_self_service: false,
+        },
+        eggpool::personal_upstream::PublishMode::Fail,
+    )
+    .await;
+    assert!(
+        matches!(
+            failed,
+            Err(eggpool::personal_upstream::PersonalUpstreamError::PublicationRestored)
+        ),
+        "{failed:?}"
+    );
+    assert_eq!(std::fs::read_to_string(&config_path).unwrap(), original);
+    assert!(!env_path.exists());
+    assert!(
+        eggpool::personal_upstream::list_bindings(&database, None)
+            .await
+            .unwrap()
+            .is_empty()
+    );
+
+    eggpool::personal_upstream::add_personal_account(
+        &database,
+        eggpool::personal_upstream::PersonalAccountWrite {
+            actor_id: &admin.id,
+            user_id: &member.id,
+            provider_id: "opencode-go",
+            account_name: "personal-go",
+            secret,
+            config_path: &config_path,
+            env_path: &env_path,
+            require_self_service: false,
+        },
+    )
+    .await
+    .expect("personal account publishes when the server is not running");
+    let config_text = std::fs::read_to_string(&config_path).unwrap();
+    let env_text = std::fs::read_to_string(&env_path).unwrap();
+    assert!(env_text.contains(secret));
+    assert!(!config_text.contains(secret));
+    assert!(config_text.contains("EGGPOOL_UPSTREAM_"));
+    let stored = database
+        .call(|connection| {
+            let grants: String = connection.query_row(
+                "SELECT group_concat(effect, ' ') FROM personal_upstream_grants",
+                [],
+                |row| row.get(0),
+            )?;
+            let bindings: String = connection.query_row(
+                "SELECT group_concat(provider_id || ' ' || account_name || ' ' || user_id || ' ' || state, ' ')
+                 FROM personal_upstream_bindings",
+                [],
+                |row| row.get(0),
+            )?;
+            let audit: String = connection.query_row(
+                "SELECT group_concat(action || ' ' || target_id, ' ') FROM user_admin_audit",
+                [],
+                |row| row.get(0),
+            )?;
+            Ok(format!("{grants} {bindings} {audit}"))
+        })
+        .await
+        .unwrap();
+    assert!(!stored.contains(secret));
+    let snapshot = eggpool::personal_upstream::load_snapshot(&database)
+        .await
+        .unwrap();
+    assert!(!snapshot.excludes("opencode-go", "personal-go", Some(&member.id)));
+    assert!(snapshot.excludes("opencode-go", "personal-go", Some("other-user")));
+    assert!(snapshot.excludes("opencode-go", "personal-go", None));
+    let collision = eggpool::personal_upstream::add_personal_account(
+        &database,
+        eggpool::personal_upstream::PersonalAccountWrite {
+            actor_id: &admin.id,
+            user_id: &member.id,
+            provider_id: "opencode-go",
+            account_name: "personal-go",
+            secret,
+            config_path: &config_path,
+            env_path: &env_path,
+            require_self_service: false,
+        },
+    )
+    .await;
+    assert!(matches!(
+        collision,
+        Err(eggpool::personal_upstream::PersonalUpstreamError::NameCollision)
+    ));
+    identity::set_user_enabled(&database, &admin.id, &member.id, false)
+        .await
+        .unwrap();
+    let withdrawn = eggpool::personal_upstream::load_snapshot(&database)
+        .await
+        .unwrap();
+    assert!(withdrawn.excludes("opencode-go", "personal-go", Some(&member.id)));
+    identity::set_user_enabled(&database, &admin.id, &member.id, true)
+        .await
+        .unwrap();
+    let still_withdrawn = eggpool::personal_upstream::load_snapshot(&database)
+        .await
+        .unwrap();
+    assert!(still_withdrawn.excludes("opencode-go", "personal-go", Some(&member.id)));
+    let _ = std::fs::remove_dir_all(&directory);
+    database.close().await.unwrap();
+}

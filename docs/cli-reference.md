@@ -70,12 +70,17 @@ The same fields are available to an administrator browser session at
 | `eggpool users defaults clear` | Remove the default; future unassigned members remain deny-by-default |
 | `eggpool users show USER` | Show one user's role, state and forced-password-change status without secrets |
 | `eggpool users list` | List local usernames, role and status |
-| `eggpool users disable USER` | Disable a user and revoke their sessions and personal tokens |
-| `eggpool users enable USER` | Reactivate a user; previously revoked tokens remain revoked |
+| `eggpool users disable USER` | Disable a user, revoke their sessions and personal tokens, and withdraw that user's personal upstream accounts |
+| `eggpool users enable USER` | Reactivate a user; previously revoked tokens and withdrawn personal accounts stay withdrawn |
 | `eggpool users token USER` | Issue a personal inference, discovery, and integrations token (`--label` optional; `--show-secret` allows non-TTY output). Tool-execution scopes are not issued |
 | `eggpool users revoke USER` | Revoke all personal API tokens for a user |
 | `eggpool users reset-password USER` | Reset a local password and revoke that user's API tokens and browser sessions (`--password-stdin` supported) |
 | `eggpool users enable-managed` | Explicitly record managed access (`--actor ADMIN`, default `admin`); works even when retired legacy settings remain |
+| `eggpool users upstream default allow\|deny` | Set the instance personal-upstream self-service default. A fresh database denies it |
+| `eggpool users upstream grant USER allow\|deny\|inherit` | Set one user's self-service grant. Deny does not withdraw an account that is already bound |
+| `eggpool users upstream add USER --provider ID --name ACCOUNT` | Bind a bundled-provider account to that user. The key comes from a TTY prompt or `--secret-stdin` and is written only to the config-adjacent `.env` |
+| `eggpool users upstream list [USER]` | List personal bindings: user, provider, account, state, and environment-variable name. The key is not shown |
+| `eggpool users upstream remove USER --provider ID --name ACCOUNT` | Withdraw the binding and remove the account from `config.toml` and `.env` |
 | `eggpool users policy create ID NAME allow\|deny` | Create an exact-rule model profile |
 | `eggpool users policy rule PROFILE MODEL allow\|deny` | Add or replace one exact model or `model/provider` rule |
 | `eggpool users policy assign USER PROFILE` | Assign a profile to a local user |

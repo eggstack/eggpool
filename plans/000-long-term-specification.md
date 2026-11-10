@@ -41,9 +41,13 @@ simultaneous generations; any team throughput/concurrency claim requires
 representative ordinary-server hardware, workload and storage measurements.
 This is not a SaaS, enterprise IAM, or multi-organization hosting product.
 Provider topology, upstream credentials, and routing configuration remain in
-operator-owned TOML/environment files; human identity, access profiles,
+operator-owned TOML/environment files. A member whose personal-upstream grant
+allows it may submit one bundled-provider secret through the server process;
+the process writes that secret only to the operator environment file, and
+SQLite stores the secret-free binding. Human identity, access profiles,
 sessions, individual credentials, user quotas, and usage statistics belong in
-SQLite. See accepted `plans/adrs/ADR-0002-on-prem-user-identity-and-policy-boundaries.md`.
+SQLite. See accepted `plans/adrs/ADR-0002-on-prem-user-identity-and-policy-boundaries.md`
+and accepted `plans/adrs/ADR-0010-personal-upstream-account-custody.md`.
 
 ## 2. End-state invariants (normative)
 
@@ -111,9 +115,11 @@ SQLite. See accepted `plans/adrs/ADR-0002-on-prem-user-identity-and-policy-bound
   admission representation internally.
 
 - Upstream `accounts` and account quotas describe provider credentials/capacity,
-  never downstream people. Durable human identities, policy versions, browser
-  sessions, client credentials, and user usage are separate database-owned facts.
-  Provider TOML and local admin access must not be writable by ordinary users.
+  never downstream people. A separate personal-upstream binding may restrict
+  which principal can select an account. Durable human identities, policy
+  versions, browser sessions, client credentials, and user usage are separate
+  database-owned facts. Ordinary users still cannot write provider TOML or
+  the environment file directly.
 
 ## 4. Protocol and compatibility
 

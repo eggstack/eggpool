@@ -6,8 +6,6 @@ use axum::{
     response::Redirect,
 };
 use serde::Deserialize;
-use tokio_rusqlite::rusqlite::params;
-
 #[derive(Deserialize)]
 pub(in crate::server) struct CreateUserForm {
     username: String,
@@ -156,6 +154,42 @@ pub(in crate::server) struct AdminRevokeTokensForm {
     csrf: String,
 }
 
+#[derive(Deserialize)]
+pub(in crate::server) struct UpstreamDefaultForm {
+    effect: String,
+    csrf: String,
+}
+
+#[derive(Deserialize)]
+pub(in crate::server) struct UpstreamGrantForm {
+    user_id: String,
+    effect: String,
+    csrf: String,
+}
+
+#[derive(Deserialize)]
+pub(in crate::server) struct UpstreamRemoveForm {
+    user_id: String,
+    provider: String,
+    name: String,
+    csrf: String,
+}
+
+#[derive(Deserialize)]
+pub(in crate::server) struct MemberUpstreamForm {
+    provider: String,
+    name: String,
+    secret: String,
+    csrf: String,
+}
+
+#[derive(Deserialize)]
+pub(in crate::server) struct MemberUpstreamRemoveForm {
+    provider: String,
+    name: String,
+    csrf: String,
+}
+
 fn csrf_valid(
     session: &crate::web_session::Principal,
     headers: &HeaderMap,
@@ -214,6 +248,20 @@ fn one_time_token_page(
     response
 }
 
+fn account_page_for_role(
+    role: &str,
+    title: &str,
+    active_nav: &str,
+    theme: &str,
+    body: &str,
+) -> String {
+    if role == "admin" {
+        dashboard_standalone_page(title, active_nav, theme, body)
+    } else {
+        member_standalone_page(title, active_nav, theme, body)
+    }
+}
+
 pub(in crate::server) async fn users_page(
     State(state): State<AppState>,
     Extension(session): Extension<crate::web_session::Principal>,
@@ -239,7 +287,70 @@ pub(in crate::server) async fn users_page(
             Ok(rules) => rules,
             Err(_) => return degraded("user administration unavailable"),
         };
-    let body = render_users_admin(&users, &profiles, &instance_rules, &csrf);
+    let assignments = match policy.list_profile_assignments().await {
+        Ok(assignments) => assignments,
+        Err(_) => return degraded("user administration unavailable"),
+    };
+    let overrides = match policy.list_user_overrides().await {
+        Ok(overrides) => overrides,
+        Err(_) => return degraded("user administration unavailable"),
+    };
+    let budgets = crate::user_budget::UserBudgetService::new(state.database.clone());
+    let mut facts = std::collections::BTreeMap::new();
+    for user in &users {
+        let rules = match budgets.rules(&user.id).await {
+            Ok(rules) => rules,
+            Err(_) => return degraded("user administration unavailable"),
+        };
+        let credentials =
+            match crate::identity::list_user_credentials(&state.database, &user.id).await {
+                Ok(credentials) => credentials,
+                Err(_) => return degraded("user administration unavailable"),
+            };
+        let upstream_grant =
+            match crate::personal_upstream::stored_user_grant(&state.database, &user.id).await {
+                Ok(effect) => effect.as_str().to_owned(),
+                Err(_) => return degraded("user administration unavailable"),
+            };
+        let upstreams =
+            match crate::personal_upstream::list_bindings(&state.database, Some(&user.id)).await {
+                Ok(bindings) => bindings
+                    .into_iter()
+                    .map(|binding| (binding.provider_id, binding.account_name, binding.state))
+                    .collect(),
+                Err(_) => return degraded("user administration unavailable"),
+            };
+        facts.insert(
+            user.id.clone(),
+            UserAdminFacts {
+                profile_id: assignments
+                    .iter()
+                    .find(|(user_id, _)| user_id == &user.id)
+                    .map(|(_, profile_id)| profile_id.clone()),
+                overrides: overrides
+                    .iter()
+                    .filter(|(user_id, _, _)| user_id == &user.id)
+                    .map(|(_, model_id, effect)| (model_id.clone(), effect.clone()))
+                    .collect(),
+                rules,
+                credentials,
+                upstream_grant,
+                upstreams,
+            },
+        );
+    }
+    let instance_grant = match crate::personal_upstream::instance_grant(&state.database).await {
+        Ok(effect) => effect.as_str().to_owned(),
+        Err(_) => return degraded("user administration unavailable"),
+    };
+    let body = render_users_admin(
+        &users,
+        &profiles,
+        &instance_rules,
+        &facts,
+        &csrf,
+        &instance_grant,
+    );
     dashboard_page_with_body(
         &state.server.dashboard_theme,
         "Users",
@@ -310,42 +421,43 @@ pub(in crate::server) async fn usage_page(
             Ok(rules) => rules,
             Err(_) => return degraded("usage unavailable"),
         };
-        let rows = match crate::user_budget::UserBudgetService::new(state.database.clone())
+        let budgets = crate::user_budget::UserBudgetService::new(state.database.clone());
+        let rows = match budgets
             .usage(user_id, "0000-01-01", USAGE_ROW_CAP as u16)
             .await
         {
             Ok(rows) => rows,
             Err(_) => return degraded("usage unavailable"),
         };
-        return html_response(render_my_usage(&session.username, &rules, &rows, theme));
+        let allowance = match budgets.current_allowance(user_id).await {
+            Ok(allowance) => allowance,
+            Err(_) => return degraded("usage unavailable"),
+        };
+        let instance_rules =
+            match crate::instance_budget::InstanceBudgetService::new(state.database.clone())
+                .rules()
+                .await
+            {
+                Ok(rules) => rules,
+                Err(_) => return degraded("usage unavailable"),
+            };
+        return html_response(render_my_usage(
+            &session.username,
+            &rules,
+            &rows,
+            &allowance,
+            &instance_rules,
+            theme,
+        ));
     }
-    let rows = match state
-        .database
-        .call(|connection| {
-            let mut statement = connection.prepare(
-                "SELECT u.username, COALESCE(b.model_id, '(all models)'), \
-                        SUM(b.request_count), SUM(b.token_count), SUM(b.cost_microdollars) \
-                 FROM user_budget_usage b JOIN users u ON u.id = b.user_id \
-                 GROUP BY u.id, b.model_id ORDER BY u.username COLLATE NOCASE, b.model_id LIMIT ?1",
-            )?;
-            statement
-                .query_map(params![USAGE_ROW_CAP as i64], |row| {
-                    Ok((
-                        row.get(0)?,
-                        row.get(1)?,
-                        row.get(2)?,
-                        row.get(3)?,
-                        row.get(4)?,
-                    ))
-                })?
-                .collect::<Result<Vec<(String, String, i64, i64, i64)>, _>>()
-        })
+    let snapshot = match crate::user_budget::UserBudgetService::new(state.database)
+        .admin_usage_by_window(USAGE_ROW_CAP as u16)
         .await
     {
-        Ok(rows) => rows,
+        Ok(snapshot) => snapshot,
         Err(_) => return degraded("usage unavailable"),
     };
-    html_response(render_usage_admin(&rows, "", theme))
+    html_response(render_usage_admin(&snapshot, "", theme))
 }
 
 #[derive(Debug, Default, serde::Deserialize)]
@@ -464,12 +576,35 @@ pub(in crate::server) async fn my_account_page(
             .as_deref()
             .unwrap_or(&state.server.dashboard_theme),
     );
-    html_response(dashboard_standalone_page(
+    let allowed =
+        match crate::personal_upstream::effective_grant(&state.database, &session.user_id).await {
+            Ok(crate::personal_upstream::GrantEffect::Allow) => true,
+            Ok(_) => false,
+            Err(_) => return degraded("account details unavailable"),
+        };
+    let upstreams = match crate::personal_upstream::list_bindings(
+        &state.database,
+        Some(&session.user_id),
+    )
+    .await
+    {
+        Ok(bindings) => bindings
+            .into_iter()
+            .map(|binding| (binding.provider_id, binding.account_name, binding.state))
+            .collect::<Vec<_>>(),
+        Err(_) => return degraded("account details unavailable"),
+    };
+    let providers = crate::provider_profile::bundled_profiles()
+        .map(|registry| registry.ids().map(str::to_owned).collect::<Vec<_>>())
+        .unwrap_or_default();
+    let upstream = render_member_upstream(allowed, &upstreams, &providers, &csrf);
+    html_response(account_page_for_role(
+        &session.role,
         "My account",
         "my-account",
         theme,
         &format!(
-            "<section class=\"panel\"><h1>My account</h1><p>Signed in as {}</p><p><a href=\"/usage\">My usage</a> · <a href=\"/my-account/models\">My accessible models</a> · <a href=\"/account\">Change password</a></p><section><h2>Personal client credentials</h2>{token_flash}<form method=\"post\" action=\"/account/tokens\"><label>Credential label <input name=\"label\" minlength=\"1\" maxlength=\"80\" required></label><input type=\"hidden\" name=\"csrf\" value=\"{}\"><button type=\"submit\">Create credential</button></form><div class=\"table-scroll\" tabindex=\"0\" role=\"region\" aria-label=\"Personal client credentials\">{DASHBOARD_TABLE_OPEN}<thead><tr><th>Label</th><th>Created</th><th>Last used</th><th>Action</th></tr></thead><tbody>{rows}</tbody></table></div></section><form method=\"post\" action=\"/logout\"><input type=\"hidden\" name=\"csrf\" value=\"{}\"><button type=\"submit\">Log out</button></form></section>",
+            "<section class=\"panel\"><h1>My account</h1><p>Signed in as {}</p><p><a href=\"/usage\">My usage</a> · <a href=\"/my-account/models\">My accessible models</a> · <a href=\"/account\">Change password</a></p><section><h2>Personal client credentials</h2>{token_flash}<form method=\"post\" action=\"/account/tokens\"><label>Credential label <input name=\"label\" minlength=\"1\" maxlength=\"80\" required></label><input type=\"hidden\" name=\"csrf\" value=\"{}\"><button type=\"submit\">Create credential</button></form><div class=\"table-scroll\" tabindex=\"0\" role=\"region\" aria-label=\"Personal client credentials\">{DASHBOARD_TABLE_OPEN}<thead><tr><th>Label</th><th>Created</th><th>Last used</th><th>Action</th></tr></thead><tbody>{rows}</tbody></table></div></section>{upstream}<form method=\"post\" action=\"/logout\"><input type=\"hidden\" name=\"csrf\" value=\"{}\"><button type=\"submit\">Log out</button></form></section>",
             html_escape(&session.username),
             html_escape(&csrf),
             html_escape(&csrf)
@@ -516,9 +651,14 @@ pub(in crate::server) async fn my_models_page(
             .as_deref()
             .unwrap_or(&state.server.dashboard_theme),
     );
-    html_response(dashboard_standalone_page(
+    html_response(account_page_for_role(
+        &session.role,
         "My models",
-        "my-account",
+        if session.role == "admin" {
+            "my-account"
+        } else {
+            "my-models"
+        },
         theme,
         &format!(
             "<section class=\"panel\"><h1>My accessible models</h1><p>{explanation}</p><ul>{models}</ul><p><a href=\"/my-account\">My account</a></p></section>"
@@ -1137,4 +1277,218 @@ pub(in crate::server) async fn revoke_user_tokens(
         Ok(_) => mutation_redirect("/users"),
         Err(error) => mutation_error(error, "Could not revoke credentials."),
     }
+}
+
+pub(in crate::server) async fn set_upstream_default(
+    State(state): State<AppState>,
+    Extension(session): Extension<crate::web_session::Principal>,
+    headers: HeaderMap,
+    Form(form): Form<UpstreamDefaultForm>,
+) -> Response {
+    if !csrf_valid(&session, &headers, &form.csrf) {
+        return (StatusCode::FORBIDDEN, "Invalid request token.").into_response();
+    }
+    if !admin_only(&session) {
+        return (StatusCode::FORBIDDEN, "Administrator access required.").into_response();
+    }
+    let Some(effect) = grant_effect(&form.effect, false) else {
+        return bad_request("Instance grant must be allow or deny.");
+    };
+    match crate::personal_upstream::set_instance_grant(&state.database, &session.user_id, effect)
+        .await
+    {
+        Ok(()) => mutation_redirect("/users"),
+        Err(error) => upstream_failure(error),
+    }
+}
+
+pub(in crate::server) async fn set_upstream_grant(
+    State(state): State<AppState>,
+    Extension(session): Extension<crate::web_session::Principal>,
+    headers: HeaderMap,
+    Form(form): Form<UpstreamGrantForm>,
+) -> Response {
+    if !csrf_valid(&session, &headers, &form.csrf) {
+        return (StatusCode::FORBIDDEN, "Invalid request token.").into_response();
+    }
+    if !admin_only(&session) {
+        return (StatusCode::FORBIDDEN, "Administrator access required.").into_response();
+    }
+    let Some(effect) = grant_effect(&form.effect, true) else {
+        return bad_request("User grant must be allow, deny, or inherit.");
+    };
+    match crate::personal_upstream::set_user_grant(
+        &state.database,
+        &session.user_id,
+        &form.user_id,
+        effect,
+    )
+    .await
+    {
+        Ok(()) => mutation_redirect("/users"),
+        Err(error) => upstream_failure(error),
+    }
+}
+
+pub(in crate::server) async fn remove_upstream_account(
+    State(state): State<AppState>,
+    Extension(session): Extension<crate::web_session::Principal>,
+    headers: HeaderMap,
+    Form(form): Form<UpstreamRemoveForm>,
+) -> Response {
+    if !csrf_valid(&session, &headers, &form.csrf) {
+        return (StatusCode::FORBIDDEN, "Invalid request token.").into_response();
+    }
+    if !admin_only(&session) {
+        return (StatusCode::FORBIDDEN, "Administrator access required.").into_response();
+    }
+    let Ok((config_path, env_path)) = upstream_paths(&state) else {
+        return (
+            StatusCode::SERVICE_UNAVAILABLE,
+            "Server configuration path is unavailable.",
+        )
+            .into_response();
+    };
+    match crate::personal_upstream::remove_personal_account(
+        &state.database,
+        crate::personal_upstream::PersonalAccountWrite {
+            actor_id: &session.user_id,
+            user_id: &form.user_id,
+            provider_id: &form.provider,
+            account_name: &form.name,
+            secret: "",
+            config_path: &config_path,
+            env_path: &env_path,
+            require_self_service: false,
+        },
+    )
+    .await
+    {
+        Ok(()) => mutation_redirect("/users"),
+        Err(error) => upstream_failure(error),
+    }
+}
+
+pub(in crate::server) async fn add_member_upstream(
+    State(state): State<AppState>,
+    Extension(session): Extension<crate::web_session::Principal>,
+    headers: HeaderMap,
+    Form(form): Form<MemberUpstreamForm>,
+) -> Response {
+    if !csrf_valid(&session, &headers, &form.csrf) {
+        return (StatusCode::FORBIDDEN, "Invalid request token.").into_response();
+    }
+    let Ok((config_path, env_path)) = upstream_paths(&state) else {
+        return (
+            StatusCode::SERVICE_UNAVAILABLE,
+            "Server configuration path is unavailable.",
+        )
+            .into_response();
+    };
+    match crate::personal_upstream::add_personal_account(
+        &state.database,
+        crate::personal_upstream::PersonalAccountWrite {
+            actor_id: &session.user_id,
+            user_id: &session.user_id,
+            provider_id: &form.provider,
+            account_name: &form.name,
+            secret: &form.secret,
+            config_path: &config_path,
+            env_path: &env_path,
+            require_self_service: true,
+        },
+    )
+    .await
+    {
+        Ok(()) => mutation_redirect("/my-account"),
+        Err(error) => upstream_failure(error),
+    }
+}
+
+pub(in crate::server) async fn remove_member_upstream(
+    State(state): State<AppState>,
+    Extension(session): Extension<crate::web_session::Principal>,
+    headers: HeaderMap,
+    Form(form): Form<MemberUpstreamRemoveForm>,
+) -> Response {
+    if !csrf_valid(&session, &headers, &form.csrf) {
+        return (StatusCode::FORBIDDEN, "Invalid request token.").into_response();
+    }
+    let Ok((config_path, env_path)) = upstream_paths(&state) else {
+        return (
+            StatusCode::SERVICE_UNAVAILABLE,
+            "Server configuration path is unavailable.",
+        )
+            .into_response();
+    };
+    match crate::personal_upstream::remove_personal_account(
+        &state.database,
+        crate::personal_upstream::PersonalAccountWrite {
+            actor_id: &session.user_id,
+            user_id: &session.user_id,
+            provider_id: &form.provider,
+            account_name: &form.name,
+            secret: "",
+            config_path: &config_path,
+            env_path: &env_path,
+            require_self_service: true,
+        },
+    )
+    .await
+    {
+        Ok(()) => mutation_redirect("/my-account"),
+        Err(error) => upstream_failure(error),
+    }
+}
+
+fn grant_effect(value: &str, user_scope: bool) -> Option<crate::personal_upstream::GrantEffect> {
+    let effect = crate::personal_upstream::GrantEffect::parse(value)?;
+    if !user_scope && matches!(effect, crate::personal_upstream::GrantEffect::Inherit) {
+        return None;
+    }
+    Some(effect)
+}
+
+fn upstream_paths(state: &AppState) -> Result<(std::path::PathBuf, std::path::PathBuf), ()> {
+    let config_path = state
+        .config_path()
+        .map(std::path::Path::to_path_buf)
+        .ok_or(())?;
+    let env_path = crate::personal_upstream::personal_env_path(&config_path);
+    Ok((config_path, env_path))
+}
+
+fn upstream_failure(error: crate::personal_upstream::PersonalUpstreamError) -> Response {
+    use crate::personal_upstream::PersonalUpstreamError as Upstream;
+    let (status, message) = match &error {
+        Upstream::GrantDenied | Upstream::AdministratorRequired => (
+            StatusCode::FORBIDDEN,
+            "Personal upstream self-service is not granted.",
+        ),
+        Upstream::PublicationRestored => (
+            StatusCode::BAD_REQUEST,
+            "The personal account was not published.",
+        ),
+        Upstream::RepairRequired => (
+            StatusCode::BAD_REQUEST,
+            "The personal account needs operator repair.",
+        ),
+        Upstream::NameCollision => (
+            StatusCode::BAD_REQUEST,
+            "That account name is already in use.",
+        ),
+        Upstream::UnknownProvider => (StatusCode::BAD_REQUEST, "That provider is not available."),
+        Upstream::SecretRejected => (StatusCode::BAD_REQUEST, "The upstream key was rejected."),
+        Upstream::BindingNotFound => (
+            StatusCode::BAD_REQUEST,
+            "That personal account was not found.",
+        ),
+        Upstream::UserNotFound => (StatusCode::BAD_REQUEST, "That user was not found."),
+        Upstream::Database(_) | Upstream::Configuration(_) => (
+            StatusCode::BAD_REQUEST,
+            "The personal upstream change was not saved.",
+        ),
+    };
+    tracing::warn!(error = error.kind(), "personal upstream mutation failed");
+    (status, message).into_response()
 }

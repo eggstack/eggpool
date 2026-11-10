@@ -16,6 +16,8 @@ New optional application-interoperability planning (2026-11-03): [ADR-0007](adrs
 
 Downstream application boundary (2026-11-10): [ADR-0009](adrs/ADR-0009-downstream-application-boundary.md) is accepted and supersedes ADR-0007's gateway and hosted-execution decisions. Ordinary inference still returns tool calls to the client. Application-boundary M001–M003 are closed and M004 is conditionally closed with disposition `not measured`. The MCP gateway and hosted runner are withdrawn, the content-free audit export is in place, and the local metadata profile is opt-in. Retrieval R002 is closed and supersedes R001 as an execution handoff. Embeddings stay. Tool-integration M003 and M004 evidence conditions are vacated rather than collected. No successor is registered.
 
+On-prem member access (2026-11-10, baseline `9da5e2d383c73035850c37f8125c145b8b7ff9ff`): a review of solo install and small-team use found a fresh onboard that writes a server key the same run retires, usage totals that add day and month buckets, member pages that link into administrator 403s, and no way for a member to add an upstream account that only they can spend. [On-prem member access](subsystems/on-prem-member-access-roadmap.md) is the successor. On-prem user access M001–M024 stay closed and are not reopened. [ADR-0010](adrs/ADR-0010-personal-upstream-account-custody.md) is accepted with its named canonical amendments. M001–M005 are implemented in the working tree and are not closed.
+
 Legacy archive (pre-251, immutable, top level): `plans/001-*` through
 `plans/250-*` plus `python_hotpath_dispatch_compression_optimization.md`.
 Most recently closed: Request Admission and Wire M008 (remote compaction capability
@@ -103,7 +105,8 @@ No new runtime, schema or performance claim lands with these plans.
 | Persistence | active | `plans/subsystems/persistence-roadmap.md` | M011 closed — post-M010 roadmap/documentation reconciliation | M009/M010 closures accepted. Documentation/tooling-only corrective; production remains WAL/NORMAL. No technical persistence successor is registered. |
 | Deployment and packaging | active | `plans/subsystems/deployment-packaging-roadmap.md` | M008 and M009 closed | M009 resolves audited dependencies and adapts bounded backup member-name parsing; serial suites and locked release build passed. |
 | Dashboard | closed | `plans/subsystems/dashboard-roadmap.md` | M014 closed — operator surface presentation and accessibility corrective | Reopened on evidence at baseline `e6822d8f78`: M001–M013 remain closed. M014 is closed; the paired browser disposition needs the frozen oracle worktree and a browser, and the stale on-prem browser reference artifact has to be regenerated on hardware. |
-| On-prem user access | closed | `plans/subsystems/on-prem-user-access-roadmap.md` | M024 closed — browser session CSRF delivery and member account surface corrective | Reopened on evidence at baseline `d04ad6831c6e030b7f5fc8a56501fdfecab982bd`: M001–M023 remain closed. `plans/adrs/ADR-0004-browser-session-csrf-delivery-and-account-scoped-sign-in-throttling.md` was accepted on 2026-10-23, and M024 implements that decision; it is closed. |
+| On-prem user access | closed | `plans/subsystems/on-prem-user-access-roadmap.md` | M024 closed — browser session CSRF delivery and member account surface corrective | Reopened on evidence at baseline `d04ad6831c6e030b7f5fc8a56501fdfecab982bd`: M001–M023 remain closed. `plans/adrs/ADR-0004-browser-session-csrf-delivery-and-account-scoped-sign-in-throttling.md` was accepted on 2026-10-23, and M024 implements that decision; it is closed. The 2026-11-10 solo and small-team gaps are a new roadmap, not a reopening. |
+| On-prem member access | active | [on-prem member access roadmap](subsystems/on-prem-member-access-roadmap.md) | M001–M005 active, not closed | ADR-0010 is accepted. Closure still needs the serial suite, the no-default gates, the locked release build, and a closure record. |
 | On-prem concurrency performance | active | `plans/subsystems/on-prem-concurrency-performance-roadmap.md` | M002 closed — ordinary-server synthetic baseline recorded | M001's Pi/microSD solo tail attribution stays conditionally closed; M002 authorizes no WAL/SQLite topology change. |
 | Operations CLI | active | `plans/subsystems/operations-cli-roadmap.md` | M003 closed — watchdog start-guard ownership correction | New subsystem roadmap opened at baseline `e6822d8f78` for `rust/src/operations/` and `rust/src/runtime.rs`, which no other roadmap claims as a primary owner. M001 is closed and M002 is closed through M003; no successor is registered in this subsystem. |
 | Request admission and wire | active | `plans/subsystems/request-admission-wire-roadmap.md` | M008 closed — remote compaction capability contract | ADR-0003 accepted; M001–M007 and M009 remain closed; M008 is closed; no successor is registered in this subsystem. |
@@ -311,6 +314,8 @@ record is `plans/closure/deployment-packaging/008-status.md`.
 | Subsystem | Milestone | Status | Implementation plan | Dependencies / handoff note |
 |---|---|---|---|---|
 
+None.
+
 Application boundary and retrieval closure audit (2026-11-10, baseline `e049025274a397d7799c3ae21ed106947c2a1572`, uncommitted): searched the application-boundary and retrieval roadmaps, their implementation plans, and the ready, active, and blocked registry tables. M001, M002, M003, and R002 are closed. M004 is conditionally closed with disposition `not measured` and authorizes no optimization. No registered successor exists in either subsystem. Nothing else was blocked on these milestones, so nothing is promoted. Tool-integration M003 and M004 stay conditionally closed as historical records; their open evidence conditions stay vacated. The blocked table stays empty of R001.
 
 Runtime efficiency M004 closure audit: searched the runtime-efficiency roadmap,
@@ -323,12 +328,20 @@ persistence roadmap.
 
 | Subsystem | Milestone | Status | Implementation plan | Handoff note |
 |---|---|---|---|---|
-
+| On-prem member access | M001 — solo sign-in and onboarding credential | active | [001](implementation/on-prem-member-access/001-solo-sign-in-and-onboarding-credential.md) | Implemented. Not closed. Does not implement ADR-0010. |
+| On-prem member access | M002 — usage windows and member limits | active | [002](implementation/on-prem-member-access/002-usage-windows-and-member-limits.md) | Implemented. Not closed. Projection only; settlement stays. |
+| On-prem member access | M003 — member navigation and admin roster | active | [003](implementation/on-prem-member-access/003-member-navigation-and-admin-roster.md) | Implemented. Not closed. |
+| On-prem member access | M004 — personal upstream custody and routing | active | [004](implementation/on-prem-member-access/004-personal-upstream-custody-and-routing.md) | Implemented. Not closed. ADR-0010 is accepted. |
+| On-prem member access | M005 — personal upstream browser grant | active | [005](implementation/on-prem-member-access/005-personal-upstream-browser-grant.md) | Implemented. Not closed. Calls the M004 service. |
 
 ## Blocked work
 
 | Subsystem | Milestone | Blocker |
 |---|---|---|
+
+None.
+
+Unblock audit (on-prem member access, 2026-11-10): ADR-0010 is accepted with the named canonical amendments. M001–M005 are implemented in the working tree and sit in the active table. They are not closed. On-prem user access M001–M024 stay closed. Nothing else was waiting on this roadmap.
 
 Unblock audit (application boundary, 2026-11-10, baseline `e049025274a397d7799c3ae21ed106947c2a1572`): ADR-0009 supersedes ADR-0007's gateway and hosted-execution decisions. Retrieval R001 is no longer a blocked handoff; R002 is the successor and is documentation only. Tool-integration M003 and M004 stay conditionally closed as historical records, and their open evidence conditions are vacated rather than promoted into new tool-integration work. Nothing else on the blocked table was waiting on R001. M004's missing shared host is an allowed `not measured` closure, not a registry block. The same-day closure audit above records M001–M003 and R002 closed and M004 conditionally closed. Nothing further is promoted.
 

@@ -704,6 +704,13 @@ impl FiniteCoordinator {
         attribution: Option<crate::identity::RequestAttribution>,
     ) -> Result<FiniteExecution, FiniteCoordinatorError> {
         request.attribution = attribution;
+        if let Some(user_id) = request
+            .attribution
+            .as_ref()
+            .and_then(|principal| principal.user_id.clone())
+        {
+            request.routing_facts.principal_user_id = Some(user_id);
+        }
         let Some(model_id) = request.model_id() else {
             return Err(FiniteCoordinatorError::InvalidFacts);
         };

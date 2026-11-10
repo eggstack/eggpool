@@ -19,6 +19,7 @@ pub mod instance_budget;
 pub mod model_policy;
 pub mod model_router;
 pub mod operations;
+pub mod personal_upstream;
 pub mod provider_profile;
 pub mod providers;
 pub mod quota;

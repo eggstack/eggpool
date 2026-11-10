@@ -60,6 +60,43 @@ pub struct UserBudgetRule {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, serde::Serialize)]
+pub struct BudgetDimensionAllowance {
+    pub ceiling: Option<i64>,
+    pub settled: i64,
+    pub held: i64,
+    pub remaining: Option<i64>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize)]
+pub struct UserBudgetAllowance {
+    pub model_id: Option<String>,
+    pub window: BudgetWindow,
+    pub window_start: String,
+    pub requests: BudgetDimensionAllowance,
+    pub tokens: BudgetDimensionAllowance,
+    pub microdollars: BudgetDimensionAllowance,
+    pub concurrent: BudgetDimensionAllowance,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct AdminUsageWindowRow {
+    pub username: String,
+    pub model_id: String,
+    pub window: BudgetWindow,
+    pub window_start: String,
+    pub request_count: i64,
+    pub token_count: i64,
+    pub cost_microdollars: i64,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct AdminUsageSnapshot {
+    pub day_start: String,
+    pub month_start: String,
+    pub rows: Vec<AdminUsageWindowRow>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize)]
 pub struct UserBudgetUsage {
     pub model_id: String,
     pub window: BudgetWindow,
@@ -382,6 +419,219 @@ impl UserBudgetService {
             })
             .await
             .map_err(UserBudgetError::Database)
+    }
+
+    /// Current-window headroom for one user's own rules.
+    ///
+    /// Rules, settled rows, and active holds are read on one SQLite call so a
+    /// concurrent settlement cannot be subtracted twice.
+    pub async fn current_allowance(
+        &self,
+        user_id: &str,
+    ) -> Result<Vec<UserBudgetAllowance>, UserBudgetError> {
+        let user_id = user_id.to_owned();
+        self.database
+            .call(move |connection| {
+                let (day_start, month_start): (String, String) = connection.query_row(
+                    "SELECT date('now'), strftime('%Y-%m-01', 'now')",
+                    [],
+                    |row| Ok((row.get(0)?, row.get(1)?)),
+                )?;
+                let mut statement = connection.prepare(
+                    "SELECT model_id, window, max_requests, max_tokens,
+                            max_microdollars, max_concurrent
+                     FROM user_budget_rules WHERE user_id = ?1
+                     ORDER BY model_id IS NOT NULL, model_id, window",
+                )?;
+                let rules = statement
+                    .query_map([&user_id], |row| {
+                        Ok((
+                            row.get::<_, Option<String>>(0)?,
+                            row.get::<_, String>(1)?,
+                            row.get::<_, Option<i64>>(2)?,
+                            row.get::<_, Option<i64>>(3)?,
+                            row.get::<_, Option<i64>>(4)?,
+                            row.get::<_, Option<i64>>(5)?,
+                        ))
+                    })?
+                    .collect::<Result<Vec<_>, _>>()?;
+                drop(statement);
+                let mut allowances = Vec::with_capacity(rules.len());
+                for (
+                    model_id,
+                    window,
+                    max_requests,
+                    max_tokens,
+                    max_microdollars,
+                    max_concurrent,
+                ) in rules
+                {
+                    let window_start = if window == "day" {
+                        day_start.clone()
+                    } else {
+                        month_start.clone()
+                    };
+                    let (settled_requests, settled_tokens, settled_cost) = settled_window(
+                        connection,
+                        &user_id,
+                        model_id.as_deref(),
+                        &window,
+                        &window_start,
+                    )?;
+                    let (held_requests, held_tokens, held_cost, active_count) = held_window(
+                        connection,
+                        &user_id,
+                        model_id.as_deref(),
+                        &window,
+                        &window_start,
+                    )?;
+                    allowances.push(UserBudgetAllowance {
+                        window: parse_window(&window),
+                        window_start,
+                        model_id,
+                        requests: dimension(max_requests, settled_requests, held_requests),
+                        tokens: dimension(max_tokens, settled_tokens, held_tokens),
+                        microdollars: dimension(max_microdollars, settled_cost, held_cost),
+                        concurrent: dimension(max_concurrent, 0, active_count),
+                    });
+                }
+                Ok(allowances)
+            })
+            .await
+            .map_err(UserBudgetError::Database)
+    }
+
+    /// Usage totals grouped inside one window kind and one window start.
+    pub async fn admin_usage_by_window(
+        &self,
+        limit: u16,
+    ) -> Result<AdminUsageSnapshot, UserBudgetError> {
+        if limit == 0 || limit > 500 {
+            return Err(UserBudgetError::InvalidRule);
+        }
+        self.database
+            .call(move |connection| {
+                let (day_start, month_start): (String, String) = connection.query_row(
+                    "SELECT date('now'), strftime('%Y-%m-01', 'now')",
+                    [],
+                    |row| Ok((row.get(0)?, row.get(1)?)),
+                )?;
+                let mut statement = connection.prepare(
+                    "SELECT u.username, COALESCE(b.model_id, '(all models)'), b.window,
+                            b.window_start, SUM(b.request_count), SUM(b.token_count),
+                            SUM(b.cost_microdollars)
+                     FROM user_budget_usage b JOIN users u ON u.id = b.user_id
+                     GROUP BY u.id, b.model_id, b.window, b.window_start
+                     ORDER BY b.window, b.window_start DESC, u.username COLLATE NOCASE, b.model_id
+                     LIMIT ?1",
+                )?;
+                let rows = statement
+                    .query_map([i64::from(limit)], |row| {
+                        let window: String = row.get(2)?;
+                        Ok(AdminUsageWindowRow {
+                            username: row.get(0)?,
+                            model_id: row.get(1)?,
+                            window: parse_window(&window),
+                            window_start: row.get(3)?,
+                            request_count: row.get(4)?,
+                            token_count: row.get(5)?,
+                            cost_microdollars: row.get(6)?,
+                        })
+                    })?
+                    .collect::<Result<Vec<_>, _>>()?;
+                Ok(AdminUsageSnapshot {
+                    day_start,
+                    month_start,
+                    rows,
+                })
+            })
+            .await
+            .map_err(UserBudgetError::Database)
+    }
+}
+
+fn dimension(ceiling: Option<i64>, settled: i64, held: i64) -> BudgetDimensionAllowance {
+    BudgetDimensionAllowance {
+        remaining: ceiling.map(|limit| limit.saturating_sub(settled).saturating_sub(held)),
+        ceiling,
+        settled,
+        held,
+    }
+}
+
+fn settled_window(
+    connection: &tokio_rusqlite::rusqlite::Connection,
+    user_id: &str,
+    model_id: Option<&str>,
+    window: &str,
+    window_start: &str,
+) -> Result<(i64, i64, i64), tokio_rusqlite::rusqlite::Error> {
+    if let Some(model_id) = model_id {
+        connection.query_row(
+            "SELECT coalesce(sum(request_count), 0), coalesce(sum(token_count), 0),
+                    coalesce(sum(cost_microdollars), 0)
+             FROM user_budget_usage WHERE user_id = ?1 AND model_id = ?2
+               AND window = ?3 AND window_start = ?4",
+            params![user_id, model_id, window, window_start],
+            |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)),
+        )
+    } else {
+        connection.query_row(
+            "SELECT coalesce(sum(request_count), 0), coalesce(sum(token_count), 0),
+                    coalesce(sum(cost_microdollars), 0)
+             FROM user_budget_usage WHERE user_id = ?1 AND window = ?2 AND window_start = ?3",
+            params![user_id, window, window_start],
+            |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)),
+        )
+    }
+}
+
+fn held_window(
+    connection: &tokio_rusqlite::rusqlite::Connection,
+    user_id: &str,
+    model_id: Option<&str>,
+    window: &str,
+    window_start: &str,
+) -> Result<(i64, i64, i64, i64), tokio_rusqlite::rusqlite::Error> {
+    let sql = if model_id.is_some() {
+        "SELECT coalesce(sum(CASE WHEN (?3 = 'day' AND day_start = ?4)
+                                  OR (?3 = 'month' AND month_start = ?4)
+                             THEN held_requests ELSE 0 END), 0),
+                coalesce(sum(CASE WHEN (?3 = 'day' AND day_start = ?4)
+                                  OR (?3 = 'month' AND month_start = ?4)
+                             THEN held_tokens ELSE 0 END), 0),
+                coalesce(sum(CASE WHEN (?3 = 'day' AND day_start = ?4)
+                                  OR (?3 = 'month' AND month_start = ?4)
+                             THEN held_microdollars ELSE 0 END), 0),
+                coalesce(sum(CASE WHEN (?3 = 'day' AND day_start = ?4)
+                                  OR (?3 = 'month' AND month_start = ?4)
+                             THEN 1 ELSE 0 END), 0)
+         FROM user_budget_reservations WHERE user_id = ?1 AND model_id = ?2 AND status = 'active'"
+    } else {
+        "SELECT coalesce(sum(CASE WHEN (?2 = 'day' AND day_start = ?3)
+                                  OR (?2 = 'month' AND month_start = ?3)
+                             THEN held_requests ELSE 0 END), 0),
+                coalesce(sum(CASE WHEN (?2 = 'day' AND day_start = ?3)
+                                  OR (?2 = 'month' AND month_start = ?3)
+                             THEN held_tokens ELSE 0 END), 0),
+                coalesce(sum(CASE WHEN (?2 = 'day' AND day_start = ?3)
+                                  OR (?2 = 'month' AND month_start = ?3)
+                             THEN held_microdollars ELSE 0 END), 0),
+                coalesce(sum(CASE WHEN (?2 = 'day' AND day_start = ?3)
+                                  OR (?2 = 'month' AND month_start = ?3)
+                             THEN 1 ELSE 0 END), 0)
+         FROM user_budget_reservations WHERE user_id = ?1 AND status = 'active'"
+    };
+    if let Some(model_id) = model_id {
+        connection.query_row(
+            sql,
+            params![user_id, model_id, window, window_start],
+            |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?, row.get(3)?)),
+        )
+    } else {
+        connection.query_row(sql, params![user_id, window, window_start], |row| {
+            Ok((row.get(0)?, row.get(1)?, row.get(2)?, row.get(3)?))
+        })
     }
 }
 

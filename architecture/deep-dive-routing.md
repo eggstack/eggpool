@@ -50,6 +50,12 @@ derives it from `RoutingConfig` (`local_quota_mode`, `fairness_mode`, `fairness_
 `capability_policy`). `RoutingRequestFacts::from_model_id` splits an optional
 `provider/model` suffix with `ModelCatalogCache::parse_model_provider`.
 
+Before that per-account scoring, a generation snapshot of personal upstream
+bindings drops an account that is withdrawn, ambiguously owned, or bound to
+someone other than the request principal (`personal_upstream`). A missing
+binding leaves the account shared. The legacy shared-key principal has no user
+id and cannot select a bound account.
+
 Per account, `candidate_for_account` checks, in order: enabled, usable credentials,
 requested provider (`no_provider` when the account has no provider vs `wrong_provider`),
 request surface (`RequestSurface`), requested/transcodable protocol,

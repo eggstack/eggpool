@@ -198,4 +198,9 @@ external identity dependency.
 
 ## Supersession
 
-None.
+Accepted ADR-0010 supersedes Decision items 1 and 7 only for the granted
+personal-upstream path: the server process may accept one bundled-provider
+secret into the operator environment file, and SQLite may store the
+secret-free binding that restricts selection. The remainder of this Decision
+stays in force, including one active administrator, no public signup, and no
+organization id. The Decision text above is unchanged.

@@ -591,3 +591,74 @@ async fn an_authentication_failure_still_produces_no_timed_backoff() {
     assert_eq!(policy.base_delay, 0.0);
     assert_eq!(policy.cap, 0.0);
 }
+
+#[tokio::test(flavor = "current_thread")]
+async fn a_personal_binding_is_selectable_only_by_its_owner() {
+    let (database, path) = database("personal-binding").await;
+    database
+        .call(|connection| {
+            connection.execute(
+                "INSERT INTO personal_upstream_bindings(provider_id, account_name, user_id, state)
+                 VALUES ('provider-a', 'account-a', 'owner-user', 'active')",
+                [],
+            )?;
+            Ok(())
+        })
+        .await
+        .unwrap();
+    let snapshot = eggpool::personal_upstream::load_snapshot(&database)
+        .await
+        .unwrap();
+    let (router, _) = health_router();
+    let router = router.with_personal_bindings(snapshot);
+    let mut owner = routing_facts("model-a");
+    owner.principal_user_id = Some("owner-user".into());
+    let claim = router
+        .select_and_claim(&owner, &BTreeSet::new())
+        .await
+        .unwrap()
+        .expect("the owner can select the bound account");
+    assert_eq!(claim.account_name(), "account-a");
+    drop(claim);
+    let mut other = routing_facts("model-a");
+    other.principal_user_id = Some("other-user".into());
+    assert!(
+        router
+            .select_and_claim(&other, &BTreeSet::new())
+            .await
+            .unwrap()
+            .is_none()
+    );
+    assert!(
+        router
+            .select_and_claim(&routing_facts("model-a"), &BTreeSet::new())
+            .await
+            .unwrap()
+            .is_none()
+    );
+    database
+        .call(|connection| {
+            connection.execute(
+                "UPDATE personal_upstream_bindings SET state = 'withdrawn'",
+                [],
+            )?;
+            Ok(())
+        })
+        .await
+        .unwrap();
+    let withdrawn = eggpool::personal_upstream::load_snapshot(&database)
+        .await
+        .unwrap();
+    let (router, _) = health_router();
+    let router = router.with_personal_bindings(withdrawn);
+    assert!(
+        router
+            .select_and_claim(&owner, &BTreeSet::new())
+            .await
+            .unwrap()
+            .is_none(),
+        "a withdrawn account is selected for nobody"
+    );
+    database.close().await.unwrap();
+    fs::remove_file(path).unwrap();
+}

@@ -84,6 +84,12 @@ pub(super) async fn authenticate(
     }
 
     let Some(session_token) = crate::web_session::session_cookie_value(request.headers()) else {
+        // A presented credential is a machine client. Keep the JSON refusal
+        // so a personal token cannot be turned into a browser sign-in.
+        if supplied_key.is_none() && sign_in_handoff_applies(&path, request.method(), &access_state)
+        {
+            return super::auth::sign_in_handoff_response();
+        }
         return unauthorized("Sign in required");
     };
     let principal = match crate::web_session::authenticate(&state.database, &session_token).await {
@@ -102,7 +108,9 @@ pub(super) async fn authenticate(
             | "/my-account/models"
             | "/usage"
     );
-    let account_surface = account_surface || path.starts_with("/account/tokens");
+    let account_surface = account_surface
+        || path.starts_with("/account/tokens")
+        || personal_upstream_member_path(&path);
     if principal.role != "admin" && !account_surface {
         // A member is refused an administrative path with a page that names
         // the refusal and points at the member surface the member does have,
@@ -182,8 +190,52 @@ fn requires_browser_session(path: &str) -> bool {
             | "/users"
             | "/profiles"
     ) || path.starts_with("/account/tokens")
+        || personal_upstream_member_path(path)
         || path.starts_with("/admin/")
         || path == "/api/admin/audit/export"
+}
+
+fn personal_upstream_member_path(path: &str) -> bool {
+    path == "/my-account/upstreams" || path == "/my-account/upstreams/remove"
+}
+
+fn sign_in_handoff_applies(path: &str, method: &http::Method, access_state: &str) -> bool {
+    *method == http::Method::GET
+        && matches!(access_state, "admin_initialized" | "managed")
+        && !path.starts_with("/v1/")
+        && !path.starts_with("/api/")
+        && !encoded_api_path(path)
+        && html_navigation_page(path)
+}
+
+fn html_navigation_page(path: &str) -> bool {
+    path == "/"
+        || matches!(
+            path,
+            "/accounts"
+                | "/models"
+                | "/latency"
+                | "/events"
+                | "/timeseries"
+                | "/bandwidth"
+                | "/pings"
+                | "/reliability"
+                | "/routing"
+                | "/traces"
+                | "/runtime"
+                | "/cache"
+                | "/account"
+                | "/account/landing"
+                | "/account/password"
+                | "/my-account"
+                | "/my-account/models"
+                | "/usage"
+                | "/users"
+                | "/profiles"
+        )
+        || path.starts_with("/models/")
+        || path.starts_with("/account/tokens")
+        || path.starts_with("/admin/")
 }
 
 fn is_unconditionally_public(path: &str) -> bool {
@@ -230,6 +282,7 @@ pub(super) fn requires_auth(path: &str, method: &http::Method, server: &ServerSt
             | "/my-account/models"
             | "/usage"
     ) || path.starts_with("/account/tokens")
+        || personal_upstream_member_path(path)
         || path.starts_with("/admin/")
         || path == "/api/admin/audit/export"
         || matches!(path, "/users" | "/profiles")
@@ -664,7 +717,7 @@ pub(super) fn is_loopback_host(host: &str) -> bool {
 mod tests {
     use super::{
         fixed_key, legacy_server_key_allowed, personal_credential_allowed, provided_api_key,
-        requires_auth, verify_api_key,
+        requires_auth, sign_in_handoff_applies, verify_api_key,
     };
     use crate::server::ServerState;
     use axum::http::{HeaderMap, HeaderValue, header};
@@ -677,6 +730,41 @@ mod tests {
         assert!(!legacy_server_key_allowed(Some("admin_initialized")));
         assert!(!legacy_server_key_allowed(Some("managed")));
         assert!(!legacy_server_key_allowed(None));
+    }
+
+    #[test]
+    fn initialized_html_navigation_offers_sign_in_and_machine_routes_stay_json() {
+        for path in ["/", "/usage", "/my-account", "/accounts", "/users"] {
+            assert!(
+                sign_in_handoff_applies(path, &http::Method::GET, "managed"),
+                "{path}"
+            );
+            assert!(
+                sign_in_handoff_applies(path, &http::Method::GET, "admin_initialized"),
+                "{path}"
+            );
+        }
+        for path in ["/v1/models", "/api/user-budget", "/api/status"] {
+            assert!(
+                !sign_in_handoff_applies(path, &http::Method::GET, "managed"),
+                "{path}"
+            );
+        }
+        assert!(!sign_in_handoff_applies(
+            "/",
+            &http::Method::POST,
+            "managed"
+        ));
+        assert!(!sign_in_handoff_applies(
+            "/",
+            &http::Method::GET,
+            "legacy_unmigrated"
+        ));
+        assert!(!sign_in_handoff_applies(
+            "/",
+            &http::Method::GET,
+            "fresh_uninitialized"
+        ));
     }
 
     #[test]
