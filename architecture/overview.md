@@ -155,7 +155,8 @@ operation, not a Responses alias); discovery and health at `/v1/models`,
 `/api/stats/canonical-request-segmentation`, `/api/stats/cache-stability`,
 `/api/stats/request-shaping`, `/api/timeseries`, `/api/timeseries/grouped`);
 managed-user at `/login`, `/logout`, `/account`, `/account/landing`,
-`/account/password`, `/my-account`, `/my-account/models`, `/account/tokens`,
+`/account/password`, `/my-account`, `/my-account/models`,
+`/my-account/upstreams`, `/my-account/upstreams/remove`, `/account/tokens`,
 `/account/tokens/revoke`, `/usage`, `/api/user-budget`; dashboard pages at
 `/`, `/accounts`, `/models`, `/models/{*model_id}`, `/latency`, `/events`,
 `/timeseries`, `/bandwidth`, `/pings`, `/reliability`, `/routing`,
@@ -165,6 +166,8 @@ admin actions at `/admin/users/create`, `/admin/users/state`,
 `/admin/users/password`, `/admin/users/token`, `/admin/users/revoke-tokens`,
 `/admin/users/profile`, `/admin/users/override`,
 `/admin/users/override/remove`, `/admin/users/budget`,
+`/admin/users/upstream/default`, `/admin/users/upstream/grant`,
+`/admin/users/upstream/remove`,
 `/admin/budget/instance`, `/admin/budget/instance/remove`,
 `/admin/profiles/create`, `/admin/profiles/default`,
 `/admin/profiles/update`, `/admin/profiles/delete`, `/admin/profiles/rule`,
@@ -481,8 +484,11 @@ scopes: daily and monthly rules with explicit `estimated`/`hard` enforcement,
 worst-case holds for `hard`, checks and holds in the same publication
 transaction as the request reservation, and settlement of one daily and one
 monthly bucket at terminalization. `rust/src/server/dashboard/admin.rs` owns
-the admin and member HTML surfaces as thin CSRF-validated adapters. The
-subsystem owns no router, no upstream dispatch, and no second database
+the admin and member HTML surfaces as thin CSRF-validated adapters.
+`rust/src/personal_upstream.rs` owns personal upstream grants and bindings.
+The plaintext secret stays in the config-adjacent environment file, and
+routing eligibility excludes a bound account from every principal except its
+owner. The subsystem owns no router, no upstream dispatch, and no second database
 writer; `server/middleware.rs` keeps the route-role gate, `coordinator/`
 keeps publication and settlement, and `routing/`, `quota/`, and `health/`
 keep owning upstream accounts, provider quota, and provider health.
@@ -591,7 +597,7 @@ Deep dives: [Core](deep-dive-core.md), [Deployment](deep-dive-deployment.md).
 | Operations CLI surface | `rust/src/runtime.rs`, `rust/src/cli.rs`, `rust/src/operations/` (local operator commands; `runtime.rs` dispatches and renders, `operations/` owns the local services) | [Core](deep-dive-core.md), [Control](deep-dive-control.md), [Metrics](deep-dive-metrics.md) |
 | Config, reload policy, reload | `rust/src/config.rs`, `rust/src/config_reload_policy.rs`, `rust/src/reload.rs`, `rust/build.rs`, `rust/build_support.rs` | [Core](deep-dive-core.md), [Control](deep-dive-control.md), [Runtime](deep-dive-runtime.md) |
 | HTTP adapters | `rust/src/server/` | [Request lifecycle](deep-dive-request-lifecycle.md), [Dashboard](deep-dive-dashboard.md), [Runtime](deep-dive-runtime.md) |
-| On-prem user access | `rust/src/identity.rs`, `rust/src/web_session.rs`, `rust/src/model_policy.rs`, `rust/src/user_budget.rs`, `rust/src/instance_budget.rs`, `rust/src/server/auth.rs`, `rust/src/server/dashboard/admin.rs` | [On-prem user access](deep-dive-on-prem-user-access.md) |
+| On-prem user access | `rust/src/identity.rs`, `rust/src/web_session.rs`, `rust/src/model_policy.rs`, `rust/src/user_budget.rs`, `rust/src/instance_budget.rs`, `rust/src/personal_upstream.rs`, `rust/src/server/auth.rs`, `rust/src/server/dashboard/admin.rs` | [On-prem user access](deep-dive-on-prem-user-access.md) |
 | Admission | `rust/src/request/` | [Request lifecycle](deep-dive-request-lifecycle.md), [Transcoder](deep-dive-transcoder.md) |
 | Coordinator finite/streaming | `rust/src/coordinator/`, `rust/src/coordinator/streaming/` | [Request lifecycle](deep-dive-request-lifecycle.md), [Retry](deep-dive-retry.md) |
 | Publication/finalization/failure | `rust/src/coordinator/publication.rs`, `rust/src/coordinator/finalization.rs`, `rust/src/coordinator/failure.rs`, `rust/src/coordinator/attempt.rs`, `rust/src/coordinator/wire_resolver.rs` | [Request lifecycle](deep-dive-request-lifecycle.md), [Retry](deep-dive-retry.md) |

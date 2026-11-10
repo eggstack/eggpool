@@ -1,6 +1,6 @@
 # On-Prem Member Access Milestone 003 — Member navigation and admin roster
 
-Status: active
+Status: implemented
 
 Repository baseline: `9da5e2d383c73035850c37f8125c145b8b7ff9ff`
 

@@ -1,6 +1,6 @@
 # On-Prem Member Access Roadmap
 
-Status: active
+Status: closed
 
 Long-term references:
 
@@ -311,10 +311,7 @@ suite is closure evidence, not a substitute for the focused tests.
 
 ## 10. Risks and decision points
 
-ADR-0010 is accepted, with the named canonical amendments. The five
-milestones are implemented in the working tree and are not closed: the full
-serial suite, the no-default gates, and the locked release build are still
-outstanding, and no closure record has been written.
+ADR-0010 is accepted, with the named canonical amendments. M001–M005 are closed. Their records are `plans/closure/on-prem-member-access/001-status.md` through `005-status.md`. The serial suite, the no-default check and clippy, and the locked release build are recorded there.
 
 Showing instance ceiling values to members reveals the cap and does not
 reveal other people's consumption. Showing remaining shared headroom would.
@@ -335,8 +332,8 @@ Bedrock provider is implied.
 
 | Milestone | Status | Implementation plan | Closure record | Blockers |
 |---|---|---|---|---|
-| 1 | active | [001](../implementation/on-prem-member-access/001-solo-sign-in-and-onboarding-credential.md) | — | closure suite outstanding |
-| 2 | active | [002](../implementation/on-prem-member-access/002-usage-windows-and-member-limits.md) | — | closure suite outstanding |
-| 3 | active | [003](../implementation/on-prem-member-access/003-member-navigation-and-admin-roster.md) | — | closure suite outstanding |
-| 4 | active | [004](../implementation/on-prem-member-access/004-personal-upstream-custody-and-routing.md) | — | closure suite outstanding |
-| 5 | active | [005](../implementation/on-prem-member-access/005-personal-upstream-browser-grant.md) | — | closure suite outstanding |
+| 1 | closed | [001](../implementation/on-prem-member-access/001-solo-sign-in-and-onboarding-credential.md) | [001](../closure/on-prem-member-access/001-status.md) | none |
+| 2 | closed | [002](../implementation/on-prem-member-access/002-usage-windows-and-member-limits.md) | [002](../closure/on-prem-member-access/002-status.md) | none |
+| 3 | closed | [003](../implementation/on-prem-member-access/003-member-navigation-and-admin-roster.md) | [003](../closure/on-prem-member-access/003-status.md) | none |
+| 4 | closed | [004](../implementation/on-prem-member-access/004-personal-upstream-custody-and-routing.md) | [004](../closure/on-prem-member-access/004-status.md) | none |
+| 5 | closed | [005](../implementation/on-prem-member-access/005-personal-upstream-browser-grant.md) | [005](../closure/on-prem-member-access/005-status.md) | none |

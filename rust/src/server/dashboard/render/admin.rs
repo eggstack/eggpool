@@ -290,7 +290,7 @@ pub(in crate::server::dashboard) fn render_member_upstream(
     };
     if !allowed {
         return format!(
-            "<section><h2>Personal upstream account</h2><p>Personal upstream self-service is not granted. An administrator can add an account from the command line. Changing a grant does not remove an account that is already bound.</p>{listed}</section>"
+            "<section><h2>Personal upstream account</h2><p>Personal upstream self-service is not granted. The instance operator can add an account from the command line. Changing a grant does not remove an account that is already bound.</p>{listed}</section>"
         );
     }
     let options = providers

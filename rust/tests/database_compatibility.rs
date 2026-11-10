@@ -640,14 +640,14 @@ async fn schema54_image_upgrades_with_legacy_state_preserved() {
         .archive;
     BackupService::validate_archive(&archive).expect("pre-upgrade archive validates");
 
-    // Forward-only production upgrade: exactly migrations 55..66.
+    // Forward-only production upgrade: migrations 55 through 66 inclusive.
     let state = MigrationRunner::new(&database)
         .run()
         .await
         .expect("production upgrade applies");
     assert_eq!(state.applied_this_run.first(), Some(&55));
     assert_eq!(state.applied_this_run.last(), Some(&66));
-    assert_eq!(state.applied_this_run.len(), 11);
+    assert_eq!(state.applied_this_run.len(), 12);
     database
         .quick_check()
         .await

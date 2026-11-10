@@ -33,7 +33,7 @@ providers/transport → `deep-dive-providers.md`; reload/restart →
   `wire/` protocol codecs, `routing/` + `accounts/` +
   `catalog/` + `quota/` + `health/` selection, `model_router.rs` affinity,
   `identity.rs` + `web_session.rs` + `user_budget.rs` + `instance_budget.rs` +
-  `model_policy.rs` on-prem user access, `providers/` transport,
+  `model_policy.rs` + `personal_upstream.rs` on-prem user access, `providers/` transport,
   `runtime_lifecycle/` generations + `reload.rs` +
   `task_supervisor.rs`, `operations/` local lifecycle, `db/` +
   `rust/assets/db/migrations/` v1–v66 immutable.
