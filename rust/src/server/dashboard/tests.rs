@@ -1169,10 +1169,10 @@ fn the_theme_variable_count_is_pinned() {
 fn the_standalone_shells_resolve_the_theme() {
     // The on-prem shells used to link only the dashboard stylesheet, so every
     // `var()` they relied on was invalid and the page rendered unstyled.
-    let usage = super::render_usage_admin(&[], "", "Nord");
+    let usage = super::render_usage_admin(&empty_usage_snapshot(), "", "Nord");
     assert!(usage.contains("/static/dashboard.css"));
     assert!(usage.contains("/static/theme.css?theme=Nord"));
-    let my_usage = super::render_my_usage("operator", &[], &[], "Catppuccin Latte");
+    let my_usage = super::render_my_usage("operator", &[], &[], &[], &[], "Catppuccin Latte");
     assert!(my_usage.contains("/static/theme.css?theme=Catppuccin%20Latte"));
     let standalone = super::dashboard_standalone_page("Audit", "usage", "Nord", "<p>body</p>");
     assert!(standalone.contains("/static/theme.css?theme=Nord"));
@@ -1186,8 +1186,7 @@ fn the_standalone_shells_resolve_the_theme() {
 #[test]
 fn the_standalone_shells_carry_the_navigation_chrome() {
     for html in [
-        super::render_usage_admin(&[], "", "Nord"),
-        super::render_my_usage("operator", &[], &[], "Nord"),
+        super::render_usage_admin(&empty_usage_snapshot(), "", "Nord"),
         super::dashboard_standalone_page("Audit", "usage", "Nord", "<p>body</p>"),
     ] {
         assert!(
@@ -1198,8 +1197,137 @@ fn the_standalone_shells_carry_the_navigation_chrome() {
             html.contains("href=\"/?period=24h&amp;theme=Nord\">Overview</a>"),
             "the shell has no route back to the overview"
         );
+        assert!(html.contains("href=\"/users?"));
+        assert!(html.contains("href=\"/accounts?"));
         assert!(html.contains("id=\"dashboard-content\""));
     }
+    let member = super::render_my_usage("operator", &[], &[], &[], &[], "Nord");
+    assert!(member.contains("class=\"topnav-menu\""));
+    assert!(member.contains("href=\"/my-account?"));
+    assert!(member.contains("href=\"/usage?"));
+    assert!(member.contains("href=\"/account?"));
+    for forbidden in [
+        "href=\"/users",
+        "href=\"/accounts",
+        "href=\"/profiles",
+        "href=\"/runtime",
+        "href=\"/?period=",
+    ] {
+        assert!(
+            !member.contains(forbidden),
+            "member navigation contains {forbidden}"
+        );
+    }
+}
+
+#[test]
+fn the_users_roster_shows_the_current_assignment_without_secrets() {
+    let mut facts = std::collections::BTreeMap::new();
+    facts.insert(
+        "member".to_owned(),
+        super::UserAdminFacts {
+            profile_id: Some("team".to_owned()),
+            overrides: vec![("model-a".to_owned(), "deny".to_owned())],
+            rules: vec![crate::user_budget::UserBudgetRule {
+                id: 1,
+                model_id: None,
+                window: crate::user_budget::BudgetWindow::Month,
+                max_requests: None,
+                max_tokens: None,
+                max_microdollars: Some(1_500_000),
+                max_concurrent: None,
+                enforcement: crate::user_budget::BudgetEnforcement::Estimated,
+                version: 1,
+            }],
+            credentials: vec![crate::identity::CredentialSummary {
+                id: "credential-id".to_owned(),
+                label: "laptop".to_owned(),
+                created_at: "2026-11-10T00:00:00Z".to_owned(),
+                last_used_at: None,
+                expires_at: None,
+            }],
+            upstream_grant: "inherit".to_owned(),
+            upstreams: vec![(
+                "opencode-go".to_owned(),
+                "personal-go".to_owned(),
+                "active".to_owned(),
+            )],
+        },
+    );
+    facts.insert(
+        "open".to_owned(),
+        super::UserAdminFacts {
+            profile_id: None,
+            overrides: Vec::new(),
+            rules: Vec::new(),
+            credentials: Vec::new(),
+            upstream_grant: "deny".to_owned(),
+            upstreams: Vec::new(),
+        },
+    );
+    let users = vec![
+        crate::identity::UserSummary {
+            id: "member".to_owned(),
+            username: "member".to_owned(),
+            role: "member".to_owned(),
+            state: "active".to_owned(),
+            must_change_password: false,
+        },
+        crate::identity::UserSummary {
+            id: "open".to_owned(),
+            username: "open".to_owned(),
+            role: "member".to_owned(),
+            state: "active".to_owned(),
+            must_change_password: false,
+        },
+    ];
+    let profiles = vec![crate::model_policy::PolicyProfileSummary {
+        id: "team".to_owned(),
+        name: "Team".to_owned(),
+        default_effect: "deny".to_owned(),
+        preferred_model_id: None,
+        version: 1,
+        assigned_users: 1,
+        model_rules: 0,
+        is_default_member_profile: false,
+    }];
+    let html = super::render_users_admin(&users, &profiles, &[], &facts, "csrf", "deny");
+    assert!(html.contains("Assigned profile: Team"));
+    assert!(html.contains("<option value=\"team\" selected>Team</option>"));
+    assert!(html.contains("model-a deny"));
+    assert!(html.contains("1500000 (1.5 USD)"));
+    assert!(html.contains("laptop"));
+    assert!(html.contains("2026-11-10T00:00:00Z"));
+    assert!(html.contains("Unassigned. Models are denied until a profile is assigned."));
+    assert!(!html.contains("credential-id"));
+    assert!(!html.contains("selector"));
+    assert!(!html.contains("digest"));
+    assert!(html.contains("action=\"/admin/users/budget\""));
+    assert!(html.contains("name=\"max_microdollars\""));
+    assert!(html.contains("action=\"/admin/users/upstream/grant\""));
+    assert!(html.contains("action=\"/admin/users/upstream/default\""));
+    assert!(html.contains("opencode-go personal-go active"));
+    assert!(!html.contains("name=\"secret\""));
+}
+
+#[test]
+fn member_upstream_form_hides_the_key_until_self_service_is_allowed() {
+    let providers = vec!["opencode-go".to_owned()];
+    let rows = vec![(
+        "opencode-go".to_owned(),
+        "personal-go".to_owned(),
+        "active".to_owned(),
+    )];
+    let denied = super::render_member_upstream(false, &rows, &providers, "csrf");
+    assert!(denied.contains("not granted"));
+    assert!(denied.contains("opencode-go"));
+    assert!(!denied.contains("name=\"secret\""));
+    assert!(!denied.contains("action=\"/my-account/upstreams\""));
+    let allowed = super::render_member_upstream(true, &rows, &providers, "csrf");
+    assert!(allowed.contains("name=\"secret\""));
+    assert!(allowed.contains("action=\"/my-account/upstreams\""));
+    assert!(allowed.contains("value=\"opencode-go\""));
+    assert!(!allowed.contains("amazon"));
 }
 
 #[test]
@@ -1211,6 +1339,62 @@ fn a_truncated_usage_table_says_so() {
     let at_cap = super::usage_truncation_notice(super::USAGE_ROW_CAP);
     assert!(at_cap.contains("truncated"));
     assert!(at_cap.contains(&super::USAGE_ROW_CAP.to_string()));
+    assert!(
+        !at_cap.contains("raise the limit"),
+        "the notice names the applied cap without telling the reader to edit the query"
+    );
+}
+
+fn empty_usage_snapshot() -> crate::user_budget::AdminUsageSnapshot {
+    crate::user_budget::AdminUsageSnapshot {
+        day_start: "2026-11-10".to_owned(),
+        month_start: "2026-11-01".to_owned(),
+        rows: Vec::new(),
+    }
+}
+
+#[test]
+fn member_usage_names_the_window_and_admin_windows_stay_separate() {
+    let mut snapshot = empty_usage_snapshot();
+    snapshot.rows.push(crate::user_budget::AdminUsageWindowRow {
+        username: "ada".to_owned(),
+        model_id: "model-a".to_owned(),
+        window: crate::user_budget::BudgetWindow::Day,
+        window_start: snapshot.day_start.clone(),
+        request_count: 7,
+        token_count: 11,
+        cost_microdollars: 1_500_000,
+    });
+    snapshot.rows.push(crate::user_budget::AdminUsageWindowRow {
+        username: "ada".to_owned(),
+        model_id: "model-a".to_owned(),
+        window: crate::user_budget::BudgetWindow::Month,
+        window_start: snapshot.month_start.clone(),
+        request_count: 7,
+        token_count: 11,
+        cost_microdollars: 1_500_000,
+    });
+    let admin = super::render_usage_admin(&snapshot, "", "Nord");
+    assert!(admin.contains("Current UTC day"));
+    assert!(admin.contains("Current UTC month"));
+    assert!(!admin.contains(">14<"), "{admin}");
+    assert!(admin.contains("1.5 USD"));
+    let usage = crate::user_budget::UserBudgetUsage {
+        model_id: "model-a".to_owned(),
+        window: crate::user_budget::BudgetWindow::Day,
+        window_start: "2026-11-10".to_owned(),
+        request_count: 7,
+        token_count: 11,
+        cost_microdollars: 0,
+        provider_reported_microdollars: 0,
+        local_estimated_microdollars: 0,
+        reservation_fallback_microdollars: 0,
+        unknown_token_requests: 0,
+        unknown_cost_requests: 0,
+    };
+    let member = super::render_my_usage("ada", &[], &[usage], &[], &[], "Nord");
+    assert!(member.contains(">day<"), "{member}");
+    assert!(member.contains("Other people's consumption is not shown"));
 }
 
 #[test]

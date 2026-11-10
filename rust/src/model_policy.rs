@@ -255,6 +255,39 @@ impl ModelPolicyService {
             .map_err(ModelPolicyError::Database)
     }
 
+    pub async fn list_profile_assignments(
+        &self,
+    ) -> Result<Vec<(String, String)>, ModelPolicyError> {
+        self.database
+            .call(|connection| {
+                let mut statement = connection.prepare(
+                    "SELECT user_id, profile_id FROM user_profile_assignments ORDER BY user_id",
+                )?;
+                statement
+                    .query_map([], |row| Ok((row.get(0)?, row.get(1)?)))?
+                    .collect()
+            })
+            .await
+            .map_err(ModelPolicyError::Database)
+    }
+
+    pub async fn list_user_overrides(
+        &self,
+    ) -> Result<Vec<(String, String, String)>, ModelPolicyError> {
+        self.database
+            .call(|connection| {
+                let mut statement = connection.prepare(
+                    "SELECT user_id, model_id, effect FROM user_policy_overrides \
+                     ORDER BY user_id, model_id",
+                )?;
+                statement
+                    .query_map([], |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)))?
+                    .collect()
+            })
+            .await
+            .map_err(ModelPolicyError::Database)
+    }
+
     pub async fn list_profile_rules(
         &self,
     ) -> Result<Vec<PolicyProfileRuleSummary>, ModelPolicyError> {

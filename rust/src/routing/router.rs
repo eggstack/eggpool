@@ -103,6 +103,7 @@ struct RoutingState {
     recovery_clock: Arc<dyn Fn() -> f64 + Send + Sync>,
     recovery_min_interval_s: f64,
     recovery_callback: Option<RecoveryCallback>,
+    personal_bindings: crate::personal_upstream::PersonalUpstreamSnapshot,
 }
 
 /// Owns the in-memory routing state for one migration generation.
@@ -163,6 +164,7 @@ impl RoutingRouter {
                 recovery_clock: Arc::new(move || clock.elapsed().as_secs_f64()),
                 recovery_min_interval_s: 60.0,
                 recovery_callback: None,
+                personal_bindings: crate::personal_upstream::PersonalUpstreamSnapshot::default(),
             }),
             selection_lock: Arc::new(AsyncMutex::new(())),
         }
@@ -170,6 +172,14 @@ impl RoutingRouter {
 
     pub fn with_random_source(mut self, random: Arc<dyn FairnessRandom>) -> Self {
         Arc::make_mut(&mut self.state).random = random;
+        self
+    }
+
+    pub fn with_personal_bindings(
+        mut self,
+        bindings: crate::personal_upstream::PersonalUpstreamSnapshot,
+    ) -> Self {
+        Arc::make_mut(&mut self.state).personal_bindings = bindings;
         self
     }
 
@@ -241,6 +251,7 @@ impl RoutingRouter {
             facts,
             &self.state.policy,
             &active,
+            &self.state.personal_bindings,
         );
         drop(catalog);
         self.plan_from_candidates(facts, candidates, exclusions)
@@ -413,6 +424,7 @@ impl RoutingRouter {
             facts,
             &self.state.policy,
             &active,
+            &self.state.personal_bindings,
         );
         candidates.retain(|candidate| !exclude_accounts.contains(&candidate.account_name));
         if let Some(preferred_account) = preferred_account {

@@ -307,14 +307,32 @@ fn diff_accounts(old: &Value, new: &Value, changes: &mut Vec<ConfigChange>) {
     for key in keys {
         let path = format!("accounts.{key}");
         match (old_accounts.get(key), new_accounts.get(key)) {
-            (None, Some(_)) => changes.push(change(path, "<missing>", "", false)),
-            (Some(_), None) => changes.push(change(path, "", "<missing>", false)),
+            (None, Some(account)) => {
+                changes.push(change(path, "<missing>", account_env_name(account), false))
+            }
+            (Some(account), None) => {
+                changes.push(change(path, account_env_name(account), "<missing>", false))
+            }
             (Some(old_account), Some(new_account)) if old_account != new_account => {
                 diff_structured(&path, old_account, new_account, changes)
             }
             _ => {}
         }
     }
+}
+
+fn account_env_name(account: &Value) -> String {
+    account
+        .get("api_key_env")
+        .and_then(Value::as_str)
+        .filter(|value| {
+            !value.is_empty()
+                && value
+                    .chars()
+                    .all(|character| character.is_ascii_alphanumeric() || character == '_')
+        })
+        .unwrap_or("")
+        .to_owned()
 }
 
 fn collect_accounts<'a>(

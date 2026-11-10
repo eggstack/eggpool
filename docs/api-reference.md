@@ -200,11 +200,13 @@ Requests denied because a hard rule cannot be bounded return HTTP 429 with
 machine code `hard_budget_not_enforceable` before any upstream submission.
 The response gives corrective guidance for an explicit output cap and, when
 applicable, an operator tariff. Exhausted rules use the code
-`budget_exceeded`. Administrator responses additionally include
-`instance_rules` and `instance_usage`: the single instance-wide ceiling
-intersected with every per-user rule. Members never receive instance fields,
-so one member cannot observe the shared ceiling or infer other users'
-consumption from it.
+`budget_exceeded`. `remaining` reports, for the target user's own current
+UTC day and month rules, each ceiling minus settled usage minus active holds.
+A dimension with no ceiling has `remaining: null`. Both member and
+administrator responses include `instance_rules`, the configured shared
+ceilings. Administrator responses additionally include `instance_usage`.
+Members do not receive instance usage or another user's rows, so they cannot
+infer who else consumed the shared ceiling.
 
 An optional `[admission_fairness]` policy can add process-local short-window
 request throttles before request-body collection. A throttle returns HTTP 429

@@ -1897,8 +1897,76 @@ impl Config {
             .flat_map(|p| p.accounts.iter())
             .collect()
     }
+}
 
+pub(crate) fn account_secret_from_env(config_path: Option<&Path>, name: &str) -> Option<String> {
+    if name.trim().is_empty() {
+        return None;
+    }
+    if let Ok(value) = env::var(name) {
+        return Some(value);
+    }
+    let mut paths = Vec::new();
+    if let Some(config_path) = config_path
+        && let Some(parent) = config_path.parent()
+    {
+        paths.push(parent.join(".env"));
+    }
+    if let Some(explicit) = env::var_os("EGGPOOL_ENV") {
+        paths.push(PathBuf::from(explicit));
+    }
+    paths
+        .into_iter()
+        .find_map(|path| env_file_assignment(&path, name))
+}
+
+fn env_file_assignment(path: &Path, name: &str) -> Option<String> {
+    let text = fs::read_to_string(path).ok()?;
+    for line in text.lines() {
+        let line = line.trim();
+        if line.is_empty() || line.starts_with('#') {
+            continue;
+        }
+        let (key, raw) = line.split_once('=')?;
+        if key.trim() != name {
+            continue;
+        }
+        return Some(unquote_env_value(raw.trim()));
+    }
+    None
+}
+
+fn unquote_env_value(raw: &str) -> String {
+    let Some(inner) = raw
+        .strip_prefix('"')
+        .and_then(|value| value.strip_suffix('"'))
+    else {
+        return raw.trim_matches('\'').to_owned();
+    };
+    let mut output = String::new();
+    let mut escaped = false;
+    for character in inner.chars() {
+        if escaped {
+            output.push(character);
+            escaped = false;
+        } else if character == '\\' {
+            escaped = true;
+        } else {
+            output.push(character);
+        }
+    }
+    output
+}
+
+impl Config {
     pub fn validate_account_credentials(&self) -> Result<(), ConfigError> {
+        self.validate_account_credentials_near(None)
+    }
+
+    pub fn validate_account_credentials_near(
+        &self,
+        config_path: Option<&Path>,
+    ) -> Result<(), ConfigError> {
         for (provider_id, provider) in &self.providers {
             if provider.auth.mode == "none"
                 && provider
@@ -1915,7 +1983,7 @@ impl Config {
                 let value = account
                     .api_key
                     .clone()
-                    .or_else(|| env::var(&account.api_key_env).ok());
+                    .or_else(|| account_secret_from_env(config_path, account.api_key_env.as_str()));
                 let Some(key) = value else {
                     return Err(ConfigError::validation(format!(
                         "Provider {provider_id:?} account {:?}: credential is not set",

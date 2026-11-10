@@ -154,9 +154,11 @@ page, not a fragment.
   `/admin/audit`, `/my-account`, `/my-account/models`, and the one-shot
   personal-token page) use `dashboard_standalone_page()`; the one-shot token
   page keeps its bare shell but still resolves the theme.
-- **Navigation chrome.** The shared navigation (`DASHBOARD_NAVIGATION`) is
-  rendered by the dashboard layout and by every standalone shell, so there is
-  always a route back to the overview. Its destinations are fixed.
+- **Navigation chrome.** Operator pages render `DASHBOARD_NAVIGATION`, so
+  an administrator always has a route back to the overview. Member pages for
+  `/my-account`, `/my-account/models`, and `/usage` render the member set:
+  My account, My models, Usage, and Password. An administrator viewing those
+  same pages keeps the operator set.
 - **Table chrome.** The stylesheet scopes the table chrome to `table.data`.
   Every table the renderers emit is opened through `DASHBOARD_TABLE_OPEN` or
   `DASHBOARD_TABLE_OPEN_COMPACT`, and a source-level guard fails if a table is

@@ -381,6 +381,19 @@ async fn two_user_browser_journey_fences_admin_data_and_personal_credentials() {
     .await;
     assert!(user_page.starts_with("HTTP/1.1 200"), "{user_page}");
     assert!(user_page.contains("member"), "{user_page}");
+    assert!(
+        user_page.contains("<option value=\"team\" selected>Team</option>"),
+        "{user_page}"
+    );
+    assert!(
+        user_page.contains("Unassigned. Models are denied until a profile is assigned."),
+        "{user_page}"
+    );
+    assert!(
+        !user_page.contains("M006 temporary member password")
+            && !user_page.contains("M006+temporary+member+password"),
+        "{user_page}"
+    );
     // M008: the budget form distinguishes hard versus estimated enforcement
     // instead of labeling every dimension an estimate.
     assert!(user_page.contains("name=\"enforcement\""), "{user_page}");
@@ -1334,6 +1347,19 @@ async fn a_member_lands_on_the_member_landing_page_and_reaches_the_member_surfac
     for path in ["/my-account", "/my-account/models", "/usage"] {
         let page = http_request(address, "GET", path, "", Some(&member_cookies), None, None).await;
         assert!(page.starts_with("HTTP/1.1 200"), "{path}: {page}");
+        for forbidden in [
+            "href=\"/users",
+            "href=\"/accounts",
+            "href=\"/profiles",
+            "href=\"/runtime",
+        ] {
+            assert!(
+                !page.contains(forbidden),
+                "{path} navigation contains {forbidden}: {page}"
+            );
+        }
+        assert!(page.contains("href=\"/my-account"), "{path}: {page}");
+        assert!(page.contains("href=\"/usage"), "{path}: {page}");
     }
 
     shutdown(handle, task).await;
@@ -1468,6 +1494,249 @@ async fn an_operator_who_must_change_their_password_is_still_redirected_to_the_a
         response_header(&redirected, "location").as_deref(),
         Some("/account?password=required")
     );
+
+    shutdown(handle, task).await;
+    database.close().await.unwrap();
+}
+
+#[tokio::test]
+async fn personal_upstream_browser_grant_never_echoes_the_key() {
+    let (directory, database) = database().await;
+    identity::mark_fresh_uninitialized(&database).await.unwrap();
+    let (admin, admin_token) =
+        identity::bootstrap_admin(&database, "admin", "M006 strong admin password passphrase")
+            .await
+            .unwrap();
+    identity::enable_managed(&database, &admin.id)
+        .await
+        .unwrap();
+    let member = identity::create_member(
+        &database,
+        &admin.id,
+        "member",
+        "temporary member password 123",
+    )
+    .await
+    .unwrap();
+    database
+        .call(|connection| {
+            connection.execute(
+                "UPDATE users SET must_change_password = 0 WHERE username = 'member'",
+                [],
+            )?;
+            Ok(())
+        })
+        .await
+        .unwrap();
+    let config_path = directory.path().join("config.toml");
+    std::fs::write(&config_path, include_str!("../config.example.toml")).unwrap();
+    let env_path = directory.path().join(".env");
+    let secret = "sk-personal-browser-sentinel";
+
+    let process =
+        ProcessRuntime::with_config_path(database.clone(), &config_path).expect("process runtime");
+    let mut config = Config::default();
+    config.server.host = "127.0.0.1".to_owned();
+    config.server.api_key = None;
+    config.dashboard.enabled = true;
+    let candidate =
+        RuntimeGenerationFactory::prepare(&process, config.clone(), "upstream-ui".into(), 1)
+            .await
+            .expect("runtime generation");
+    let manager = Arc::new(RuntimeManager::new(
+        candidate.transfer().expect("generation transfer"),
+    ));
+    process
+        .install_initial_tasks((*manager).clone(), &config)
+        .await
+        .expect("tasks install");
+    let runtime = ServerRuntime::new(process, manager, config);
+    let handle = runtime.handle();
+    let listener = TcpListener::bind(("127.0.0.1", 0)).await.unwrap();
+    let address = listener.local_addr().unwrap();
+    let task = tokio::spawn(async move {
+        let _ = runtime.serve_listener(listener).await;
+    });
+    let origin = format!("http://{address}");
+
+    let member_login = http_request(
+        address,
+        "POST",
+        "/login",
+        "username=member&password=temporary+member+password+123",
+        None,
+        Some(&origin),
+        None,
+    )
+    .await;
+    assert!(member_login.starts_with("HTTP/1.1 303"), "{member_login}");
+    let (_, member_csrf, member_cookies) = session_pair(&member_login);
+    let denied_page = http_request(
+        address,
+        "GET",
+        "/my-account",
+        "",
+        Some(&member_cookies),
+        None,
+        None,
+    )
+    .await;
+    assert!(denied_page.contains("not granted"), "{denied_page}");
+    assert!(!denied_page.contains("name=\"secret\""));
+    let denied_post = http_request(
+        address,
+        "POST",
+        "/my-account/upstreams",
+        &format!("provider=opencode-go&name=personal-browser&secret={secret}&csrf={member_csrf}"),
+        Some(&member_cookies),
+        Some(&origin),
+        None,
+    )
+    .await;
+    assert!(denied_post.starts_with("HTTP/1.1 403"), "{denied_post}");
+    assert!(!denied_post.contains(secret));
+    assert!(!env_path.exists());
+    assert!(
+        eggpool::personal_upstream::list_bindings(&database, Some(&member.id))
+            .await
+            .unwrap()
+            .is_empty()
+    );
+
+    let admin_login = http_request(
+        address,
+        "POST",
+        "/login",
+        "username=admin&password=M006+strong+admin+password+passphrase",
+        None,
+        Some(&origin),
+        None,
+    )
+    .await;
+    let (_, admin_csrf, admin_cookies) = session_pair(&admin_login);
+    let users = http_request(
+        address,
+        "GET",
+        "/users",
+        "",
+        Some(&admin_cookies),
+        None,
+        None,
+    )
+    .await;
+    assert!(users.contains("action=\"/admin/users/upstream/grant\""));
+    assert!(!users.contains("name=\"secret\""));
+    let granted = http_request(
+        address,
+        "POST",
+        "/admin/users/upstream/grant",
+        &format!("user_id={}&effect=allow&csrf={admin_csrf}", member.id),
+        Some(&admin_cookies),
+        Some(&origin),
+        None,
+    )
+    .await;
+    assert!(granted.starts_with("HTTP/1.1 303"), "{granted}");
+
+    let allowed_page = http_request(
+        address,
+        "GET",
+        "/my-account",
+        "",
+        Some(&member_cookies),
+        None,
+        None,
+    )
+    .await;
+    assert!(allowed_page.contains("name=\"secret\""), "{allowed_page}");
+    assert!(allowed_page.contains("value=\"opencode-go\""));
+    assert!(!allowed_page.contains(secret));
+    let added = http_request(
+        address,
+        "POST",
+        "/my-account/upstreams",
+        &format!("provider=opencode-go&name=personal-browser&secret={secret}&csrf={member_csrf}"),
+        Some(&member_cookies),
+        Some(&origin),
+        None,
+    )
+    .await;
+    assert!(added.starts_with("HTTP/1.1 303"), "{added}");
+    assert!(!added.contains(secret));
+    let env_text = std::fs::read_to_string(&env_path).unwrap();
+    let config_text = std::fs::read_to_string(&config_path).unwrap();
+    assert!(env_text.contains(secret));
+    assert!(!config_text.contains(secret));
+    let account_page = http_request(
+        address,
+        "GET",
+        "/my-account",
+        "",
+        Some(&member_cookies),
+        None,
+        None,
+    )
+    .await;
+    assert!(account_page.contains("personal-browser"));
+    assert!(!account_page.contains(secret));
+    let stored = database
+        .call(|connection| {
+            let text: String = connection.query_row(
+                "SELECT group_concat(effect || ' ' || provider_id || ' ' || account_name || ' ' || state || ' ' || action || ' ' || target_id, ' ')
+                 FROM personal_upstream_grants, personal_upstream_bindings, user_admin_audit",
+                [],
+                |row| row.get(0),
+            )?;
+            Ok(text)
+        })
+        .await
+        .unwrap();
+    assert!(!stored.contains(secret));
+
+    let denied_again = http_request(
+        address,
+        "POST",
+        "/admin/users/upstream/grant",
+        &format!("user_id={}&effect=deny&csrf={admin_csrf}", member.id),
+        Some(&admin_cookies),
+        Some(&origin),
+        None,
+    )
+    .await;
+    assert!(denied_again.starts_with("HTTP/1.1 303"), "{denied_again}");
+    assert_eq!(
+        eggpool::personal_upstream::list_bindings(&database, Some(&member.id))
+            .await
+            .unwrap()
+            .len(),
+        1
+    );
+    assert!(std::fs::read_to_string(&env_path).unwrap().contains(secret));
+    let hidden = http_request(
+        address,
+        "GET",
+        "/my-account",
+        "",
+        Some(&member_cookies),
+        None,
+        None,
+    )
+    .await;
+    assert!(!hidden.contains("name=\"secret\""));
+    assert!(!hidden.contains(secret));
+
+    let token_post = http_request(
+        address,
+        "POST",
+        "/my-account/upstreams",
+        &format!("provider=opencode-go&name=other-browser&secret={secret}&csrf={member_csrf}"),
+        None,
+        Some(&origin),
+        Some(&admin_token.token),
+    )
+    .await;
+    assert!(token_post.starts_with("HTTP/1.1 401"), "{token_post}");
+    assert!(!token_post.contains(secret));
 
     shutdown(handle, task).await;
     database.close().await.unwrap();

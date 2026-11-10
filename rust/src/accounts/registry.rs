@@ -2,7 +2,7 @@
 
 use std::{
     collections::{BTreeMap, BTreeSet},
-    env, fmt,
+    fmt,
 };
 
 use serde::Serialize;
@@ -96,6 +96,12 @@ impl fmt::Debug for CredentialStore {
 impl CredentialStore {
     /// Resolve configured inline/environment keys once, outside routing identity.
     pub fn from_config(config: &Config) -> Self {
+        Self::from_config_near(config, None)
+    }
+
+    /// Resolve keys from the process environment and, when a config path is
+    /// known, the config-adjacent environment file. The value is never logged.
+    pub fn from_config_near(config: &Config, config_path: Option<&std::path::Path>) -> Self {
         let mut store = Self::default();
         for provider in config.providers.values() {
             for account in &provider.accounts {
@@ -103,16 +109,15 @@ impl CredentialStore {
                     if account.api_key_env.is_empty() {
                         return None;
                     }
-                    match env::var(&account.api_key_env) {
-                        Ok(value) => Some(value),
+                    match crate::config::account_secret_from_env(config_path, &account.api_key_env) {
+                        Some(value) => Some(value),
                         // Secret-free: log names only, never the value. A set
                         // `api_key_env` with an unreadable variable is a
                         // misconfiguration, not an unconfigured account.
-                        Err(error) => {
+                        None => {
                             tracing::warn!(
                                 account = account.name.as_str(),
                                 env_var = account.api_key_env.as_str(),
-                                reason = error.to_string(),
                                 "account key environment variable is unreadable; treating account as unconfigured"
                             );
                             None

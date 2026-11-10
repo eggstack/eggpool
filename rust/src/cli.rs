@@ -204,6 +204,70 @@ pub enum UsersCommand {
     /// Show, select, or clear the default profile for newly created members.
     #[command(subcommand)]
     Defaults(UsersDefaultsCommand),
+    /// Grant or attach a personal bundled-provider upstream account.
+    #[command(subcommand)]
+    Upstream(UsersUpstreamCommand),
+}
+
+#[derive(Debug, Subcommand)]
+pub enum UsersUpstreamCommand {
+    /// Set whether members may add a personal upstream account.
+    Default(UpstreamDefaultArgs),
+    /// Allow, deny, or inherit personal-upstream self-service for one user.
+    Grant(UpstreamGrantArgs),
+    /// Attach a bundled-provider account that only one user can spend.
+    Add(UpstreamAddArgs),
+    /// List personal upstream bindings. Secrets are not shown.
+    List(UpstreamListArgs),
+    /// Withdraw one user's personal upstream account.
+    Remove(UpstreamRemoveArgs),
+}
+
+#[derive(Debug, clap::Args)]
+pub struct UpstreamDefaultArgs {
+    #[arg(value_parser = ["allow", "deny"])]
+    pub effect: String,
+    #[arg(long, default_value = "admin")]
+    pub actor: String,
+}
+
+#[derive(Debug, clap::Args)]
+pub struct UpstreamGrantArgs {
+    pub username: String,
+    #[arg(value_parser = ["allow", "deny", "inherit"])]
+    pub effect: String,
+    #[arg(long, default_value = "admin")]
+    pub actor: String,
+}
+
+#[derive(Debug, clap::Args)]
+pub struct UpstreamAddArgs {
+    pub username: String,
+    #[arg(long)]
+    pub provider: String,
+    #[arg(long)]
+    pub name: String,
+    /// Read the upstream secret from stdin. The secret is never an argument.
+    #[arg(long)]
+    pub secret_stdin: bool,
+    #[arg(long, default_value = "admin")]
+    pub actor: String,
+}
+
+#[derive(Debug, clap::Args)]
+pub struct UpstreamListArgs {
+    pub username: Option<String>,
+}
+
+#[derive(Debug, clap::Args)]
+pub struct UpstreamRemoveArgs {
+    pub username: String,
+    #[arg(long)]
+    pub provider: String,
+    #[arg(long)]
+    pub name: String,
+    #[arg(long, default_value = "admin")]
+    pub actor: String,
 }
 
 #[derive(Debug, Subcommand)]

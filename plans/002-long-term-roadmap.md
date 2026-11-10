@@ -86,9 +86,13 @@ Small teams are expected primarily on ordinary on-prem servers with durable
 storage; Pi/microSD tests are a lightweight solo regression baseline, not the
 default team throughput acceptance target. Authorized clients may route to
 operator-configured hosted or self-hosted LLMs; all provider secrets/topology
-remain under TOML/environment ownership.
+remain under TOML/environment ownership. A granted member may submit one
+bundled-provider secret through the server for an account only that member
+can spend. Solo installs keep shared operator accounts and do not ask for a
+personal upstream key.
 
-- Authority: `plans/adrs/ADR-0002-on-prem-user-identity-and-policy-boundaries.md`
+- Authority: `plans/adrs/ADR-0002-on-prem-user-identity-and-policy-boundaries.md`,
+  `plans/adrs/ADR-0010-personal-upstream-account-custody.md`,
   and `plans/subsystems/on-prem-user-access-roadmap.md`.
 - Order: secure administrator bootstrap and user credentials; browser-session
   and route authorization; principal propagation/attribution; model-policy

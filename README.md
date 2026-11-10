@@ -115,7 +115,7 @@ Generated configs reference `EGGPOOL_API_KEY` without embedding the key. Set it 
 
 ## Dashboard & LAN Access
 
-By default EggPool binds `0.0.0.0:11300` and serves a public read-only dashboard at `http://<lan-ip>:11300/`. To share with desktops on your LAN, set `[integrations].advertise_base_url = "http://<lan-ip>:11300/v1"`, run `eggpool rehash` (advertised URL is live-reloadable profile output; it never changes the listen socket), then export a profile with `eggpool configremote codex`. Lock it down with `[server].host = "127.0.0.1"` (local only) or `eggpool dashboard public --off` (key required on the dashboard too). See [Firewall](https://github.com/eggstack/eggpool/blob/main/docs/firewall.md).
+By default EggPool binds `0.0.0.0:11300`. After `eggpool onboard`, sign in at `http://<lan-ip>:11300/login` and export the one-time personal token as `EGGPOOL_API_KEY`. A database that is still `legacy_unmigrated` can serve a public read-only dashboard at `http://<lan-ip>:11300/`. To share with desktops on your LAN, set `[integrations].advertise_base_url = "http://<lan-ip>:11300/v1"`, run `eggpool rehash` (advertised URL is live-reloadable profile output; it never changes the listen socket), then export a profile with `eggpool configremote codex`. Lock a legacy dashboard down with `[server].host = "127.0.0.1"` (local only) or `eggpool dashboard public --off` (key required on that legacy dashboard too). See [Firewall](https://github.com/eggstack/eggpool/blob/main/docs/firewall.md).
 
 Browser password sign-in is shown only over loopback or trusted HTTPS proxy
 transport. A remote plaintext HTTP visit to `/login` receives an explanation

@@ -167,7 +167,7 @@ pub(super) fn member_landing_html(username: &str) -> String {
         &format!(
             "<p>Signed in as {username}.</p>\
              <div class=\"cards\">\
-             <div class=\"card\"><h3>My account</h3><p class=\"sub\">Your personal details, personal credentials, and budget.</p><p><a href=\"/my-account\">Open my account</a></p></div>\
+             <div class=\"card\"><h3>My account</h3><p class=\"sub\">Your personal details and personal credentials. Budget is on <a href=\"/usage\">Usage</a>.</p><p><a href=\"/my-account\">Open my account</a></p></div>\
              <div class=\"card\"><h3>My models</h3><p class=\"sub\">The models your profile permits.</p><p><a href=\"/my-account/models\">Open my models</a></p></div>\
              <div class=\"card\"><h3>Usage</h3><p class=\"sub\">Your own request and token usage.</p><p><a href=\"/usage\">Open usage</a></p></div>\
              </div>"
@@ -578,6 +578,14 @@ fn sign_in_failure_html(message: &str) -> String {
 /// header itself.
 fn sign_in_response(status: StatusCode, html: String) -> Response {
     no_store((status, Html(html)).into_response())
+}
+
+/// Send an unauthenticated browser to the existing sign-in page.
+///
+/// The redirect carries no password form. `/login` still refuses the form on
+/// a connection that is neither loopback nor trusted HTTPS.
+pub(super) fn sign_in_handoff_response() -> Response {
+    no_store(Redirect::to("/login").into_response())
 }
 
 fn sign_in_unavailable() -> Response {

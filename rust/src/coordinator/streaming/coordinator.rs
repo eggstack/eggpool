@@ -229,6 +229,13 @@ impl StreamingCoordinator {
             return Err(StreamingCoordinatorError::InvalidFacts);
         }
 
+        let mut request = request;
+        if let Some(user_id) = attribution
+            .as_ref()
+            .and_then(|principal| principal.user_id.clone())
+        {
+            request.routing_facts.principal_user_id = Some(user_id);
+        }
         let mut attempt_number = 1_u32;
         let mut excluded_accounts = BTreeSet::new();
         let mut preferred_account = None;

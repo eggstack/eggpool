@@ -49,7 +49,9 @@ and the SQLite database (plus `-wal`/`-shm` if present) into a single
 timestamped `.zip` archive.
 
 The database snapshot includes local users, budget rules and audit records,
-active budget holds, and settled user/model usage. Restoring the snapshot
+active budget holds, settled user/model usage, and secret-free personal
+upstream bindings. The provider key for a personal account lives in `.env`,
+which this backup includes when `include_env` is true. Restoring the snapshot
 preserves the remaining budget state; crash reconciliation settles unknown
 in-flight use conservatively before new requests resume.
 

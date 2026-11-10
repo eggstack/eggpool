@@ -15,6 +15,9 @@ use std::{
     time::Duration,
 };
 
+#[cfg(unix)]
+use std::os::unix::fs::PermissionsExt;
+
 use toml::{Value, map::Map};
 
 use crate::{
@@ -172,7 +175,7 @@ fn read_bounded(path: &Path) -> Result<Vec<u8>, MutationError> {
 
 fn validate_config_bytes(path: &Path, bytes: &[u8]) -> Result<Config, MutationError> {
     let config = Config::from_toml_bytes(path, bytes)?;
-    config.validate_account_credentials()?;
+    config.validate_account_credentials_near(Some(path))?;
     Ok(config)
 }
 
@@ -869,17 +872,36 @@ fn provider_block(
     template: &ProviderTemplate,
     account_name: &str,
     api_key: Option<&str>,
+    api_key_env: Option<&str>,
 ) -> Result<String, MutationError> {
-    let mut provider = template.data.clone();
+    provider_block_from_table(
+        &template.id,
+        template.data.clone(),
+        account_name,
+        api_key,
+        api_key_env,
+    )
+}
+
+fn provider_block_from_table(
+    provider_id: &str,
+    mut provider: Map<String, Value>,
+    account_name: &str,
+    api_key: Option<&str>,
+    api_key_env: Option<&str>,
+) -> Result<String, MutationError> {
     provider.insert("routing_priority".into(), Value::Integer(0));
     let mut account = Map::new();
     account.insert("name".into(), Value::String(account_name.into()));
     if let Some(api_key) = api_key {
         account.insert("api_key".into(), Value::String(api_key.into()));
     }
+    if let Some(api_key_env) = api_key_env {
+        account.insert("api_key_env".into(), Value::String(api_key_env.into()));
+    }
     provider.insert("accounts".into(), Value::Array(vec![Value::Table(account)]));
     let mut providers = Map::new();
-    providers.insert(template.id.clone(), Value::Table(provider));
+    providers.insert(provider_id.to_owned(), Value::Table(provider));
     let mut root = Map::new();
     root.insert("providers".into(), Value::Table(providers));
     let rendered = toml::to_string_pretty(&Value::Table(root)).map_err(|error| {
@@ -898,6 +920,7 @@ fn append_account(
     provider_id: &str,
     account_name: &str,
     api_key: Option<&str>,
+    api_key_env: Option<&str>,
 ) -> Result<String, MutationError> {
     let lines: Vec<String> = text.lines().map(str::to_owned).collect();
     let header = format!("providers.{provider_id}.accounts");
@@ -920,6 +943,9 @@ fn append_account(
     ];
     if let Some(api_key) = api_key {
         insertion.push(format!("api_key = {}", render_string(api_key)));
+    }
+    if let Some(api_key_env) = api_key_env {
+        insertion.push(format!("api_key_env = {}", render_string(api_key_env)));
     }
     let mut updated = lines;
     let index = end;
@@ -1125,9 +1151,10 @@ pub fn connect_with_transition(
             &provider_id,
             &account_name,
             api_key.as_deref(),
+            None,
         )?
     } else {
-        let block = provider_block(&template, &account_name, api_key.as_deref())?;
+        let block = provider_block(&template, &account_name, api_key.as_deref(), None)?;
         let mut lines: Vec<String> = original_text.lines().map(str::to_owned).collect();
         let index = lines
             .iter()
@@ -1364,6 +1391,302 @@ pub fn logout_with_transition(
         value: Some(account),
         transition,
     })
+}
+
+/// Previous file bytes captured before a personal-upstream publication.
+///
+/// Restoring is explicit. Dropping the value leaves the published bytes in
+/// place. The captured bytes are the previous files, never the new secret.
+pub struct PersonalFileRollback {
+    config_path: PathBuf,
+    previous_config: Vec<u8>,
+    env_path: PathBuf,
+    previous_env: Option<Vec<u8>>,
+}
+
+impl PersonalFileRollback {
+    pub fn restore(self) -> Result<(), MutationError> {
+        let _guard = lock_mutation(&self.config_path)?;
+        atomic_replace(
+            &self.config_path,
+            &self.previous_config,
+            existing_mode(&self.config_path)?,
+        )?;
+        match &self.previous_env {
+            Some(bytes) => {
+                #[cfg(unix)]
+                let mode = Some(fs::Permissions::from_mode(0o600));
+                #[cfg(not(unix))]
+                let mode = None;
+                atomic_replace(&self.env_path, bytes, mode)?;
+            }
+            None => {
+                if self.env_path.exists() {
+                    fs::remove_file(&self.env_path).map_err(MutationError::Write)?;
+                }
+            }
+        }
+        Ok(())
+    }
+}
+
+fn personal_account_text(
+    original_text: &str,
+    provider_id: &str,
+    account_name: &str,
+    api_key_env: &str,
+) -> Result<String, MutationError> {
+    if !valid_identifier(provider_id) || !valid_identifier(account_name) {
+        return Err(MutationError::Invalid(
+            "provider id or account name contains unsafe characters".into(),
+        ));
+    }
+    if account_names(original_text)
+        .iter()
+        .any(|name| name == account_name)
+    {
+        return Err(MutationError::Invalid(
+            "account name is already configured".into(),
+        ));
+    }
+    let templates = load_provider_templates(None)?;
+    if !templates.contains_key(provider_id) {
+        return Err(MutationError::Invalid(
+            "provider is not a bundled profile".into(),
+        ));
+    }
+    if provider_exists(original_text, provider_id) {
+        append_account(
+            original_text,
+            provider_id,
+            account_name,
+            None,
+            Some(api_key_env),
+        )
+    } else {
+        let profile = crate::provider_profile::bundled_profile(provider_id)
+            .map_err(|_| MutationError::Invalid("provider is not a bundled profile".into()))?;
+        let block = provider_block_from_table(
+            provider_id,
+            crate::provider_profile::provider_config_table(profile),
+            account_name,
+            None,
+            Some(api_key_env),
+        )?;
+        let mut lines: Vec<String> = original_text.lines().map(str::to_owned).collect();
+        let index = lines
+            .iter()
+            .position(|line| {
+                line_header(line).is_some_and(|header| header.starts_with("providers."))
+            })
+            .unwrap_or(lines.len());
+        let block_lines: Vec<String> = block.lines().map(str::to_owned).collect();
+        lines.splice(
+            index..index,
+            block_lines
+                .into_iter()
+                .chain(std::iter::once(String::new())),
+        );
+        Ok(format!("{}\n", lines.join("\n")))
+    }
+}
+
+fn env_assignment(name: &str, secret: &str) -> Result<String, MutationError> {
+    if secret.is_empty()
+        || secret.chars().any(|character| character.is_control())
+        || secret.contains('\n')
+        || secret.contains('\r')
+    {
+        return Err(MutationError::Invalid(
+            "upstream secret was rejected".into(),
+        ));
+    }
+    let escaped = secret.replace('\\', "\\\\").replace('"', "\\\"");
+    Ok(format!("{name}=\"{escaped}\"\n"))
+}
+
+fn upsert_env(existing: &str, name: &str, secret: &str) -> Result<String, MutationError> {
+    if existing.lines().any(|line| {
+        let key = line.split_once('=').map(|(key, _)| key.trim());
+        key == Some(name)
+    }) {
+        return Err(MutationError::Invalid(
+            "upstream environment variable is already defined".into(),
+        ));
+    }
+    let mut text = existing.to_owned();
+    if !text.is_empty() && !text.ends_with('\n') {
+        text.push('\n');
+    }
+    text.push_str(&env_assignment(name, secret)?);
+    Ok(text)
+}
+
+fn restore_env(
+    env_path: &Path,
+    previous: Option<&[u8]>,
+    mode: Option<fs::Permissions>,
+) -> Result<(), MutationError> {
+    match previous {
+        Some(bytes) => atomic_replace(env_path, bytes, mode),
+        None => {
+            if env_path.exists() {
+                fs::remove_file(env_path).map_err(MutationError::Write)?;
+            }
+            Ok(())
+        }
+    }
+}
+
+fn omit_env_assignment(existing: &str, name: &str) -> String {
+    let mut kept = existing
+        .lines()
+        .filter(|line| {
+            line.split_once('=')
+                .is_none_or(|(key, _)| key.trim() != name)
+        })
+        .map(str::to_owned)
+        .collect::<Vec<_>>();
+    if kept.is_empty() {
+        return String::new();
+    }
+    if !kept.last().is_some_and(|line| line.is_empty()) {
+        kept.push(String::new());
+    }
+    format!("{}\n", kept.join("\n"))
+}
+
+/// Publish one personal account stanza and its environment assignment.
+///
+/// Classification happens before either file changes. A restart-required
+/// transition writes nothing.
+pub fn install_personal_account_files(
+    config_path: &Path,
+    env_path: &Path,
+    provider_id: &str,
+    account_name: &str,
+    api_key_env: &str,
+    secret: &str,
+) -> Result<(PersonalFileRollback, ConfigTransition), MutationError> {
+    let _guard = lock_mutation(config_path)?;
+    let previous_config = if config_path.exists() {
+        read_bounded(config_path)?
+    } else {
+        Vec::new()
+    };
+    let original_text = String::from_utf8(previous_config.clone()).map_err(|error| {
+        MutationError::Invalid(format!("configuration is not valid UTF-8: {error}"))
+    })?;
+    let updated = personal_account_text(&original_text, provider_id, account_name, api_key_env)?;
+    let old_config = Config::from_toml_bytes(config_path, original_text.as_bytes())?;
+    let candidate = Config::from_toml_bytes(config_path, updated.as_bytes())?;
+    let transition = classify_transition(&old_config, &candidate).map_err(|error| {
+        MutationError::Invalid(format!(
+            "configuration transition could not be classified: {error}"
+        ))
+    })?;
+    if transition.has_restart_required() {
+        return Err(MutationError::Invalid(
+            "personal account publication is restart-required".into(),
+        ));
+    }
+    let previous_env = if env_path.exists() {
+        Some(read_bounded(env_path)?)
+    } else {
+        None
+    };
+    let env_text = String::from_utf8(previous_env.clone().unwrap_or_default())
+        .map_err(|_| MutationError::Invalid("environment file is not valid UTF-8".into()))?;
+    let updated_env = upsert_env(&env_text, api_key_env, secret)?;
+    #[cfg(unix)]
+    let env_mode = Some(fs::Permissions::from_mode(0o600));
+    #[cfg(not(unix))]
+    let env_mode = None;
+    atomic_replace(env_path, updated_env.as_bytes(), env_mode.clone())?;
+    if let Err(error) = candidate.validate_account_credentials_near(Some(config_path)) {
+        restore_env(env_path, previous_env.as_deref(), env_mode)?;
+        return Err(error.into());
+    }
+    if let Err(error) = atomic_replace(config_path, updated.as_bytes(), existing_mode(config_path)?)
+    {
+        let _ = restore_env(env_path, previous_env.as_deref(), env_mode);
+        return Err(error);
+    }
+    Ok((
+        PersonalFileRollback {
+            config_path: config_path.to_path_buf(),
+            previous_config,
+            env_path: env_path.to_path_buf(),
+            previous_env,
+        },
+        transition,
+    ))
+}
+
+/// Omit a personal account and its environment assignment.
+pub fn omit_personal_account_files(
+    config_path: &Path,
+    env_path: &Path,
+    provider_id: &str,
+    account_name: &str,
+    api_key_env: &str,
+) -> Result<(PersonalFileRollback, ConfigTransition), MutationError> {
+    let _guard = lock_mutation(config_path)?;
+    let previous_config = read_bounded(config_path)?;
+    let original_text = String::from_utf8(previous_config.clone()).map_err(|error| {
+        MutationError::Invalid(format!("configuration is not valid UTF-8: {error}"))
+    })?;
+    let updated = remove_account_block(
+        &original_text,
+        &AccountMatch {
+            provider_id: provider_id.to_owned(),
+            name: account_name.to_owned(),
+            api_key_env: api_key_env.to_owned(),
+            api_key: None,
+        },
+    )?;
+    let old_config = Config::from_toml_bytes(config_path, original_text.as_bytes())?;
+    let candidate = validate_config_bytes(config_path, updated.as_bytes())?;
+    let transition = classify_transition(&old_config, &candidate).map_err(|error| {
+        MutationError::Invalid(format!(
+            "configuration transition could not be classified: {error}"
+        ))
+    })?;
+    if transition.has_restart_required() {
+        return Err(MutationError::Invalid(
+            "personal account removal is restart-required".into(),
+        ));
+    }
+    let previous_env = if env_path.exists() {
+        Some(read_bounded(env_path)?)
+    } else {
+        None
+    };
+    let env_text = String::from_utf8(previous_env.clone().unwrap_or_default())
+        .map_err(|_| MutationError::Invalid("environment file is not valid UTF-8".into()))?;
+    let updated_env = omit_env_assignment(&env_text, api_key_env);
+    atomic_replace(config_path, updated.as_bytes(), existing_mode(config_path)?)?;
+    #[cfg(unix)]
+    let env_mode = Some(fs::Permissions::from_mode(0o600));
+    #[cfg(not(unix))]
+    let env_mode = None;
+    if let Err(error) = atomic_replace(env_path, updated_env.as_bytes(), env_mode) {
+        let _ = atomic_replace(
+            config_path,
+            &previous_config,
+            existing_mode(config_path).ok().flatten(),
+        );
+        return Err(error);
+    }
+    Ok((
+        PersonalFileRollback {
+            config_path: config_path.to_path_buf(),
+            previous_config,
+            env_path: env_path.to_path_buf(),
+            previous_env,
+        },
+        transition,
+    ))
 }
 
 pub async fn apply_after_mutation(

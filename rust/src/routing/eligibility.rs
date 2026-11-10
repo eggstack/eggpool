@@ -32,6 +32,9 @@ pub struct RoutingRequestFacts {
     pub thinking: Option<ThinkingRequirement>,
     pub capability_policy: BTreeMap<String, String>,
     pub now: i64,
+    /// Authenticated principal. Absent for a legacy shared key, which cannot
+    /// select a personally bound account.
+    pub principal_user_id: Option<String>,
 }
 
 /// The wall clock routing facts are stamped with.
@@ -64,6 +67,7 @@ impl RoutingRequestFacts {
             thinking: None,
             capability_policy: BTreeMap::new(),
             now: 0,
+            principal_user_id: None,
         }
     }
 
@@ -239,6 +243,7 @@ pub fn build_eligible_candidates(
     facts: &RoutingRequestFacts,
     policy: &EligibilityPolicy,
     active_requests: &BTreeMap<String, i64>,
+    personal_bindings: &crate::personal_upstream::PersonalUpstreamSnapshot,
 ) -> (Vec<RoutingCandidate>, Vec<RoutingExclusion>) {
     let mut eligible = Vec::new();
     let mut exclusions = Vec::new();
@@ -248,6 +253,17 @@ pub fn build_eligible_candidates(
         &facts.capability_policy
     };
     for identity in registry.all() {
+        if personal_bindings.excludes(
+            &identity.provider_id,
+            &identity.account_name,
+            facts.principal_user_id.as_deref(),
+        ) {
+            exclusions.push(RoutingExclusion {
+                account_name: identity.account_name.clone(),
+                reason_code: "personal_upstream".into(),
+            });
+            continue;
+        }
         let Some(candidate) = candidate_for_account(
             identity,
             catalog,

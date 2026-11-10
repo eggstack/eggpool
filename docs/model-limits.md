@@ -224,8 +224,9 @@ count against it too. Each logical request counts once across failover and
 retries; hard/estimated semantics and the operator-tariff trust boundary match
 the per-user contract above. Global counters never depend on a user row, so
 disabling or deleting a user preserves history and remaining headroom. Members
-see only their own rules and usage; instance ceilings and aggregate usage are
-admin-visible only.
+see their own rules, their own settled windows, and the remaining allowance
+on those rules. They also see the configured instance ceilings. Instance
+usage totals and other users' rows stay on the administrator response.
 
 Default member profiles do not create or copy budget rules. Configure user and
 instance ceilings separately; changing the default model profile leaves all

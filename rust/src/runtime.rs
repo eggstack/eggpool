@@ -732,7 +732,12 @@ async fn users(path: &Path, command: crate::cli::UsersCommand) -> Result<(), Boo
             }
         }
         crate::cli::UsersCommand::Bootstrap(args) => {
-            let password = read_user_password(args.password_stdin, true, "Administrator password")?;
+            let password = read_user_password(
+                args.password_stdin,
+                true,
+                "Administrator password",
+                "--password-stdin",
+            )?;
             let (user, credential) =
                 crate::identity::bootstrap_admin(&database, &args.username, &password)
                     .await
@@ -742,8 +747,12 @@ async fn users(path: &Path, command: crate::cli::UsersCommand) -> Result<(), Boo
         }
         crate::cli::UsersCommand::Add(args) => {
             let actor = policy_actor_id(&database, &args.actor).await?;
-            let password =
-                read_user_password(args.password_stdin, false, "Temporary member password")?;
+            let password = read_user_password(
+                args.password_stdin,
+                false,
+                "Temporary member password",
+                "--password-stdin",
+            )?;
             let user = if args.no_profile {
                 crate::identity::create_member_without_profile(
                     &database,
@@ -812,7 +821,12 @@ async fn users(path: &Path, command: crate::cli::UsersCommand) -> Result<(), Boo
             println!("must_change_password: {}", user.must_change_password);
         }
         crate::cli::UsersCommand::ResetPassword(args) => {
-            let password = read_user_password(args.password_stdin, true, "Administrator password")?;
+            let password = read_user_password(
+                args.password_stdin,
+                true,
+                "Administrator password",
+                "--password-stdin",
+            )?;
             crate::identity::reset_password(&database, &args.username, &password)
                 .await
                 .map_err(|error| command_error(EXIT_VALIDATION, error.to_string()))?;
@@ -937,6 +951,140 @@ async fn users(path: &Path, command: crate::cli::UsersCommand) -> Result<(), Boo
                         "Default member profile cleared; future members without an explicit profile remain deny-by-default."
                     );
                     println!("Existing assignments and all budget rules are unchanged.");
+                }
+            }
+        }
+        crate::cli::UsersCommand::Upstream(command) => {
+            use crate::cli::UsersUpstreamCommand as Upstream;
+            use crate::personal_upstream::GrantEffect;
+            let effect_of = |value: &str| match value {
+                "allow" => Ok(GrantEffect::Allow),
+                "deny" => Ok(GrantEffect::Deny),
+                "inherit" => Ok(GrantEffect::Inherit),
+                _ => Err(command_error(EXIT_VALIDATION, "invalid upstream grant")),
+            };
+            match command {
+                Upstream::Default(args) => {
+                    let actor = policy_actor_id(&database, &args.actor).await?;
+                    crate::personal_upstream::set_instance_grant(
+                        &database,
+                        &actor,
+                        effect_of(&args.effect)?,
+                    )
+                    .await
+                    .map_err(|error| command_error(EXIT_VALIDATION, error.to_string()))?;
+                    println!("Personal upstream self-service default is {}.", args.effect);
+                }
+                Upstream::Grant(args) => {
+                    let actor = policy_actor_id(&database, &args.actor).await?;
+                    let user = crate::identity::get_user_by_name(&database, &args.username)
+                        .await
+                        .map_err(|error| command_error(EXIT_VALIDATION, error.to_string()))?
+                        .ok_or_else(|| command_error(EXIT_VALIDATION, "user was not found"))?;
+                    crate::personal_upstream::set_user_grant(
+                        &database,
+                        &actor,
+                        &user.id,
+                        effect_of(&args.effect)?,
+                    )
+                    .await
+                    .map_err(|error| command_error(EXIT_VALIDATION, error.to_string()))?;
+                    println!(
+                        "Personal upstream self-service for {} is {}.",
+                        user.username, args.effect
+                    );
+                }
+                Upstream::Add(args) => {
+                    let actor = policy_actor_id(&database, &args.actor).await?;
+                    let user = crate::identity::get_user_by_name(&database, &args.username)
+                        .await
+                        .map_err(|error| command_error(EXIT_VALIDATION, error.to_string()))?
+                        .ok_or_else(|| command_error(EXIT_VALIDATION, "user was not found"))?;
+                    let secret = read_user_password(
+                        args.secret_stdin,
+                        false,
+                        "Upstream API key",
+                        "--secret-stdin",
+                    )?;
+                    let env_path = crate::personal_upstream::personal_env_path(path);
+                    crate::personal_upstream::add_personal_account(
+                        &database,
+                        crate::personal_upstream::PersonalAccountWrite {
+                            actor_id: &actor,
+                            user_id: &user.id,
+                            provider_id: &args.provider,
+                            account_name: &args.name,
+                            secret: &secret,
+                            config_path: path,
+                            env_path: &env_path,
+                            require_self_service: false,
+                        },
+                    )
+                    .await
+                    .map_err(|error| command_error(EXIT_VALIDATION, error.to_string()))?;
+                    println!(
+                        "Personal upstream account {} on {} is available only to {}.",
+                        args.name, args.provider, user.username
+                    );
+                }
+                Upstream::List(args) => {
+                    let user_id = if let Some(username) = args.username.as_deref() {
+                        Some(
+                            crate::identity::get_user_by_name(&database, username)
+                                .await
+                                .map_err(|error| command_error(EXIT_VALIDATION, error.to_string()))?
+                                .ok_or_else(|| {
+                                    command_error(EXIT_VALIDATION, "user was not found")
+                                })?
+                                .id,
+                        )
+                    } else {
+                        None
+                    };
+                    let bindings =
+                        crate::personal_upstream::list_bindings(&database, user_id.as_deref())
+                            .await
+                            .map_err(|error| command_error(EXIT_VALIDATION, error.to_string()))?;
+                    if bindings.is_empty() {
+                        println!("No personal upstream accounts.");
+                    }
+                    for binding in bindings {
+                        println!(
+                            "{} {} {} {} {}",
+                            binding.user_id,
+                            binding.provider_id,
+                            binding.account_name,
+                            binding.state,
+                            binding.env_var
+                        );
+                    }
+                }
+                Upstream::Remove(args) => {
+                    let actor = policy_actor_id(&database, &args.actor).await?;
+                    let user = crate::identity::get_user_by_name(&database, &args.username)
+                        .await
+                        .map_err(|error| command_error(EXIT_VALIDATION, error.to_string()))?
+                        .ok_or_else(|| command_error(EXIT_VALIDATION, "user was not found"))?;
+                    let env_path = crate::personal_upstream::personal_env_path(path);
+                    crate::personal_upstream::remove_personal_account(
+                        &database,
+                        crate::personal_upstream::PersonalAccountWrite {
+                            actor_id: &actor,
+                            user_id: &user.id,
+                            provider_id: &args.provider,
+                            account_name: &args.name,
+                            secret: "",
+                            config_path: path,
+                            env_path: &env_path,
+                            require_self_service: false,
+                        },
+                    )
+                    .await
+                    .map_err(|error| command_error(EXIT_VALIDATION, error.to_string()))?;
+                    println!(
+                        "Personal upstream account {} on {} was removed for {}.",
+                        args.name, args.provider, user.username
+                    );
                 }
             }
         }
@@ -1094,6 +1242,7 @@ fn read_user_password(
     from_stdin: bool,
     confirm: bool,
     prompt: &str,
+    stdin_flag: &str,
 ) -> Result<String, BootstrapError> {
     let password = if from_stdin {
         let mut value = String::new();
@@ -1107,7 +1256,7 @@ fn read_user_password(
         if !io::stdin().is_terminal() {
             return Err(command_error(
                 EXIT_VALIDATION,
-                "password input requires a TTY or --password-stdin",
+                format!("secret input requires a TTY or {stdin_flag}"),
             ));
         }
         let first = rpassword::prompt_password(format!("{prompt}: "))
@@ -2658,8 +2807,8 @@ async fn onboard(path: &Path, args: crate::cli::OnboardArgs) -> Result<(), Boots
     }
     let preflight_config = config::Config::from_toml(path).map_err(BootstrapError::from)?;
     let preflight_database_path = config::Config::runtime_path(&preflight_config.database.path);
-    let (bootstrap_admin, identity_initialized) = if !preflight_database_path.exists() {
-        (true, false)
+    let (bootstrap_admin, access_state) = if !preflight_database_path.exists() {
+        (true, None)
     } else {
         let database = open_operational_database(&preflight_config, true).await?;
         let access_state = crate::identity::access_state(&database)
@@ -2674,28 +2823,17 @@ async fn onboard(path: &Path, args: crate::cli::OnboardArgs) -> Result<(), Boots
             .map_err(|error| command_error(EXIT_VALIDATION, error.to_string()))?;
         (
             access_state == "fresh_uninitialized" && users.is_empty(),
-            matches!(access_state.as_str(), "admin_initialized" | "managed"),
+            Some(access_state),
         )
     };
-    if should_generate_legacy_server_key(identity_initialized)
-        && config_mutation::read_server_key(path)
-            .map_err(|error| mutation_error(error, EXIT_VALIDATION))?
-            .is_none()
-    {
-        let key = config_mutation::generate_key()
-            .map_err(|error| mutation_error(error, EXIT_VALIDATION))?;
-        if config_mutation::write_server_key(path, &key)
-            .map_err(|error| mutation_error(error, EXIT_VALIDATION))?
-        {
-            println!("  Generated server API key");
-        }
-    }
+    let key_action = apply_onboarding_server_key(path, access_state.as_deref(), bootstrap_admin)?;
     let admin_password = if bootstrap_admin {
         println!("Create the local administrator for this new installation.");
         Some(read_user_password(
             args.password_stdin,
             true,
             "Administrator password",
+            "--password-stdin",
         )?)
     } else {
         None
@@ -2746,6 +2884,14 @@ async fn onboard(path: &Path, args: crate::cli::OnboardArgs) -> Result<(), Boots
             .map_err(|error| command_error(EXIT_VALIDATION, error.to_string()))?;
         println!("Administrator {} created.", user.username);
         print_one_time_secret(&credential.token, args.show_secret);
+        let listen = format!("{}:{}", setup_config.server.host, setup_config.server.port);
+        println!(
+            "{}",
+            onboarding_credential_guidance(
+                key_action == OnboardingKeyAction::LeftExisting,
+                &listen,
+            )
+        );
     }
     println!("\nConnected {connected} provider(s).\n");
     let paths = RuntimePaths::resolve();
@@ -2772,8 +2918,65 @@ async fn onboard(path: &Path, args: crate::cli::OnboardArgs) -> Result<(), Boots
     .await
 }
 
-fn should_generate_legacy_server_key(identity_initialized: bool) -> bool {
-    !identity_initialized
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum OnboardingKeyAction {
+    Generated,
+    LeftExisting,
+    Skipped,
+}
+
+/// A missing server key is written only when this run leaves the database
+/// `legacy_unmigrated`. A run that bootstraps the administrator does not
+/// write a key that bootstrap is about to retire.
+fn should_generate_legacy_server_key(
+    access_state: Option<&str>,
+    will_bootstrap_admin: bool,
+) -> bool {
+    !will_bootstrap_admin && access_state == Some("legacy_unmigrated")
+}
+
+fn apply_onboarding_server_key(
+    path: &Path,
+    access_state: Option<&str>,
+    will_bootstrap_admin: bool,
+) -> Result<OnboardingKeyAction, BootstrapError> {
+    let present = config_mutation::read_server_key(path)
+        .map_err(|error| mutation_error(error, EXIT_VALIDATION))?
+        .is_some();
+    if present {
+        return Ok(if will_bootstrap_admin {
+            OnboardingKeyAction::LeftExisting
+        } else {
+            OnboardingKeyAction::Skipped
+        });
+    }
+    if !should_generate_legacy_server_key(access_state, will_bootstrap_admin) {
+        return Ok(OnboardingKeyAction::Skipped);
+    }
+    let key =
+        config_mutation::generate_key().map_err(|error| mutation_error(error, EXIT_VALIDATION))?;
+    if config_mutation::write_server_key(path, &key)
+        .map_err(|error| mutation_error(error, EXIT_VALIDATION))?
+    {
+        println!("  Generated server API key");
+    }
+    Ok(OnboardingKeyAction::Generated)
+}
+
+fn onboarding_credential_guidance(existing_server_key: bool, listen: &str) -> String {
+    let mut lines = vec![
+        "Inference uses the personal API credential shown above. Export it as EGGPOOL_API_KEY."
+            .to_owned(),
+        format!("Browser sign-in is /login on {listen}."),
+    ];
+    if existing_server_key {
+        lines.insert(
+            1,
+            "An existing server key remains in the configuration and is not the inference credential."
+                .to_owned(),
+        );
+    }
+    lines.join("\n")
 }
 
 async fn serve(path: &Path, args: &ServeArgs) -> Result<(), BootstrapError> {
@@ -3887,11 +4090,13 @@ fn format_bytes(value: Option<&Value>) -> String {
 #[cfg(test)]
 mod tests {
     use super::{
-        EXIT_VALIDATION, format_compact_duration, format_duration, lifecycle_timeout,
-        mutation_error, should_generate_legacy_server_key, whole_seconds,
+        EXIT_VALIDATION, OnboardingKeyAction, apply_onboarding_server_key, format_compact_duration,
+        format_duration, lifecycle_timeout, mutation_error, onboarding_credential_guidance,
+        should_generate_legacy_server_key, whole_seconds,
     };
-    use crate::operations::config_mutation::MutationError;
+    use crate::operations::config_mutation::{self, MutationError};
     use serde_json::json;
+    use std::fs;
 
     #[test]
     fn interruption_bypasses_validation_exit_code() {
@@ -3908,9 +4113,90 @@ mod tests {
     }
 
     #[test]
-    fn onboarding_does_not_create_a_legacy_key_after_admin_initialization() {
-        assert!(should_generate_legacy_server_key(false));
-        assert!(!should_generate_legacy_server_key(true));
+    fn onboarding_writes_a_server_key_only_for_a_legacy_database() {
+        assert!(should_generate_legacy_server_key(
+            Some("legacy_unmigrated"),
+            false
+        ));
+        assert!(!should_generate_legacy_server_key(
+            Some("admin_initialized"),
+            false
+        ));
+        assert!(!should_generate_legacy_server_key(Some("managed"), false));
+        assert!(!should_generate_legacy_server_key(
+            Some("fresh_uninitialized"),
+            true
+        ));
+        assert!(!should_generate_legacy_server_key(None, true));
+    }
+
+    #[test]
+    fn fresh_onboarding_does_not_write_a_server_key_before_bootstrap() {
+        let directory = tempfile::tempdir().expect("temporary config directory");
+        let path = directory.path().join("config.toml");
+        config_mutation::init_config(&path, false).expect("config initializes");
+        let before = fs::read(&path).expect("config reads");
+        let action = apply_onboarding_server_key(&path, None, true).expect("key decision");
+        assert_eq!(action, OnboardingKeyAction::Skipped);
+        assert_eq!(fs::read(&path).expect("config rereads"), before);
+        assert!(
+            config_mutation::read_server_key(&path)
+                .expect("key reads")
+                .is_none()
+        );
+    }
+
+    #[test]
+    fn initialized_onboarding_does_not_write_a_server_key() {
+        let directory = tempfile::tempdir().expect("temporary config directory");
+        let path = directory.path().join("config.toml");
+        config_mutation::init_config(&path, false).expect("config initializes");
+        let before = fs::read(&path).expect("config reads");
+        let action =
+            apply_onboarding_server_key(&path, Some("managed"), false).expect("key decision");
+        assert_eq!(action, OnboardingKeyAction::Skipped);
+        assert_eq!(fs::read(&path).expect("config rereads"), before);
+    }
+
+    #[test]
+    fn bootstrap_leaves_an_existing_server_key_unchanged() {
+        let directory = tempfile::tempdir().expect("temporary config directory");
+        let path = directory.path().join("config.toml");
+        config_mutation::init_config(&path, false).expect("config initializes");
+        assert!(
+            config_mutation::write_server_key(&path, "existing-server-key")
+                .expect("existing key writes")
+        );
+        let before = fs::read(&path).expect("config reads");
+        let action = apply_onboarding_server_key(&path, None, true).expect("key decision");
+        assert_eq!(action, OnboardingKeyAction::LeftExisting);
+        assert_eq!(fs::read(&path).expect("config rereads"), before);
+        let guidance = onboarding_credential_guidance(true, "127.0.0.1:11300");
+        assert!(guidance.contains("/login"));
+        assert!(guidance.contains("is not the inference credential"));
+        for line in guidance.lines() {
+            if line.contains("EGGPOOL_API_KEY") {
+                assert!(
+                    !line.to_ascii_lowercase().contains("server"),
+                    "guidance must not export the server key: {line}"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn legacy_onboarding_still_writes_a_missing_server_key() {
+        let directory = tempfile::tempdir().expect("temporary config directory");
+        let path = directory.path().join("config.toml");
+        config_mutation::init_config(&path, false).expect("config initializes");
+        let action = apply_onboarding_server_key(&path, Some("legacy_unmigrated"), false)
+            .expect("key decision");
+        assert_eq!(action, OnboardingKeyAction::Generated);
+        assert!(
+            config_mutation::read_server_key(&path)
+                .expect("key reads")
+                .is_some()
+        );
     }
 
     #[test]

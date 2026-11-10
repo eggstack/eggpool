@@ -5,7 +5,7 @@
       "path": "db/migrations/checksums.json",
       "category": "sqlite-migrations",
       "source": "rust/assets/db/migrations/checksums.json",
-      "sha256": "4d5ec3aa10961525a910fa7999bfb697b04319f279c886019d92b9a924f8cb0c",
+      "sha256": "97200c8f40e5c01ce16141ca13deee45bcf79a3f007cc61b93ffc8e96390d983",
       "identity": "exact"
     },
     {
@@ -26,7 +26,7 @@
       "path": "config/config.example.toml",
       "category": "configuration-template",
       "source": "rust/config.example.toml",
-      "sha256": "b3bc53a9d7063471c19a0d3d41ad2e6746e6f41d07e256490aba896afb585794",
+      "sha256": "0acf79017ee5b4a37415db4df3e8f577a3c7c425bff462bdb6831f60c68e8193",
       "identity": "exact"
     },
     {
@@ -51,7 +51,7 @@
       "identity": "exact"
     }
   ],
-  "schema_migration_count": 65,
+  "schema_migration_count": 66,
   "schema_change": true,
   "ownership": "Rust build/runtime embeds these assets; source paths are canonical repository inputs",
   "rollback": "restore the source tree from Git history"

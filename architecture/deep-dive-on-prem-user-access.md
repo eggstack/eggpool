@@ -220,23 +220,37 @@ from the measured lookup overhead.
 
 `server/dashboard/admin.rs` owns the HTML surfaces and their form handlers.
 Every handler is a thin adapter: it validates the CSRF form field, resolves
-the actor, and delegates to `identity.rs` or `model_policy.rs`.
+the actor, and delegates to `identity.rs`, `model_policy.rs`, or
+`personal_upstream.rs`.
 
 Admin surfaces: `/users`, `/profiles`, `/usage`, `/admin/audit`, and the
 `/admin/users/*` action family (create, state, password, token, revoke
-tokens, profile assignment, override add/remove, budget), the
+tokens, profile assignment, override add/remove, budget, personal-upstream
+grant and remove), the
 `/admin/budget/instance*` family, and the `/admin/profiles/*` family (create,
 default, update, delete, rule add/remove, preference).
 
 Member surfaces: `/login`, `/logout`, `/account`, `/account/landing`,
-`/account/password`, `/my-account`, `/my-account/models`, `/account/tokens`,
-`/account/tokens/revoke`, `/usage`, and `/api/user-budget`.
+`/account/password`, `/my-account`, `/my-account/models`, `/my-account/upstreams`,
+`/my-account/upstreams/remove`, `/account/tokens`,
+`/account/tokens/revoke`, `/usage`, and `/api/user-budget`. The personal
+upstream form lives on My account. It is not a navigation item. The key field
+is rendered only when that member's effective grant is allow, and a personal
+API token cannot post it.
 
 A member who signs in lands on `/account/landing`, which links the member
 destinations (`/my-account`, `/my-account/models`, `/usage`) and exposes no
 administrative route and no administrative datum, so the member surface is
-reachable without knowing a URL. An administrator who signs in lands on
+reachable without knowing a URL. The same member destinations are the only
+links in the navigation of `/my-account`, `/my-account/models`, and `/usage`.
+An administrator keeps the operator navigation on those pages. An administrator who signs in lands on
 `/account`, which links back to the dashboard overview.
+
+Usage projections stay inside one window kind. The administrator usage page
+shows the current UTC day and the current UTC month as separate tables.
+A member sees their own rows labeled day or month, the remaining allowance
+on their own current windows, and the configured instance ceilings. Instance
+usage totals stay on the administrator `/api/user-budget` response.
 
 The route-role gate lives in `server/middleware.rs`, not here. A non-administrator
 browser principal is confined to the member surfaces; an administrator-only
@@ -249,12 +263,13 @@ never a password, a token, or any other secret.
 
 The local CLI surface is `eggpool users`, whose subcommands are `bootstrap`,
 `add`, `disable`, `enable`, `show`, `list`, `reset-password`, `token`,
-`revoke`, `enable-managed`, `policy`, `budget`, `global-budget`, and
-`defaults`.
+`revoke`, `enable-managed`, `policy`, `budget`, `global-budget`,
+`defaults`, and `upstream`. `upstream add` reads the key from a TTY or
+`--secret-stdin` and writes it only to the config-adjacent `.env`.
 
 ## Durable tables
 
-The subsystem's tables are migrations 55–63 of the embedded chain:
+The subsystem's tables are migrations 55–63 and 66 of the embedded chain:
 
 | Migration | Tables |
 |---|---|
@@ -267,6 +282,7 @@ The subsystem's tables are migrations 55–63 of the embedded chain:
 | 61 `user_budget_enforcement` | enforcement column and worst-case hold/price-provenance columns on the budget tables |
 | 62 `instance_budgets` | `instance_budget_rules`, `instance_budget_reservations`, `instance_budget_usage`, `instance_budget_rule_audit` |
 | 63 `default_member_profile` | `policy_state.default_member_profile_id` |
+| 66 `personal_upstream` | `personal_upstream_grants`, `personal_upstream_bindings` |
 
 `requests.user_id` is a nullable column without a foreign key, so disabling
 or removing a local user cannot erase request attribution. Internal semantic
@@ -275,9 +291,11 @@ user-history queries; `identity::recent_user_requests` uses the
 `(user_id, started_at DESC, id DESC)` index, clamps reads to 500 rows, and
 returns content-free request facts.
 
-No table stores a plaintext password, a plaintext token, a prompt, a raw
-body, or a cache key. Backups therefore carry identity records and
-non-recoverable credential digests only.
+No table stores a plaintext password, a plaintext token, a provider key, a
+prompt, a raw body, or a cache key. A personal upstream binding names the
+provider, account, and user. The key stays in the operator environment file.
+Backups therefore carry identity records and non-recoverable credential
+digests only, plus the environment file when the backup includes it.
 
 ## Invariants
 
@@ -289,6 +307,11 @@ non-recoverable credential digests only.
   disablement fails closed at commit time.
 - A policy snapshot is immutable for the request that admitted it.
 - Downstream user budgets and upstream provider quota remain independent.
+- A personal upstream account is selectable only by its owner. No binding
+  means the account stays shared. The instance grant defaults to deny and
+  does not change routing. Disabling a user withdraws that user's active
+  bindings in the same transaction; enabling the user does not restore them.
+  Changing a grant does not withdraw a binding.
 - The single SQLite connection/gate/worker, WAL/NORMAL, the generation lease
   model, and the publication/finalization ownership are unchanged by this
   subsystem.

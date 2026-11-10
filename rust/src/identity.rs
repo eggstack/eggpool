@@ -853,6 +853,7 @@ async fn set_user_enabled_with_fence(
                     "UPDATE web_sessions SET revoked_at = CURRENT_TIMESTAMP WHERE user_id = ?1 AND revoked_at IS NULL",
                     [&target_id],
                 )?;
+                crate::personal_upstream::withdraw_user_bindings(connection, &target_id)?;
             }
             connection.execute(
                 "INSERT INTO user_admin_audit(actor_id, action, target_kind, target_id) VALUES (?1, ?2, 'user', ?3)",

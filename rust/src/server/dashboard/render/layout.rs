@@ -9,8 +9,8 @@ pub(in crate::server::dashboard) const DASHBOARD_TABLE_OPEN: &str = "<table clas
 pub(in crate::server::dashboard) const DASHBOARD_TABLE_OPEN_COMPACT: &str =
     "<table class=\"data compact\">";
 
-/// The shared navigation destinations. Every dashboard surface renders them,
-/// so an operator always has a route back to the overview.
+/// The shared navigation destinations. Operator pages render them, so an
+/// operator always has a route back to the overview.
 const DASHBOARD_NAVIGATION: [(&str, &str, &str); 17] = [
     ("overview", "/", "Overview"),
     ("reliability", "/reliability", "Reliability"),
@@ -29,6 +29,13 @@ const DASHBOARD_NAVIGATION: [(&str, &str, &str); 17] = [
     ("events", "/events", "Events"),
     ("timeseries", "/timeseries", "Timeseries"),
     ("runtime", "/runtime", "Runtime"),
+];
+
+const MEMBER_NAVIGATION: [(&str, &str, &str); 4] = [
+    ("my-account", "/my-account", "My account"),
+    ("my-models", "/my-account/models", "My models"),
+    ("usage", "/usage", "Usage"),
+    ("account", "/account", "Password"),
 ];
 
 /// The theme picker's query parameters, rendered as hidden inputs.
@@ -57,12 +64,37 @@ pub(in crate::server::dashboard) fn dashboard_navigation_markup(
     theme: &str,
     extra_query: &str,
 ) -> String {
+    navigation_markup(
+        &DASHBOARD_NAVIGATION,
+        active_nav,
+        period,
+        theme,
+        extra_query,
+    )
+}
+
+pub(in crate::server::dashboard) fn member_navigation_markup(
+    active_nav: &str,
+    period: &str,
+    theme: &str,
+    extra_query: &str,
+) -> String {
+    navigation_markup(&MEMBER_NAVIGATION, active_nav, period, theme, extra_query)
+}
+
+fn navigation_markup(
+    destinations: &[(&str, &str, &str)],
+    active_nav: &str,
+    period: &str,
+    theme: &str,
+    extra_query: &str,
+) -> String {
     let query = format!(
         "period={}&amp;theme={}",
         query_component(period),
         query_component(theme)
     );
-    let navigation = DASHBOARD_NAVIGATION
+    let navigation = destinations
         .iter()
         .map(|(key, href, label)| {
             let class = if *key == active_nav { "active" } else { "" };
@@ -102,7 +134,8 @@ pub(in crate::server::dashboard) fn dashboard_navigation_markup(
 /// It carries the same navigation chrome, the same dashboard stylesheet and
 /// the same theme stylesheet as the rest of the dashboard, so a member or an
 /// administrator who lands on one of these pages sees a complete page rather
-/// than a bare fragment, and has a route back to the overview.
+/// than a bare fragment. Operator pages keep a route back to the overview.
+/// Member pages use the member destinations only.
 pub(in crate::server::dashboard) fn dashboard_standalone_page(
     title: &str,
     active_nav: &str,
@@ -110,12 +143,42 @@ pub(in crate::server::dashboard) fn dashboard_standalone_page(
     body: &str,
 ) -> String {
     let theme = selected_theme(theme);
+    standalone_page(
+        title,
+        theme,
+        &format!("/?period=24h&amp;theme={}", query_component(theme)),
+        body,
+        dashboard_navigation_markup(active_nav, "24h", theme, ""),
+    )
+}
+
+pub(in crate::server::dashboard) fn member_standalone_page(
+    title: &str,
+    active_nav: &str,
+    theme: &str,
+    body: &str,
+) -> String {
+    let theme = selected_theme(theme);
+    standalone_page(
+        title,
+        theme,
+        &format!(
+            "/my-account?period=24h&amp;theme={}",
+            query_component(theme)
+        ),
+        body,
+        member_navigation_markup(active_nav, "24h", theme, ""),
+    )
+}
+
+fn standalone_page(title: &str, theme: &str, home: &str, body: &str, navigation: String) -> String {
+    let theme = selected_theme(theme);
     format!(
-        "<!doctype html><html lang=\"en\"><head><meta charset=\"utf-8\"><meta name=\"viewport\" content=\"width=device-width,initial-scale=1\"><title>{}</title><link rel=\"stylesheet\" href=\"/static/dashboard.css\"><link rel=\"stylesheet\" href=\"/static/theme.css?theme={}\"></head><body><header class=\"topbar\"><h1><a href=\"/?period=24h&amp;theme={}\">EggPool</a></h1><nav class=\"topnav\">{}</nav></header><main id=\"dashboard-content\">{}</main></body></html>",
+        "<!doctype html><html lang=\"en\"><head><meta charset=\"utf-8\"><meta name=\"viewport\" content=\"width=device-width,initial-scale=1\"><title>{}</title><link rel=\"stylesheet\" href=\"/static/dashboard.css\"><link rel=\"stylesheet\" href=\"/static/theme.css?theme={}\"></head><body><header class=\"topbar\"><h1><a href=\"{}\">EggPool</a></h1><nav class=\"topnav\">{}</nav></header><main id=\"dashboard-content\">{}</main></body></html>",
         html_escape(title),
         query_component(theme),
-        query_component(theme),
-        dashboard_navigation_markup(active_nav, "24h", theme, ""),
+        home,
+        navigation,
         body
     )
 }

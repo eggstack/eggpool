@@ -1388,3 +1388,68 @@ async fn paired_gate_observations_across_identities_and_rules() {
         println!("M010_GATE_OBSERVATION {{\"rss_kb_after_suite\":{rss}}}");
     }
 }
+
+#[tokio::test]
+async fn member_allowance_excludes_other_users_and_instance_usage() {
+    let fixture = fixture().await;
+    let budgets = UserBudgetService::new(fixture.database.clone());
+    let limits = BudgetLimits {
+        requests: Some(20),
+        ..BudgetLimits::default()
+    };
+    for user in ["budget-member", "budget-member-2"] {
+        budgets
+            .set_rule("budget-admin", user, None, BudgetWindow::Day, limits)
+            .await
+            .expect("member rule");
+    }
+    InstanceBudgetService::new(fixture.database.clone())
+        .set_rule("budget-admin", None, BudgetWindow::Day, limits)
+        .await
+        .expect("instance ceiling");
+    fixture
+        .database
+        .call(|connection| {
+            connection.execute(
+                "INSERT INTO user_budget_usage(
+                    user_id, model_id, window, window_start, request_count)
+                 VALUES ('budget-member', 'model-a', 'day', date('now'), 4),
+                        ('budget-member-2', 'model-a', 'day', date('now'), 9)",
+                [],
+            )?;
+            connection.execute(
+                "INSERT INTO instance_budget_usage(
+                    model_id, window, window_start, request_count)
+                 VALUES ('model-a', 'day', date('now'), 80)",
+                [],
+            )?;
+            Ok(())
+        })
+        .await
+        .expect("usage rows insert");
+    let first = budgets
+        .current_allowance("budget-member")
+        .await
+        .expect("first allowance");
+    let second = budgets
+        .current_allowance("budget-member-2")
+        .await
+        .expect("second allowance");
+    assert_eq!(first[0].requests.settled, 4);
+    assert_eq!(first[0].requests.remaining, Some(16));
+    assert_eq!(second[0].requests.settled, 9);
+    assert_eq!(second[0].requests.remaining, Some(11));
+    let encoded = serde_json::to_string(&first).expect("allowance encodes");
+    assert!(!encoded.contains("instance_usage"));
+    assert!(!encoded.contains("budget-member-2"));
+    let instance = InstanceBudgetService::new(fixture.database.clone());
+    let rules = instance.rules().await.expect("ceilings");
+    assert_eq!(rules, instance.rules().await.expect("ceilings again"));
+    assert_eq!(rules[0].max_requests, Some(20));
+    let usage = instance
+        .usage("0000-01-01", 50)
+        .await
+        .expect("instance usage");
+    assert!(usage.iter().any(|row| row.request_count == 80));
+    fixture.database.close().await.unwrap();
+}

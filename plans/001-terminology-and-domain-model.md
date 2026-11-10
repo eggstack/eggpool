@@ -16,6 +16,9 @@ this document is normative.
   upstream provider account. The initial user is the local administrator.
 - **Provider account** — an upstream configured provider credential and its
   health, scoring, and provider-quota state (`accounts` table).
+- **Personal upstream binding** — a secret-free record that one configured
+  provider account may be selected only by one user. No binding means the
+  account is shared. A user remains distinct from a provider account.
 - **Principal** — authenticated downstream request identity (user ID and
   optional client credential ID); never trusted from caller-supplied identity headers.
 - **Client credential** — revocable per-user secret for agent/API access, distinct

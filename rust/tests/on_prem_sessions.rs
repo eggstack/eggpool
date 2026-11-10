@@ -359,6 +359,49 @@ fn cookie(response: &str, name: &str) -> String {
 }
 
 #[tokio::test]
+async fn legacy_public_dashboard_stays_available_without_a_sign_in_redirect() {
+    let (_directory, database) = database().await;
+    let process = ProcessRuntime::new(database.clone()).expect("process runtime");
+    let mut config = Config::default();
+    config.server.host = "127.0.0.1".to_owned();
+    config.server.api_key = Some("legacy-server-key-0123456789".to_owned());
+    config.dashboard.enabled = true;
+    config.dashboard.public = true;
+    let candidate = RuntimeGenerationFactory::prepare(
+        &process,
+        config.clone(),
+        "legacy-dashboard-test".to_owned(),
+        1,
+    )
+    .await
+    .expect("initial generation");
+    let manager = Arc::new(RuntimeManager::new(
+        candidate.transfer().expect("generation transfer"),
+    ));
+    let runtime = ServerRuntime::new(process, manager, config);
+    let handle = runtime.handle();
+    let listener = TcpListener::bind(("127.0.0.1", 0)).await.expect("listener");
+    let address = listener.local_addr().unwrap();
+    let task = tokio::spawn(async move { runtime.serve_listener(listener).await });
+
+    let dashboard = http_request(
+        address,
+        &format!("GET / HTTP/1.1\r\nHost: {address}\r\nConnection: close\r\n\r\n"),
+    )
+    .await;
+    assert!(dashboard.starts_with("HTTP/1.1 200"), "{dashboard}");
+    assert!(dashboard.contains("Overview"), "{dashboard}");
+    assert!(
+        !dashboard.to_ascii_lowercase().contains("location: /login"),
+        "{dashboard}"
+    );
+
+    handle.request_shutdown(ShutdownReason::Requested);
+    task.await.unwrap().unwrap();
+    database.close().await.unwrap();
+}
+
+#[tokio::test]
 async fn managed_browser_login_account_csrf_and_logout_work_over_loopback() {
     let (_directory, database) = database().await;
     let (user_id, agent_token) = create_admin(&database).await;
@@ -394,9 +437,60 @@ async fn managed_browser_login_account_csrf_and_logout_work_over_loopback() {
     )
     .await;
     assert!(
-        public_dashboard.starts_with("HTTP/1.1 401"),
+        public_dashboard.starts_with("HTTP/1.1 303"),
         "{public_dashboard}"
     );
+    assert!(
+        public_dashboard
+            .to_ascii_lowercase()
+            .contains("location: /login"),
+        "{public_dashboard}"
+    );
+    assert!(
+        public_dashboard
+            .to_ascii_lowercase()
+            .contains("cache-control: no-store"),
+        "{public_dashboard}"
+    );
+    assert!(
+        !public_dashboard.contains("name=\"password\""),
+        "{public_dashboard}"
+    );
+    let usage_handoff = http_request(
+        address,
+        &format!("GET /usage HTTP/1.1\r\nHost: {address}\r\nConnection: close\r\n\r\n"),
+    )
+    .await;
+    assert!(usage_handoff.starts_with("HTTP/1.1 303"), "{usage_handoff}");
+    assert!(
+        usage_handoff
+            .to_ascii_lowercase()
+            .contains("location: /login"),
+        "{usage_handoff}"
+    );
+    let models = http_request(
+        address,
+        &format!("GET /v1/models HTTP/1.1\r\nHost: {address}\r\nConnection: close\r\n\r\n"),
+    )
+    .await;
+    assert!(models.starts_with("HTTP/1.1 401"), "{models}");
+    assert!(models.contains("\"detail\""), "{models}");
+    let budget = http_request(
+        address,
+        &format!("GET /api/user-budget HTTP/1.1\r\nHost: {address}\r\nConnection: close\r\n\r\n"),
+    )
+    .await;
+    assert!(budget.starts_with("HTTP/1.1 401"), "{budget}");
+    assert!(budget.contains("\"detail\""), "{budget}");
+    let posted = http_request(
+        address,
+        &format!(
+            "POST /account HTTP/1.1\r\nHost: {address}\r\nContent-Length: 0\r\nConnection: close\r\n\r\n"
+        ),
+    )
+    .await;
+    assert!(posted.starts_with("HTTP/1.1 401"), "{posted}");
+    assert!(!posted.starts_with("HTTP/1.1 303"), "{posted}");
     let agent_to_account = http_request(address, &format!(
         "GET /account HTTP/1.1\r\nHost: {address}\r\nAuthorization: Bearer {agent_token}\r\nConnection: close\r\n\r\n"
     )).await;
@@ -686,9 +780,10 @@ async fn browser_sessions_can_read_scoped_user_budget_api() {
         "{member_response}"
     );
     assert!(
-        !member_response.contains("instance_rules")
+        member_response.contains("instance_rules")
+            && !member_response.contains("instance_usage")
             && !member_response.contains("\"max_requests\":10"),
-        "members see neither instance ceilings nor another user's rules: {member_response}"
+        "members see the shared ceiling configuration and not another user's rules or instance usage: {member_response}"
     );
 
     let denied = http_request(
@@ -714,7 +809,7 @@ async fn browser_sessions_can_read_scoped_user_budget_api() {
         "{admin_response}"
     );
     assert!(
-        admin_response.contains("instance_rules"),
+        admin_response.contains("instance_rules") && admin_response.contains("instance_usage"),
         "{admin_response}"
     );
     assert!(
