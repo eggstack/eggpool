@@ -142,9 +142,8 @@ pub struct DatabaseStats {
     pub transactions: u64,
 }
 
-/// Internal policy for opportunistic maintenance checkpoints (persistence
-/// M001). The production SQLite automatic checkpoint threshold is unchanged
-/// and remains the hard fallback that bounds worst-case WAL growth.
+/// Internal policy for opportunistic maintenance checkpoints. SQLite's
+/// automatic checkpoint threshold remains the hard fallback for WAL growth.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) struct CheckpointMaintenancePolicy {
     pub soft_wal_frames: u32,
@@ -1060,14 +1059,10 @@ impl Database {
         .await
     }
 
-    /// Opportunistic maintenance checkpoint for the process-owned task
-    /// (persistence M001). The tick never queues behind foreground work: when
-    /// no durable transaction completed since `observed_transactions` was last
-    /// updated, no SQLite work runs; when the gate is already owned, the tick
-    /// defers. WAL state is observed through SQLite itself
-    /// (`PRAGMA wal_checkpoint(NOOP)`), and PASSIVE work runs only once the
-    /// soft threshold is due. The unchanged SQLite automatic checkpoint
-    /// threshold remains the hard fallback.
+    /// Opportunistic maintenance checkpoint. It skips when no durable
+    /// transaction has completed, defers while the database gate is busy, and
+    /// runs PASSIVE only when `PRAGMA wal_checkpoint(NOOP)` reaches the soft
+    /// threshold. SQLite's automatic threshold remains the hard fallback.
     pub(crate) async fn checkpoint_maintenance(
         &self,
         policy: CheckpointMaintenancePolicy,

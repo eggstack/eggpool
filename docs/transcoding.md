@@ -11,11 +11,11 @@ codecs cover Responses and native Gemini Interactions/`generateContent`.
 ## Overview
 
 Protocol transcoding exists because providers expose several incompatible wire
-formats — OpenAI Chat Completions/Responses, Anthropic Messages, and native
+formats: OpenAI Chat Completions/Responses, Anthropic Messages, and native
 Gemini APIs. Most providers serve only one. Without the canonical boundary, a
 client would be limited to providers exposing its exact request grammar.
 
-**Transcoding is on by default.** Every EggPool data plane normalises the client request to the appropriate upstream wire format automatically: an OpenAI Chat Completions client posting to `/v1/chat/completions` reaches Anthropic upstreams (and vice versa) without any operator configuration. This is the primary behaviour of the router — clients should always see their expected protocol, regardless of the upstream provider's protocol.
+**Transcoding is on by default.** Every EggPool data plane normalises the client request to the appropriate upstream wire format automatically: an OpenAI Chat Completions client posting to `/v1/chat/completions` reaches Anthropic upstreams (and vice versa) without any operator configuration. This is the primary behaviour of the router: clients should always see their expected protocol, regardless of the upstream provider's protocol.
 
 The transcoder sits in the request path and:
 
@@ -91,7 +91,7 @@ ID, and `response.output_item.done` is emitted before `response.completed`.
 Encrypted reasoning is preserved only on the native Responses path and is
 never synthesized from plaintext.
 
-Usage and cost fields are preserved exactly as the upstream reported them — no translation, no rounding, no loss.
+Usage and cost fields are preserved exactly as the upstream reported them: no translation, no rounding, no loss.
 
 ## Configuration
 
@@ -121,7 +121,7 @@ anthropic_primitives = false
 At boot you'll see:
 
 ```
-INFO  Protocol transcoding ENABLED (default) — clients may reach upstream accounts whose provider.protocols does not match the client protocol. loss_policy=warn prefer_native=true
+INFO  Protocol transcoding ENABLED (default): clients may reach upstream accounts whose provider.protocols does not match the client protocol. loss_policy=warn prefer_native=true
 ```
 
 ### Deprecated escape hatch: `enabled = false`
@@ -150,29 +150,29 @@ When set, EggPool boots with a `WARNING` and reverts to the pre-default behaviou
 | `temperature` | `temperature` | Clamped to ≤ 1.0 (Anthropic max) |
 | `max_tokens` | `max_tokens` | Defaults to 4096 if missing |
 | `stop` | `stop_sequences` | String → single-element list |
-| `top_p` | — | Dropped, warning emitted |
-| `frequency_penalty` | — | Dropped, warning emitted |
-| `presence_penalty` | — | Dropped, warning emitted |
-| `n` | — | Dropped when > 1, warning emitted |
-| `logprobs` | — | Dropped, warning emitted |
-| `top_logprobs` | — | Dropped, warning emitted |
+| `top_p` | N/A | Dropped, warning emitted |
+| `frequency_penalty` | N/A | Dropped, warning emitted |
+| `presence_penalty` | N/A | Dropped, warning emitted |
+| `n` | N/A | Dropped when > 1, warning emitted |
+| `logprobs` | N/A | Dropped, warning emitted |
+| `top_logprobs` | N/A | Dropped, warning emitted |
 | `response_format` | `output_config.format` or `system` | A verified Anthropic target receives native `json_schema`; otherwise the configured loss policy governs the explicitly lossy prompt fallback. `json_object` remains prompt-based because it has no schema to send. |
 | `reasoning_effort` | `thinking` | Feature-gated: the canonical effort intent is resolved only after target capability selection; verified low/medium/high mappings remain supported and unknown labels are never assigned a guessed budget |
-| `seed` | — | Dropped, warning emitted |
-| `user` | — | Dropped, warning emitted |
-| `logit_bias` | — | Dropped, warning emitted |
+| `seed` | N/A | Dropped, warning emitted |
+| `user` | N/A | Dropped, warning emitted |
+| `logit_bias` | N/A | Dropped, warning emitted |
 | `messages[user].content[image_url]` | `messages[user].content[image]` | Feature-gated: base64 data URI → `{type: "base64", media_type, data}` where `data` is the raw base64 payload; URL → `{type: "url", url}`; `detail` dropped; images over 5 MB are dropped with `image_too_large` |
-| `messages[user].content[input_audio]` | — | Dropped, warning emitted |
-| `messages[user].content[file]` | — | Dropped, warning emitted (file storage not bridged) |
+| `messages[user].content[input_audio]` | N/A | Dropped, warning emitted |
+| `messages[user].content[file]` | N/A | Dropped, warning emitted (file storage not bridged) |
 | `tools` (function-shape) | `tools` (Anthropic-shape) | Translated field-by-field (see Tool-Use Transcoding below) |
 | `tool_choice` | `tool_choice` | Translated between string and object shapes |
 | `parallel_tool_calls: true` | omitted | Anthropic defaults to allowing parallel calls |
 | `parallel_tool_calls: false` | `tool_choice.disable_parallel_tool_use` | Emitted only for a target with explicit `parallel_tool_control = ["anthropic"]`; otherwise loss is reported. |
 | `tools[].function.strict` | `tools[].strict` | Emitted only for a target with explicit `strict_tools = ["anthropic"]`; otherwise loss is reported. |
-| `stream_options` | — | Wrapper dropped with warning; `include_usage` lifted onto `TranscodeContext.request_include_usage` |
+| `stream_options` | N/A | Wrapper dropped with warning; `include_usage` lifted onto `TranscodeContext.request_include_usage` |
 | `messages[assistant].tool_calls[]` | `messages[assistant].content[].tool_use` | Translated; id map mints new upstream ids |
 | `messages[tool]` | `messages[user].content[].tool_result` | Translated; `tool_call_id` ↔ `tool_use_id` via id map |
-| `messages[].content[non-text]` | — | Non-text blocks dropped, warning emitted |
+| `messages[].content[non-text]` | N/A | Non-text blocks dropped, warning emitted |
 
 #### Anthropic → OpenAI
 
@@ -186,22 +186,22 @@ When set, EggPool boots with a `WARNING` and reverts to the pre-default behaviou
 | `max_tokens` | `max_tokens` | Passed through |
 | `stop_sequences` | `stop` | Single → string, multi → list |
 | `metadata.user_id` | `user` | Mapped to OpenAI `user` field |
-| `top_k` | — | Dropped, warning `top_k_dropped` emitted |
-| `cache_control` | — | Dropped, warning `cache_control_feature_disabled` emitted |
-| `thinking` | — | Dropped, warning emitted (see Extended Thinking below) |
-| `context_management` | — | Dropped, warning emitted (experimental) |
-| `container` | — | Dropped, warning emitted (experimental) |
-| `mcp_servers` | — | Dropped, warning emitted (experimental) |
+| `top_k` | N/A | Dropped, warning `top_k_dropped` emitted |
+| `cache_control` | N/A | Dropped, warning `cache_control_feature_disabled` emitted |
+| `thinking` | N/A | Dropped, warning emitted (see Extended Thinking below) |
+| `context_management` | N/A | Dropped, warning emitted (experimental) |
+| `container` | N/A | Dropped, warning emitted (experimental) |
+| `mcp_servers` | N/A | Dropped, warning emitted (experimental) |
 | `tools` (Anthropic-shape) | `tools` (function-shape) | Translated field-by-field (see Tool-Use Transcoding below) |
 | `tool_choice` | `tool_choice` | Translated between object and string shapes |
-| `tools[].cache_control` | — | Dropped with `cache_control_unsupported_by_target_protocol` warning; boundary tracked on `TranscodeContext.cache_boundary_tracker` |
-| `messages[].content[].cache_control` | — | Dropped with `cache_control_unsupported_by_target_protocol` warning |
+| `tools[].cache_control` | N/A | Dropped with `cache_control_unsupported_by_target_protocol` warning; boundary tracked on `TranscodeContext.cache_boundary_tracker` |
+| `messages[].content[].cache_control` | N/A | Dropped with `cache_control_unsupported_by_target_protocol` warning |
 | `messages[assistant].content[thinking]` | `messages[assistant].reasoning_content` | Feature-gated: thinking text mapped; signature dropped with `thinking_signature_dropped` warning |
 | `messages[assistant].content[image]` | `messages[user].content[image_url]` | Feature-gated: base64 → data URI; URL → `image_url.url` |
 | `messages[user].content[document]` | `messages[user].content[file]` | Feature-gated: PDF base64 → `file` with data URI; URL dropped; non-PDF, invalid base64, and PDFs over 32 MB are dropped. All requests must also fit `[server].max_request_body_bytes` (10 MiB by default). |
 | `messages[assistant].content[].tool_use` | `messages[assistant].tool_calls[]` | Translated; id map mints new client ids |
 | `messages[user].content[].tool_result` | `messages[tool]` | Translated; `tool_use_id` ↔ `tool_call_id` via id map |
-| `messages[].content[non-text]` | — | Non-text blocks dropped, warning emitted |
+| `messages[].content[non-text]` | N/A | Non-text blocks dropped, warning emitted |
 
 ### Response Bodies
 
@@ -214,12 +214,12 @@ When set, EggPool boots with a `WARNING` and reverts to the pre-default behaviou
 | `content[].text` | `message.content` | Text blocks concatenated |
 | `content[].tool_use` | `message.tool_calls[]` | Translated; id map mints new client ids |
 | `content[].thinking` | `message.reasoning_content` | Feature-gated: thinking text mapped; signature dropped with `thinking_signature_dropped` warning |
-| `content[].redacted_thinking` | — | Dropped, warning emitted |
+| `content[].redacted_thinking` | N/A | Dropped, warning emitted |
 | `content[].image` | `message.content[image_url]` | Feature-gated: base64 → data URI; URL → `image_url.url` |
 | `stop_reason` | `choices[].finish_reason` | Mapped (see table below) |
 | `usage.input_tokens` | `usage.prompt_tokens` | Direct mapping |
 | `usage.output_tokens` | `usage.completion_tokens` | Direct mapping |
-| — | `usage.total_tokens` | Computed (prompt + completion) |
+| N/A | `usage.total_tokens` | Computed (prompt + completion) |
 
 #### OpenAI → Anthropic
 
@@ -266,7 +266,7 @@ Tool calling is translated between OpenAI Chat Completions and Anthropic Message
 | Anthropic input | OpenAI output | Notes |
 |---|---|---|
 | `tools[i].name`, `description`, `input_schema` | `tools[i].type == "function"` with `function.{name, description, parameters}` | `parameters` is the lifted `input_schema` |
-| `tools[i].cache_control` | — | Dropped with warning; OpenAI Chat Completions has no tool-definition boundary placement |
+| `tools[i].cache_control` | N/A | Dropped with warning; OpenAI Chat Completions has no tool-definition boundary placement |
 
 **`tool_choice` translation**:
 
@@ -353,13 +353,13 @@ Whenever the map mints a new id, the transcoder appends a `tool_call_id_translat
 | `messages[i].content[k].type == "tool_use"`, `id` (`toolu_…`), `name`, `input` | `messages[i].role == "assistant"`, `tool_calls[k']` with `id` (`call_…`), `type: "function"`, `function.name`, `function.arguments` | `input` JSON-stringified into `arguments`; on encode failure the raw value is preserved as `{"__raw_arguments__": "<string>"}` with `malformed_tool_arguments` warning |
 | `messages[i].content[k].type == "tool_result"`, `tool_use_id`, `content: str` | `messages[i].role == "tool"`, `tool_call_id` (`call_…`), `content: <str>` | |
 | `messages[i].content[k].type == "tool_result"`, `content: list` | `messages[i].role == "tool"`, `content: <joined text>` | Text parts joined with `\n`; non-text dropped with `non_text_content_dropped` |
-| `messages[i].content[k].type == "tool_result"`, `is_error: true` | `messages[i].role == "tool"`, `content: <error text>` | Warning `tool_result_error_passthrough` — OpenAI has no `is_error` field |
+| `messages[i].content[k].type == "tool_result"`, `is_error: true` | `messages[i].role == "tool"`, `content: <error text>` | Warning `tool_result_error_passthrough`: OpenAI has no `is_error` field |
 
 #### Streaming translation
 
 **Anthropic → OpenAI (upstream SSE → client SSE)**:
 
-Each Anthropic `content_block_start` with `content_block.type == "tool_use"` opens an indexed slot in the streaming transcoder's per-request state, keyed by the Anthropic `index`. The transcoder mints a fresh `call_<…>` id via `id_map.generate_openai_id()` and emits a `tool_calls` delta carrying `{index, id, type: "function", function: {name, arguments: ""}}`. Each subsequent `content_block_delta` with `delta.type == "input_json_delta"` appends `partial_json` to the slot's argument buffer and emits a `tool_calls` delta with `{index, function: {arguments: <chunk>}}`. The `content_block_stop` finalises the slot but emits nothing extra — the terminal `finish_reason: "tool_calls"` chunk plus `[DONE]` arrive on `message_delta`.
+Each Anthropic `content_block_start` with `content_block.type == "tool_use"` opens an indexed slot in the streaming transcoder's per-request state, keyed by the Anthropic `index`. The transcoder mints a fresh `call_<…>` id via `id_map.generate_openai_id()` and emits a `tool_calls` delta carrying `{index, id, type: "function", function: {name, arguments: ""}}`. Each subsequent `content_block_delta` with `delta.type == "input_json_delta"` appends `partial_json` to the slot's argument buffer and emits a `tool_calls` delta with `{index, function: {arguments: <chunk>}}`. The `content_block_stop` finalises the slot but emits nothing extra: the terminal `finish_reason: "tool_calls"` chunk plus `[DONE]` arrive on `message_delta`.
 
 | Upstream event | Emitted client delta |
 |---|---|
@@ -410,21 +410,21 @@ A `pause_turn` loss warning is also appended to `TranscodeContext.loss_warnings`
 
 #### `stream_options.include_usage` lifting
 
-OpenAI's `stream_options.include_usage` flag has no Anthropic analogue, so the wrapper object is dropped with a `dropped_field` warning when transcoding to an Anthropic upstream. The single field inside (`include_usage: bool`) is significant for usage accounting, so the transcoder lifts it onto `TranscodeContext.request_include_usage` before the streaming transcoder runs. The streaming transcoder reads `request_include_usage` from the context to decide whether to forward upstream usage chunks to the OpenAI client. The reverse direction (Anthropic → OpenAI) does not need this — OpenAI clients receive usage only when `stream_options.include_usage` was set on the request, which it wasn't.
+OpenAI's `stream_options.include_usage` flag has no Anthropic analogue, so the wrapper object is dropped with a `dropped_field` warning when transcoding to an Anthropic upstream. The single field inside (`include_usage: bool`) is significant for usage accounting, so the transcoder lifts it onto `TranscodeContext.request_include_usage` before the streaming transcoder runs. The streaming transcoder reads `request_include_usage` from the context to decide whether to forward upstream usage chunks to the OpenAI client. The reverse direction (Anthropic → OpenAI) does not need this: OpenAI clients receive usage only when `stream_options.include_usage` was set on the request, which it wasn't.
 
 #### Thinking streaming
 
-Anthropic `thinking_delta` events translate to OpenAI reasoning delta fields. The field names are configurable via `[transcoder.openai_reasoning_fields]` — `stream_delta` (default `["reasoning"]`) controls streaming field names. Order is preserved: thinking comes before tool_use comes before text in Anthropic, and reasoning content comes before content in OpenAI.
+Anthropic `thinking_delta` events translate to OpenAI reasoning delta fields. The field names are configurable via `[transcoder.openai_reasoning_fields]`: `stream_delta` (default `["reasoning"]`) controls streaming field names. Order is preserved: thinking comes before tool_use comes before text in Anthropic, and reasoning content comes before content in OpenAI.
 
 | Upstream event | Emitted client delta |
 |---|---|
-| `content_block_start` (`type: thinking`) | (nothing — block is started lazily) |
+| `content_block_start` (`type: thinking`) | (none; block is started lazily) |
 | `content_block_delta` (`type: thinking_delta`, `thinking: <text>`) | `delta.<reasoning_field>: <text>` |
 | `content_block_stop` (thinking index) | (nothing) |
 
 When `[transcoder.features].thinking = false`, streaming thinking deltas are dropped (consistent with non-streaming behavior). When `emit_compat_aliases = true`, multiple field names are emitted per delta.
 
-Thinking deltas and text deltas are emitted independently — a stream may contain both reasoning and content chunks on the same request.
+Thinking deltas and text deltas are emitted independently: a stream may contain both reasoning and content chunks on the same request.
 
 #### Response-field compatibility
 
@@ -441,7 +441,7 @@ The first entry in each list is always emitted. Additional entries are only incl
 
 **Non-streaming**: `OpenAIToAnthropic.decode_response` emits reasoning content in the configured `non_stream` field(s) on `choices[].message`.
 
-**Streaming**: `AnthropicToOpenAIStreaming` emits reasoning deltas in the configured `stream_delta` field(s) on `choices[].delta`. Streaming is feature-gated consistently with non-streaming — when `[transcoder.features].thinking = false`, streaming thinking deltas are dropped with no output.
+**Streaming**: `AnthropicToOpenAIStreaming` emits reasoning deltas in the configured `stream_delta` field(s) on `choices[].delta`. Streaming is feature-gated consistently with non-streaming: when `[transcoder.features].thinking = false`, streaming thinking deltas are dropped with no output.
 
 #### Loss-warning kinds
 
@@ -520,8 +520,8 @@ Both protocols are normalised to a common internal representation before reachin
 | `prompt_tokens` | `prompt_tokens` | `input_tokens` |
 | `completion_tokens` | `completion_tokens` | `output_tokens` |
 | `total_tokens` | `total_tokens` | Computed (input + output) |
-| `cache_creation_tokens` | — | `cache_creation_input_tokens` |
-| `cache_read_tokens` | — | `cache_read_input_tokens` |
+| `cache_creation_tokens` | N/A | `cache_creation_input_tokens` |
+| `cache_read_tokens` | N/A | `cache_read_input_tokens` |
 
 Cache token fields are only populated for Anthropic upstreams.
 
@@ -539,7 +539,7 @@ Transcoding is triggered when the client protocol differs from the selected acco
 |---|---|---|
 | Anthropic | Anthropic | Client sends OpenAI requests to a model routed to an Anthropic account |
 | OpenAI | OpenAI | Client sends Anthropic requests to a model routed to an OpenAI account |
-| OpenRouter | OpenAI | Same as OpenAI — Anthropic clients hitting OpenRouter models |
+| OpenRouter | OpenAI | Same as OpenAI: Anthropic clients hitting OpenRouter models |
 | DeepSeek | OpenAI | Anthropic clients hitting DeepSeek models |
 | Together AI | OpenAI | Anthropic clients hitting Together models |
 | Google Gemini | OpenAI | Anthropic clients hitting Gemini models |
@@ -655,8 +655,8 @@ The complete catalogue lives in the Rust wire-adaptation registry.
 
 ## Performance Characteristics
 
-- **Body translation**: a bounded in-process Rust transformation — no I/O or network calls.
-- **Streaming translation**: One state machine per request. The state machine processes SSE frames incrementally — no buffering of the full stream.
+- **Body translation**: a bounded in-process Rust transformation: no I/O or network calls.
+- **Streaming translation**: One state machine per request. The state machine processes SSE frames incrementally: no buffering of the full stream.
 - **Memory**: The shared decoder bounds each incomplete line/event to 64KB; the transcoder retains only protocol state and bounded tool/reasoning buffers.
 - **No additional network hops**: Transcoding happens inside the existing request path. There is no sidecar or proxy.
 
@@ -705,7 +705,7 @@ Cargo test flow for replay and terminal-evidence checks.
 
 ## Cache Stability
 
-Provider-visible prompt caching (Anthropic's `cache_control` breakpoints) is **observational** in v1 — the transcoder preserves or annotates every `cache_control` event but never reorders key material, mutates prompt content, or synthesises cache hints that the caller did not provide. Two helpers make the cache surface explicit:
+Provider-visible prompt caching (Anthropic's `cache_control` breakpoints) is **observational** in v1: the transcoder preserves or annotates every `cache_control` event but never reorders key material, mutates prompt content, or synthesises cache hints that the caller did not provide. Two helpers make the cache surface explicit:
 
 - `rust/src/wire/` owns the per-request cache-boundary tracker, structural boundary extraction, provider-visible prefix handling, and deterministic hashing.
 
@@ -735,7 +735,7 @@ When the operator has set `loss_policy = "reject"` on `[transcoder]`, the body t
 | `cache_control_feature_disabled` | The operator disabled `cache_control` preservation (the top-level `cache_control` feature gate). |
 | `cache_control_invalid_shape` | The annotation lacked a string `type` field and was rejected by shape validation. |
 | `provider_extension_not_preserved` | A non-portable vendor field (e.g. `defer_loading`) on an Anthropic tool could not be carried into the OpenAI wire. |
-| `stable_prefix_reordered_canonically` | Source and target cache boundary lists diverge — the prefix was canonically reordered. |
+| `stable_prefix_reordered_canonically` | Source and target cache boundary lists diverge: the prefix was canonically reordered. |
 | `unsupported_modality` | An entire modality (e.g. audio) is not representable by the target protocol. |
 | `unsupported_source_form` | A specific source form (base64 or URL) is not supported for the given media type by the target provider. |
 | `media_tool_result_flattened` | Non-text media inside a tool result was flattened to text because the target does not support media-bearing tool results. |
@@ -765,9 +765,9 @@ Lower `max_entries` to trade catalog completeness for steady-state RSS on memory
 
 2. **All-or-nothing per deployment.** When `enabled = true`, transcoding applies to every account. Per-account opt-out is not supported in v1.
 
-3. **No partial translation.** If a request contains both translatable and non-translatable features (e.g., text + vision content), the entire request is translated. Non-translatable request parts are dropped with warnings — the transcoder refuses the request only when `loss_policy = "reject"`.
+3. **No partial translation.** If a request contains both translatable and non-translatable features (e.g., text + vision content), the entire request is translated. Non-translatable request parts are dropped with warnings: the transcoder refuses the request only when `loss_policy = "reject"`.
 
-4. **`loss_policy = "reject"` is opt-in and strict for requests.** Any single request translation loss warning causes a 400 response before upstream dispatch. This can be surprising — use warn mode first to audit.
+4. **`loss_policy = "reject"` is opt-in and strict for requests.** Any single request translation loss warning causes a 400 response before upstream dispatch. This can be surprising: use warn mode first to audit.
 
 5. **Anthropic error types are best-effort.** The error type mapping covers the common cases but not every edge case. Unrecognised error types map to `api_error` (Anthropic) or `invalid_request_error` (OpenAI).
 
@@ -786,7 +786,7 @@ Lower `max_entries` to trade catalog completeness for steady-state RSS on memory
 Check the boot log:
 
 ```
-INFO  Protocol transcoding ENABLED (default) — clients may reach upstream accounts whose provider.protocols does not match the client protocol. loss_policy=warn prefer_native=true
+INFO  Protocol transcoding ENABLED (default): clients may reach upstream accounts whose provider.protocols does not match the client protocol. loss_policy=warn prefer_native=true
 ```
 
 If you see `WARNING  Protocol transcoding DISABLED`, the `[transcoder] enabled = false` escape hatch is in effect and cross-protocol requests will fail.
@@ -802,9 +802,9 @@ INFO  request_id=req_abc123 client_protocol=openai upstream_protocol=anthropic
 ```
 
 Key fields:
-- `client_protocol` / `upstream_protocol` — confirms translation is happening
-- `native_match=false` — means the request was transcoded (true = no translation needed)
-- `loss_warnings` — count of dropped fields / lossy mappings for this request
+- `client_protocol` / `upstream_protocol`: confirms translation is happening
+- `native_match=false`: means the request was transcoded (true = no translation needed)
+- `loss_warnings`: count of dropped fields / lossy mappings for this request
 
 ### Check loss warnings in logs
 
@@ -833,11 +833,11 @@ exposed on the API surface.
 
 ### Disable transcoding (deprecated escape hatch)
 
-Set `enabled = false` in `[transcoder]` and restart. All requests will now require protocol match — a client speaking OpenAI to an Anthropic-only account will get a protocol mismatch error. This option is deprecated; transcoding will become unconditionally on in a future release.
+Set `enabled = false` in `[transcoder]` and restart. All requests will now require protocol match: a client speaking OpenAI to an Anthropic-only account will get a protocol mismatch error. This option is deprecated; transcoding will become unconditionally on in a future release.
 
 ### Debug a specific request
 
 1. Find the `request_id` from the per-request log or dashboard.
 2. Search logs for that request ID.
-3. Look for `loss_warnings` — each entry tells you which field was dropped and why.
+3. Look for `loss_warnings`: each entry tells you which field was dropped and why.
 4. If the issue is a missing field, check the translation tables above to understand what the transcoder does and does not support.

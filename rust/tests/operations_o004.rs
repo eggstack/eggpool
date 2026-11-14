@@ -263,7 +263,7 @@ fn account_matching_is_secret_safe_and_apply_outcome_is_typed() {
     );
 }
 
-// Provider-profile metadata M001 (reviewed 2026-10-02): bundled templates are
+// Provider-profile metadata (reviewed 2026-10-02): bundled templates are
 // bootstrap facts whose authority is current first-party provider
 // documentation, never a sibling repository. Together stays on the canonical
 // `https://api.together.ai/v1` (`docs.together.ai`); `api.together.xyz/v1`

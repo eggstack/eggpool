@@ -182,8 +182,8 @@ If requests consistently use the default, check the runtime snapshot for
 `timeout`, `unavailable`, `invalid_output`, or `repair_failed`, then verify
 that the selector model is a normal concrete model available to EggPool and
 that descriptions are short, mutually distinguishing, and focused on
-operator intent. Descriptions should say when a route is appropriate—not
-repeat a model name or expose a private prompt.
+operator intent. Descriptions should explain when a route fits, not repeat a
+model name or reveal a private prompt.
 
 Limitations: routers cannot nest; semantic routing is not an authorization
 boundary; affinity is not restart-persistent; route descriptions do not grant

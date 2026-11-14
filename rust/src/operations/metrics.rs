@@ -16,9 +16,8 @@ use crate::db::{Database, DatabaseError};
 const SQLITE_MAX: i64 = i64::MAX;
 type MetricKey = (String, i64, String, String, i64, String, bool, String);
 
-/// One ordered flush row moved out of the coalescer buffer (persistence
-/// M002). The batch is shared immutably between DB execution and failure
-/// recovery so no second deep String clone is retained.
+/// One ordered row moved out of the coalescer buffer. The batch is shared
+/// between DB execution and failure recovery to avoid a second deep clone.
 #[derive(Debug, Clone)]
 struct MetricFlushRow {
     bucket_start: String,
@@ -32,9 +31,8 @@ struct MetricFlushRow {
     aggregate: Aggregate,
 }
 
-/// The metrics UPSERT is prepared once per flush transaction and executed
-/// once per row (persistence M002). Values are bound per row; no SQL is
-/// generated dynamically.
+/// The metrics UPSERT is prepared once per transaction and executed once per
+/// row with bound values.
 const METRICS_UPSERT_SQL: &str = "INSERT INTO usage_rollups (bucket_start,bucket_size_s,provider_id,model_id,account_id,protocol,streamed,status,request_count,error_count,retry_count,input_tokens,output_tokens,cache_read_tokens,cache_write_tokens,reasoning_tokens,thinking_characters,cost_microdollars,bytes_received,bytes_emitted,latency_ms_sum,latency_ms_min,latency_ms_max,first_byte_ms_sum,first_byte_ms_count) VALUES (?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11,?12,?13,?14,?15,?16,?17,?18,?19,?20,?21,?22,?23,?24,?25) ON CONFLICT(bucket_start,bucket_size_s,provider_id,model_id,account_id,protocol,streamed,status) DO UPDATE SET request_count=request_count+excluded.request_count,error_count=error_count+excluded.error_count,retry_count=retry_count+excluded.retry_count,input_tokens=input_tokens+excluded.input_tokens,output_tokens=output_tokens+excluded.output_tokens,cache_read_tokens=cache_read_tokens+excluded.cache_read_tokens,cache_write_tokens=cache_write_tokens+excluded.cache_write_tokens,reasoning_tokens=reasoning_tokens+excluded.reasoning_tokens,thinking_characters=thinking_characters+excluded.thinking_characters,cost_microdollars=MIN(?,cost_microdollars+excluded.cost_microdollars),bytes_received=bytes_received+excluded.bytes_received,bytes_emitted=bytes_emitted+excluded.bytes_emitted,latency_ms_sum=latency_ms_sum+excluded.latency_ms_sum,latency_ms_min=CASE WHEN excluded.latency_ms_min IS NULL THEN latency_ms_min WHEN latency_ms_min IS NULL THEN excluded.latency_ms_min ELSE MIN(latency_ms_min,excluded.latency_ms_min) END,latency_ms_max=CASE WHEN excluded.latency_ms_max IS NULL THEN latency_ms_max WHEN latency_ms_max IS NULL THEN excluded.latency_ms_max ELSE MAX(latency_ms_max,excluded.latency_ms_max) END,first_byte_ms_sum=first_byte_ms_sum+excluded.first_byte_ms_sum,first_byte_ms_count=first_byte_ms_count+excluded.first_byte_ms_count,updated_at=CURRENT_TIMESTAMP";
 
 #[derive(Debug, Clone, PartialEq, Eq)]

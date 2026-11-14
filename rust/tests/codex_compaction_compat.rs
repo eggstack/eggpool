@@ -1,4 +1,4 @@
-//! Deterministic remote-compaction compatibility contracts (Plan 199).
+//! Deterministic remote-compaction compatibility contracts.
 //!
 //! Fixture provenance: OpenAI Codex `4701aa4b4239c70063ab6f2fcb835324f9c109f4`
 //! and OpenCodex bridge reference `e4a8539b957b7ae7cd278666f0364eb0f82d4ac3`.

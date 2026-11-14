@@ -473,7 +473,7 @@ fn next_turn_tool_outputs_keep_call_pairing_when_order_is_reversed() {
     );
 }
 
-// Plan 201: deferred `tool_search` compatibility. Provenance: Codex
+// Deferred `tool_search` compatibility. Provenance: Codex
 // 4701aa4b4239c70063ab6f2fcb835324f9c109f4. Only client-executed search
 // (`execution: client` with a defined `call_id`) is portable; hosted/server
 // search stays native-only. Eggpool never executes the search itself.

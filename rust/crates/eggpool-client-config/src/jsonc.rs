@@ -7,26 +7,9 @@
 //! offsets. All other bytes (comments, indentation, ordering, unrelated
 //! providers/settings) are preserved byte-for-byte.
 //!
-//! Implementation-time baseline (2026-09-16, Plan 213 workstream 1):
-//!
-//! - OpenCode V1 (qualified against 1.18.30): `provider` / `npm` / `options`
-//!   shape per `https://opencode.ai/docs/providers/` and
-//!   `https://opencode.ai/docs/config/` (global
-//!   `~/.config/opencode/opencode.json`, `OPENCODE_CONFIG` override,
-//!   `opencode models` lists configured providers/models).
-//! - OpenCode V2 (current docs at `https://opencode.ai/v2/docs/providers/`
-//!   and `https://opencode.ai/v2/docs/models/`): `providers` (plural) /
-//!   `package` / `settings` shape with `env: [...]` credential lists,
-//!   per-model `limit` / `capabilities` / `variants`, and Responses-capable
-//!   packages including `@opencode/ai/providers/openai-compatible/responses`.
-//!
-//! Dependency gate (Plan 213 workstream 6): `jsonc-parser` was evaluated at
-//! implementation time and deliberately NOT adopted. The narrow scanner below
-//! covers the exact operations EggPool needs (comment-aware key lookup,
-//! value-span location, trailing-comma tolerance) with zero new audit
-//! surface, zero binary-size impact on `eggpool`/`eggpool-connect`, and no
-//! MSRV pressure on this Rust 1.81-compatible crate. Revisit only if OpenCode
-//! requires structural operations this scanner cannot express.
+//! The narrow scanner below supports comment-aware key lookup, value-span
+//! location, and trailing commas without adding a parser dependency. Extend it
+//! only if a required mutation needs structural operations it cannot express.
 //!
 //! Bounds: inputs are client config files (small). Token vectors grow
 //! linearly with input length; callers enforce document-size bounds before

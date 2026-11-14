@@ -69,7 +69,7 @@ pub enum ClientSchemaVariant {
     /// OpenCode V1 `provider` / `npm` / `options` shape.
     OpencodeV1,
     /// OpenCode V2 plural `providers` / `package` / `settings` shape with an
-    /// `env` credential list (qualified by Plan 213 against current V2 docs).
+    /// `env` credential list.
     OpencodeV2,
 }
 

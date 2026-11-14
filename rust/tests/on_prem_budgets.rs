@@ -500,9 +500,8 @@ async fn concurrent_limit_releases_only_after_terminal_settlement() {
     fixture.database.close().await.unwrap();
 }
 
-// M008 hard-mode helpers: the proof carries admission output bounds plus the
-// operator tariff snapshot, mirroring what the coordinators assemble from
-// the claim snapshot and provider configuration.
+// Hard-mode proofs carry admission output bounds and the operator tariff
+// snapshot, matching what coordinators assemble from the claim and provider configuration.
 fn hard_input(
     proxy_id: &str,
     attempt: i64,
@@ -1128,11 +1127,9 @@ fn sanitized_agent_budget_capture_corpus_records_supported_surfaces() {
 async fn admission_preserves_routing_inputs_for_transcode_eligibility() {
     use eggpool::request::{AdmissionOptions, StaticRoutingFacts, admit_request};
 
-    // Regression guard: routing facts built from admission must carry the
-    // transcode protocols (and other routing inputs) untouched, or
-    // cross-surface requests lose upstream eligibility with no admission
-    // error. M008 dropped this copy and broke messages-to-responses
-    // transcoding while native surfaces kept passing.
+    // Routing facts must preserve admission's transcode protocols and other
+    // inputs; otherwise cross-surface requests lose upstream eligibility
+    // without an admission error.
     let body = br#"{"model":"m","max_tokens":32,"messages":[{"role":"user","content":"hi"}]}"#;
     let admitted = admit_request(
         body.as_slice(),
@@ -1274,8 +1271,8 @@ async fn hard_proof_flows_from_admission_through_claim_snapshot() {
 }
 
 // ---------------------------------------------------------------------------
-// M010 crash recovery: budget holds converge on restart without folding
-// usage, and a released hold never blocks the next admitted request.
+// Crash recovery releases budget holds without folding usage or blocking the
+// next admitted request.
 // ---------------------------------------------------------------------------
 
 async fn hold_status(database: &Database, request_id: i64) -> (String, Option<String>) {

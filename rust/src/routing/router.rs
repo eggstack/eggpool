@@ -639,12 +639,8 @@ impl RoutingRouter {
         claim: &SelectionClaim,
         apply_account_penalty: bool,
         quarantine_model: bool,
-        // The failure engine's model-effect label. Routing Selection M009
-        // retired the only consumer that read it — the terminal-withdrawal
-        // branch, which no producer could reach — so the router no longer
-        // interprets it. The parameter is retained so the published
-        // signature of this method does not change; the label itself is
-        // still published on `FailureEffects::model_effect`.
+        // Retained for signature compatibility; the router no longer
+        // interprets model-effect labels.
         _model_effect: &str,
         backoff_reason: Option<&str>,
         backoff_until: Option<Duration>,

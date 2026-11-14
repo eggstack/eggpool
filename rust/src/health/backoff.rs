@@ -76,8 +76,7 @@ impl TryFrom<&str> for BackoffReason {
     }
 }
 
-/// Failure category used by health state. It is separate from retry policy:
-/// later milestones decide whether a categorized outcome is retried.
+/// Failure category used by health state; retry decisions belong to routing.
 pub type FailureCategory = BackoffReason;
 
 /// Classify request-independent provider observations using the Python rules.

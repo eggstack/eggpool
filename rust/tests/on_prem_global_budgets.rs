@@ -1015,8 +1015,8 @@ async fn no_global_rules_preserves_single_admin_parity() {
 }
 
 // ---------------------------------------------------------------------------
-// M010 crash recovery: instance-global holds converge on restart without
-// folding usage, and a released global hold never blocks the next user.
+// Crash recovery releases instance-global holds without folding usage or
+// blocking the next user.
 // ---------------------------------------------------------------------------
 
 #[tokio::test]
@@ -1150,13 +1150,11 @@ async fn settled_global_request_survives_restart_without_double_fold() {
 }
 
 // ---------------------------------------------------------------------------
-// M010 storage-pressure observations: paired baseline vs budget-rule
-// publish/settle latency, WAL footprint, and row counts for 1/10/49
-// distinct credential identities on ordinary local hardware. This is an
-// observation record, not a performance gate: per-op assertions are
-// generous anti-hang bounds only. Harness output lines prefixed with
-// M010_GATE_OBSERVATION carry the JSON cells archived under
-// artifacts/qualification/; M012 owns physical-SBC capacity proof.
+// Storage-pressure observations compare baseline and budget-rule publish/
+// settle latency, WAL footprint, and row counts for 1/10/49 credential
+// identities on local hardware. This is not a performance gate; timing bounds
+// only prevent hangs. `M010_GATE_OBSERVATION` lines carry archived JSON results.
+// Physical-SBC capacity is outside this test.
 // ---------------------------------------------------------------------------
 
 use std::fmt::Write as _;

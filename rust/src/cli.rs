@@ -191,7 +191,7 @@ pub enum UsersCommand {
     Revoke(UserNameArgs),
     /// Retire legacy access after public dashboard access is disabled.
     EnableManaged(UserActorArgs),
-    /// Create and assign model-policy profiles during the CLI-only M004 phase.
+    /// Create and assign model-policy profiles.
     #[command(subcommand)]
     Policy(UsersPolicyCommand),
     /// Set or remove durable per-user budget rules.

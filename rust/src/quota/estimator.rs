@@ -548,11 +548,9 @@ impl QuotaEstimator {
         snapshots
     }
 
-    /// Ordered snapshot for the router hot path (routing-selection M001).
-    /// Borrows caller-ordered account names, acquires the estimator state
-    /// once, runs the same mirror sync as [`Self::snapshot`], and returns one
-    /// entry per requested account — `None` for the missing-account case —
-    /// without allocating String keys for the returned collection.
+    /// Ordered snapshot for the router hot path. Borrows account names in
+    /// caller order, synchronizes state once, and returns one entry per name
+    /// without allocating `String` keys.
     pub(crate) fn snapshot_ordered<'a>(
         &self,
         account_names: impl Iterator<Item = &'a str>,

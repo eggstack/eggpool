@@ -3,7 +3,7 @@
 This document covers standalone Rust binaries and disposable qualification
 hosts. Normal users should install the verified standalone GitHub raw binary
 via `scripts/install.sh` (no Python required); uv, pipx, and cargo remain
-explicit alternatives — see [Upgrade and rollback](upgrading.md).
+explicit alternatives: see [Upgrade and rollback](upgrading.md).
 Standalone binaries use the verified GitHub raw-asset authority and are
 distinct from package-managed installations.
 

@@ -15,10 +15,10 @@ at most 128 UTF-8 bytes, free of control characters, and contain no `/`.
 
 | Path | Type | Default | Validation |
 |---|---|---:|---|
-| `selector_model` | string | — | Required concrete reference, max 128 UTF-8 bytes |
-| `default_model` | string | — | Required concrete reference and must match a route model |
-| `routes.<label>.model` | string | — | Required concrete reference, max 128 UTF-8 bytes |
-| `routes.<label>.description` | string | — | Required, max 512 UTF-8 bytes |
+| `selector_model` | string | N/A | Required concrete reference, max 128 UTF-8 bytes |
+| `default_model` | string | N/A | Required concrete reference and must match a route model |
+| `routes.<label>.model` | string | N/A | Required concrete reference, max 128 UTF-8 bytes |
+| `routes.<label>.description` | string | N/A | Required, max 512 UTF-8 bytes |
 | `sticky` | boolean | `true` | Controls process-local affinity |
 | `affinity_ttl_s` | float | `43200` | Inclusive range 1–604800 seconds |
 | `selector_timeout_s` | float | `2.0` | Inclusive range 0.05–30 seconds |

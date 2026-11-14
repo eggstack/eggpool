@@ -1,4 +1,4 @@
-//! Plan 202 status command and provider health summary coverage.
+//! Status command and provider health summary coverage.
 //!
 //! Covers the CLI contract, pure provider/proxy aggregation, secret-free
 //! guarantees, deterministic ordering, the authenticated `/api/status`
@@ -811,9 +811,7 @@ async fn integration_profile_does_not_inherit_dashboard_public_exemption() {
     database.close().await.expect("database closes");
 }
 
-/// The human-readable status wording is an operator-facing contract: the
-/// milestone that replaced the hand-written offline fallback must not have
-/// changed a single label the operator reads.
+/// Human-readable status labels are an operator-facing contract.
 #[tokio::test]
 async fn status_cli_human_output_labels_are_unchanged() {
     let directory = tempdir().expect("temporary directory");

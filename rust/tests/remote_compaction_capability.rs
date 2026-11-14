@@ -1,4 +1,4 @@
-//! Remote-compaction capability contract (Request Admission and Wire M008).
+//! Remote-compaction capability contract.
 //!
 //! `POST /v1/responses/compact` is a public, finite-only operation that is
 //! forwarded natively to a provider wire surface advertising remote

@@ -41,7 +41,7 @@ const MAX_SNIPPET_BYTES: usize = 4 * 1024 * 1024;
 const CLIPBOARD_TIMEOUT: Duration = Duration::from_secs(5);
 const DEPRECATED_MODEL_ID: &str = "__deprecated__";
 const INTEGRATION_SCHEMA_VERSION: u32 = client_config::OWNERSHIP_SCHEMA_VERSION;
-/// Stable EggPool-specific integration-profile endpoint (Plan 211).
+/// Stable EggPool-specific integration-profile endpoint.
 pub const REMOTE_PROFILE_ENDPOINT: &str = "/api/integrations/v1/profile";
 /// Stable `configremote --format json` schema identifier.
 pub const CONFIGREMOTE_SCHEMA: &str = "eggpool.configremote/v1";
@@ -345,7 +345,7 @@ async fn build_context(
 }
 
 // ---------------------------------------------------------------------------
-// Remote (`configremote`) read-only export (Plan 211)
+// Remote (`configremote`) read-only export
 // ---------------------------------------------------------------------------
 
 /// Secret-free remote export context.
@@ -1171,7 +1171,7 @@ fn build_opencode_config_json(context: &IntegrationContext) -> Result<String, In
 }
 
 // ---------------------------------------------------------------------------
-// Managed lifecycle (Plan 200 workstreams 6-8)
+// Managed client lifecycle
 // ---------------------------------------------------------------------------
 
 /// Lifecycle actions shared by managed Codex/OpenCode installation.

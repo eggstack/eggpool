@@ -1,7 +1,6 @@
-//! Routing-selection M001 ownership cleanup: selection must stay
-//! deterministic across account counts, quota modes, fairness modes/scopes,
-//! provider pinning, and transcode preference after removing the transient
-//! String-keyed scoring maps and candidate re-cloning.
+//! Selection stays deterministic across account counts, quota and fairness
+//! modes, provider pinning, and transcode preference without transient
+//! String-keyed scoring maps or candidate re-cloning.
 //!
 //! Numeric parity between the private ordered scoring path and the public
 //! scorer is proven by in-crate seam tests in `quota/scorer.rs` (the private

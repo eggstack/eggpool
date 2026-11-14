@@ -1,11 +1,5 @@
-//! Live adoption of the bounded reason-specific backoff policy and the
-//! unified health-reason vocabulary.
-//!
-//! Every test in this target is a regression guard for a behavior the
-//! pre-milestone construction could not produce. Before the milestone the
-//! live path wrote its backoff durations from inline constants, the failure
-//! reasons were nine hand-written strings, and the escalation the policy
-//! defines never happened outside the policy table.
+//! Coverage for the bounded reason-specific backoff policy and unified
+//! health-reason vocabulary.
 
 use std::{
     collections::BTreeSet,
@@ -42,9 +36,8 @@ const REPOSITORY_SOURCE: &str = include_str!("../src/health/repository.rs");
 /// The router owns the reconstruction of a reason from a stored string.
 const ROUTER_SOURCE: &str = include_str!("../src/routing/router.rs");
 
-/// The reason strings the pre-milestone classifier wrote, one per classified
-/// failure. The values are a durable on-disk contract: a row written before
-/// the change must stay readable and map to the same effect.
+/// Previously persisted reason strings are an on-disk contract and must
+/// remain readable with the same effect.
 const PRE_CHANGE_REASON_STRINGS: [(&str, &str); 7] = [
     ("connection_failure", "connection_failure"),
     ("authentication_failed", "authentication_failed"),

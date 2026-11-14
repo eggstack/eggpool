@@ -328,10 +328,9 @@ impl PublicationService {
         if let Err(error) = self.validate(&claim, &input) {
             return self.rollback_after_error(claim, error);
         }
-        // Deterministic routing-decision preparation happens before the
-        // database gate is acquired (persistence M002). Serialization or
-        // formatting failure maps to the existing database-transaction error
-        // category without starting a transaction or converting the claim.
+        // Prepare the deterministic routing decision before acquiring the
+        // database gate. Serialization failures use the existing transaction
+        // error category without starting a transaction or converting the claim.
         let prepared = match PreparedRoutingDecisionRow::prepare(
             claim.selection_snapshot(),
             input.reservation_ttl_seconds,
@@ -1116,12 +1115,10 @@ pub fn budget_proof_for_claim(
     }
 }
 
-/// Deterministic routing-decision persistence facts prepared from a borrowed
-/// selection snapshot before the database gate is acquired (persistence
-/// M002). Only the bounded scalar/JSON facts that `insert_attempt_rows`
-/// M002). Only the bounded scalar/JSON facts that `insert_attempt_rows`
-/// persists travel into the worker transaction; the full runtime snapshot
-/// never crosses that boundary.
+/// Bounded routing-decision facts prepared from a borrowed selection snapshot
+/// before acquiring the database gate. Only fields persisted by
+/// `insert_attempt_rows` enter the worker transaction; the runtime snapshot
+/// stays outside that boundary.
 #[derive(Debug, Clone)]
 struct PreparedRoutingDecisionRow {
     exclusions_json: String,

@@ -1,13 +1,9 @@
-//! M002 dependency-boundary guard, extended for the M003 crate cutover.
+//! Dependency-boundary guard for the extractable wire kernel.
 //!
-//! The extractable wire kernel must not depend on EggPool routing, catalog,
-//! config, request-runtime/resource, model-router, provider, database,
-//! server, coordinator, Tokio, Axum, Hyper, TLS, or transport types.
-//!
-//! After the M003 cutover the single source of truth lives in
-//! `rust/crates/eggpool-wire/src/`; the root `rust/src/wire/` kernel files
-//! are facades. Both levels are scanned so the guard cannot pass vacuously,
-//! and a second-implementation guard pins the root files to facades.
+//! The kernel must not depend on EggPool runtime, server, or transport types.
+//! Its source of truth lives in `rust/crates/eggpool-wire/src/`; root
+//! `rust/src/wire/` files are facades. Both levels are scanned, and a separate
+//! guard prevents duplicate implementations.
 
 const KERNEL_SOURCES: &[(&str, &str)] = &[
     ("ir", include_str!("../src/wire/ir.rs")),
@@ -27,8 +23,7 @@ const KERNEL_SOURCES: &[(&str, &str)] = &[
     ("tool_calls", include_str!("../src/wire/tool_calls.rs")),
 ];
 
-/// M003 single-source-of-truth locations. `registry.rs` moved to
-/// `profile.rs`; every other module kept its file name.
+/// Extracted crate source locations; `registry.rs` is named `profile.rs`.
 const EXTRACTED_CRATE_SOURCES: &[(&str, &str)] = &[
     (
         "eggpool-wire/ir",
@@ -151,8 +146,7 @@ fn kernel_seam_modules_exist() {
     assert!(decode.contains("canonical_request_from_object_with_limits"));
 }
 
-/// M003 guard against a second codec implementation: the root kernel files
-/// must be thin facades over `eggpool-wire`, never duplicate definitions.
+/// Prevents duplicate codec implementations in the root facades.
 #[test]
 fn root_kernel_modules_are_facades_without_duplicate_implementations() {
     const FACADE_CRATE: &[(&str, &str)] = &[
@@ -239,10 +233,8 @@ fn root_kernel_modules_are_facades_without_duplicate_implementations() {
     }
 }
 
-/// M005 narrow regression guard: the client-executed `tool_search`
-/// declaration predicate has exactly one semantic owner in `eggpool-wire`,
-/// consumed by both structural decode and EggPool preservation. This keeps
-/// the M002–M004 duplication from silently reappearing across the seam.
+/// The client-executed `tool_search` predicate has one owner in
+/// `eggpool-wire`, shared by structural decode and EggPool preservation.
 #[test]
 fn shared_tool_search_classifier_has_one_owner() {
     let kernel_decode = include_str!("../crates/eggpool-wire/src/decode.rs");

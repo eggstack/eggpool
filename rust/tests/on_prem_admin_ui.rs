@@ -394,7 +394,7 @@ async fn two_user_browser_journey_fences_admin_data_and_personal_credentials() {
             && !user_page.contains("M006+temporary+member+password"),
         "{user_page}"
     );
-    // M008: the budget form distinguishes hard versus estimated enforcement
+    // The budget form distinguishes hard versus estimated enforcement
     // instead of labeling every dimension an estimate.
     assert!(user_page.contains("name=\"enforcement\""), "{user_page}");
     assert!(
@@ -406,8 +406,8 @@ async fn two_user_browser_journey_fences_admin_data_and_personal_credentials() {
         "{user_page}"
     );
 
-    // M008: hard-mode budget rules are manageable through the admin form,
-    // invalid modes are rejected, and members see the mode on their page.
+    // Hard-mode budget rules are manageable through the admin form; invalid
+    // modes are rejected, and members see the mode on their page.
     let budget_member_id = identity::list_users(&database)
         .await
         .unwrap()
@@ -450,8 +450,8 @@ async fn two_user_browser_journey_fences_admin_data_and_personal_credentials() {
         "{invalid_budget_rejected}"
     );
 
-    // M009: instance ceilings are managed on the same admin page, visible in
-    // the global section, and fenced from member credentials.
+    // Instance ceilings share the admin page and remain separate from member
+    // credentials.
     assert!(
         user_page.contains("Instance budget ceilings"),
         "{user_page}"

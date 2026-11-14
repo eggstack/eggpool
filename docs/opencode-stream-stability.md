@@ -1,4 +1,4 @@
-# OpenCode Stream Stability — Troubleshooting Workflow
+# OpenCode Stream Stability: Troubleshooting Workflow
 
 OpenCode and other coding-agent clients keep long-lived SSE streams open
 across many parallel edits. Under high concurrency, a small upstream
@@ -11,15 +11,15 @@ that failure mode.
 When users report "my agent just hung" or the dashboard shows a sudden
 spike in pending requests, walk through this list in order:
 
-1. **Dashboard runtime tab — stream diagnostics card.**
+1. **Dashboard runtime tab: stream diagnostics card.**
    The `outcomes` histogram should be dominated by `stream_completed`.
    A spike in `stream_finalizer_timeout`, `upstream_midstream_error`,
    or `client_cancelled` points at the failing layer.
-2. **`/api/stats/runtime` JSON — `db_contention.lock_wait_p95_ms`.**
+2. **`/api/stats/runtime` JSON: `db_contention.lock_wait_p95_ms`.**
    Anything above `200 ms` means SQLite is the bottleneck. The routing
    trace guardrail should be skipping writes; confirm via
    `routing_trace_guard.skipped_db_pressure`.
-3. **`/api/stats/runtime` JSON — `finalization_supervisor`.**
+3. **`/api/stats/runtime` JSON: `finalization_supervisor`.**
    Inspect active jobs, retry-pending work, failed bounded diagnostics, and
    saturation counters. The snapshot also reports configured capacity and the
    absolute retry-age limit.
@@ -47,7 +47,7 @@ The 10 s shielded finalizer hit the SQLite lock. Two usual causes:
 The native provider connection pool is exhausted. Open the relevant provider in
 `config.toml` and raise `max_connections` and `max_keepalive`. See
 `docs/providers.md` for the high-concurrency profile. Do not raise
-`server.threads` — the native runtime owns request scheduling.
+`server.threads`: the native runtime owns request scheduling.
 
 ### "Read timeouts spike during long model runs (status_code=504, error_class=ReadTimeout)"
 
@@ -66,7 +66,7 @@ max_lifetime_s = 0
 raise that guardrail only for this provider. A first-byte timeout can retry
 before downstream output; an idle timeout after output is a midstream failure.
 If the upstream closes cleanly without its required terminal marker, inspect
-the premature-EOF counters instead — increasing a timeout cannot repair EOF.
+the premature-EOF counters instead: increasing a timeout cannot repair EOF.
 
 ### "Routing trace writes are getting dropped (routing_trace_guard.skipped_db_pressure > 0)"
 
@@ -96,7 +96,7 @@ eggpool runtime-status
 # restart the service: eggpool restart)
 eggpool restart
 
-# Reset the routing trace guard threshold — edit config and restart
+# Reset the routing trace guard threshold: edit config and restart
 # [routing.trace] skip_above_lock_wait_p95_ms = 500  in config.toml
 # then: eggpool restart
 ```
@@ -137,7 +137,7 @@ connect, read, write, protocol, and timeout outcomes. After a failure or
 cancellation, verify that active requests and reservations return to zero.
 Streaming tests distinguish canonical terminal evidence (`[DONE]` or
 `message_stop`) from premature EOF; a timeout is a separate upstream outcome.
-Runtime metrics are operational signals — do not convert them into fixed CI
+Runtime metrics are operational signals: do not convert them into fixed CI
 percentile or duration gates.
 
 After deploying stream-stability changes, run the native runtime tests and
@@ -166,9 +166,9 @@ A clean run should produce:
 
 The `/api/stats/runtime` endpoint exposes these stream-stability sections:
 
-- `stream_diagnostics` — outcome counters and histograms
-- `finalization_supervisor` — active jobs, retry-pending work, bounded failures, saturation, and retry limits
-- `runtime_manager.finalization_ownership` — active/retiring generation IDs,
+- `stream_diagnostics`: outcome counters and histograms
+- `finalization_supervisor`: active jobs, retry-pending work, bounded failures, saturation, and retry limits
+- `runtime_manager.finalization_ownership`: active/retiring generation IDs,
   terminal references, retirement age, and bounded blocked/failure facts
-- `routing_trace_guard` — skip rate and lock-pressure threshold
-- `db.contention` — lock-wait p50/p95/p99/max and sample count
+- `routing_trace_guard`: skip rate and lock-pressure threshold
+- `db.contention`: lock-wait p50/p95/p99/max and sample count

@@ -1,32 +1,19 @@
 //! Portable OpenCode rendering, variant selection, and JSONC-preserving
-//! mutation.
+//! mutation for two schema variants:
 //!
-//! Two explicit schema variants are supported (Plan 213 workstreams 5-9):
-//!
-//! - V1 (`provider` / `npm` / `options`): qualified against OpenCode 1.18.30.
-//!   Uses the Responses-capable `@ai-sdk/openai` runtime with
-//!   `{env:EGGPOOL_API_KEY}` interpolation.
-//! - V2 (`providers` / `package` / `settings`): current OpenCode V2 docs
-//!   (fetched 2026-09-16 from `https://opencode.ai/v2/docs/providers/` and
-//!   `/models/`). Uses the Responses-capable
-//!   `@opencode/ai/providers/openai-compatible/responses` package with an
+//! - V1 (`provider` / `npm` / `options`) uses the Responses-capable
+//!   `@ai-sdk/openai` runtime with `{env:EGGPOOL_API_KEY}` interpolation.
+//! - V2 (`providers` / `package` / `settings`) uses
+//!   `@opencode/ai/providers/openai-compatible/responses` with an
 //!   `env: ["EGGPOOL_API_KEY"]` credential list and `settings.baseURL`.
 //!
-//! Both variants render from the same conservative provider-neutral
-//! projection. Model entries expose only proven capabilities: public ID,
-//! display name, context/output limits when known, text input/output, image
-//! input only when guaranteed, and tool support only when exactly known
-//! (unknown stays omitted rather than guessed). WebSocket transport is never
-//! advertised. V2 reasoning-effort variants are deliberately omitted: the V1
-//! `variants` map has no proven V2 `settings.reasoningEffort` equivalent for
-//! the compatible/responses package, and default reasoning works without
-//! them.
+//! Both render from a conservative provider-neutral projection and advertise
+//! only proven capabilities. WebSockets and unsupported V2 reasoning-effort
+//! variants are omitted.
 //!
-//! Mutation preserves every unowned byte: comments, trailing commas,
-//! indentation, ordering, unrelated providers, and nested settings are left
-//! untouched; only the owned `eggpool` provider entry (and, when EggPool
-//! creates it, its narrowly scoped parent key) is inserted, replaced, or
-//! removed. Unknown/ambiguous documents fail closed to plan/manual output.
+//! Mutation preserves unowned bytes and changes only the `eggpool` provider
+//! entry and, when needed, its parent key. Unknown or ambiguous documents fail
+//! closed to plan/manual output.
 
 use std::collections::BTreeMap;
 

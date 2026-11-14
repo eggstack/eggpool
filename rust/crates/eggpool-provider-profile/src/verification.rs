@@ -169,8 +169,7 @@ impl ProviderVerificationPolicy {
 
     /// Whether catalog discovery alone would establish a usable credential.
     ///
-    /// This is the drift the milestone exists to prevent: treating a reachable
-    /// model list as proof that a key is accepted.
+    /// Catalog reachability alone does not prove that a key is accepted.
     pub fn catalog_implies_credential(&self, catalog: CatalogEvidence) -> bool {
         self.assess(catalog) == CredentialStatus::Verified
     }

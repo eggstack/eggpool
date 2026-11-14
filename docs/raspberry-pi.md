@@ -134,7 +134,7 @@ does not use it to select an I/O worker count:
 threads = 1
 ```
 
-The PID file path is resolved by `rust/src/operations/paths.rs` in this precedence: `$EGGPOOL_PID_FILE` → `$XDG_RUNTIME_DIR/eggpool.pid` → `~/.local/state/eggpool/eggpool.pid` → `/tmp/eggpool-<UID>.pid`, and is owned by the supervisor. If `eggpool serve` ever exits non-zero with a message about an existing instance, that is the duplicate-instance guard catching a live PID or a successful `/v1/healthz` probe — check `pgrep -f eggpool` before retrying.
+The PID file path is resolved by `rust/src/operations/paths.rs` in this precedence: `$EGGPOOL_PID_FILE` → `$XDG_RUNTIME_DIR/eggpool.pid` → `~/.local/state/eggpool/eggpool.pid` → `/tmp/eggpool-<UID>.pid`, and is owned by the supervisor. If `eggpool serve` ever exits non-zero with a message about an existing instance, that is the duplicate-instance guard catching a live PID or a successful `/v1/healthz` probe: check `pgrep -f eggpool` before retrying.
 
 ## Reduce SD Card Wear
 
@@ -151,7 +151,7 @@ vcgencmd measure_temp          # current temp
 watch -n 5 vcgencmd measure_temp  # continuous
 ```
 
-Thermal throttling starts at 80°C — use a heatsink or fan if sustained
+Thermal throttling starts at 80°C: use a heatsink or fan if sustained
 loads are expected.
 
 ## Optional Target-Class Characterization
@@ -266,7 +266,7 @@ second-scale tails; 8 saturates at p50 about 4.1 s).
 Deploy accordingly: solo personal use is practical in one process with no
 extra services; up to 2–4 concurrent requests work with degraded tails; 8
 concurrent exceeds this Pi/MMC class. Forty-nine named users are inexpensive
-metadata, not 49 simultaneous generations — no 50-concurrent claim is made.
+metadata, not 49 simultaneous generations: no 50-concurrent claim is made.
 Le Potato and a separate ordinary-Linux reference host were not measured here
 (docs promise Pi 4/Pi 5 only; paired same-Pi controls ground the solo
 deltas); 16-way concurrency was not attempted because 8-way already
@@ -312,14 +312,14 @@ eggpool configremote opencode --format token
 
 Copy the printed bootstrap block (or the `epc1` token) to each desktop that
 can reach the Pi. The bootstrap verifies SHA-256 before executing anything,
-so desktops need no EggPool checkout, Rust toolchain, or Python — only the
+so desktops need no EggPool checkout, Rust toolchain, or Python: only the
 `configremote` block for their shell (`--shell posix` for macOS/Linux,
 `--shell powershell` for Windows). Each desktop still provisions its own
 authorized EggPool key (`EGGPOOL_API_KEY`) in the environment that launches
 the client. Desktops fetch current models from authenticated
 `GET /api/integrations/v1/profile` during install; the token itself carries
-no credential. The Windows helper does not imply Windows proxy support —
-the Pi remains the only server in this topology. See
+no credential. The Windows helper does not add Windows proxy support for the
+server; the Pi remains the only server in this topology. See
 [Agent Configuration](agent-configuration.md#remote-setup-configremote) and
 [Desktop Bootstrap](agent-configuration.md#desktop-bootstrap).
 
@@ -329,7 +329,7 @@ the Pi remains the only server in this topology. See
 |---------|-------|
 | Won't start | `journalctl -u eggpool --since "5 min ago"` or `tail -50 /var/log/eggpool/eggpool.log` |
 | Slow perf | CPU temp, use Ethernet, increase `busy_timeout_ms` |
-| DB locked | `pgrep -f eggpool` — ensure only one instance |
+| DB locked | `pgrep -f eggpool`: ensure only one instance |
 | SD full | `df -h /var/lib/eggpool`, check retention config |
 
 The startup log includes a structured operational profile line (Milestone

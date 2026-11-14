@@ -1,4 +1,4 @@
-//! Test-only transaction-shape and replay model for persistence M010.
+//! Test-only transaction-shape and replay model for persistence.
 //!
 //! These schemas are deliberately isolated, file-backed models of the current
 //! publication/finalization write families and the proposed control/outbox

@@ -11,8 +11,8 @@
 //! a single-admin workload is unchanged except measured gate overhead.
 //!
 //! Hard/estimated semantics, worst-case holds, and the operator-tariff trust
-//! boundary are shared with `user_budget` (M008 contract); this module only
-//! adds the global scope and its intersection.
+//! boundary are shared with `user_budget`; this module adds the global scope
+//! and its intersection.
 
 use thiserror::Error;
 use tokio_rusqlite::rusqlite::{OptionalExtension, params};

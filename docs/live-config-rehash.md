@@ -56,26 +56,26 @@ rewrite, SQLite row, or background cleanup task is used.
 An invalid candidate is rejected before publication, so the active generation
 and its existing affinity behavior remain intact.
 
-### Closure pass D1 — request-policy expansion
+### Closure pass D1: request-policy expansion
 
 The D1 milestone adds the request-path policy fields that the
 candidate builder already constructs as generation-owned objects:
 
-- **Transcoder policy** (``[transcoder]``) — every field including
+- **Transcoder policy** (``[transcoder]``): every field including
   ``loss_policy``, ``prefer_native``, ``features.*``, and
   ``provider_control_policy.*``. A change rebuilds the generation's
   ``TranscoderPolicy`` and rewires the new ``RequestCoordinator``.
-- **Models subset** (``[models]``) — ``expose_mode``,
+- **Models subset** (``[models]``): ``expose_mode``,
   ``collapse_models``, ``refresh_interval_s``, ``stale_after_s``,
   ``allow_stale_catalog``. Startup-only fields
   (``startup_refresh``, ``ping_retain_days``,
   ``catalog_withdrawal_policy``) remain ``RESTART_REQUIRED``.
 - **Security error-detail persistence**
-  (``security.persist_redacted_error_detail``) — the flag is
+  (``security.persist_redacted_error_detail``): the flag is
   threaded into the candidate ``RequestCoordinator`` via the
   ``persist_error_detail=`` kwarg.
 
-### Closure pass D2 — background and observability expansion
+### Closure pass D2: background and observability expansion
 
 The D2 milestone adds background-task cadences and retention
 durations as LIVE fields.  It introduces a dual-ownership model
@@ -108,12 +108,12 @@ The periodic task loop in ``rust/src/task_supervisor.rs``
 re-reads the task ``RuntimeTaskSpec`` fields (``interval_s: f64`` and
 ``initial_delay_s: Option<f64>``) each
 iteration so live interval changes take effect at the next tick
-boundary — not from the last completion time.  For tasks changed via
+boundary: not from the last completion time.  For tasks changed via
 ``apply_spec_diff``, the old task is stopped and a new one is started
 immediately with the new interval. Toggling ``backup.enabled`` adds/removes
 the corresponding task; ``apply_spec_diff``
 logs the transition (added/removed/changed) at INFO level.  Process-owned
-task resources retain identity across reloads — no duplicated schedules,
+task resources retain identity across reloads: no duplicated schedules,
 no orphaned tasks.
 
 Model-info enrichment deliberately has no standalone reloadable scheduler.
@@ -155,35 +155,35 @@ returns exit code `2` so scripts can detect the situation.
 
 The reload follows a strict transactional pipeline:
 
-1. **Local validation** — The CLI parses and semantically validates the
+1. **Local validation**: The CLI parses and semantically validates the
    config file. The server bounds the candidate bytes before parsing. Invalid
    configs are rejected immediately (fail-closed); the running configuration
    is never touched. Operator mutation commands also classify their pre-edit
    to post-edit transition before atomically replacing the file.
-2. **Control socket** — CLI connects to the Unix-domain socket and
+2. **Control socket**: CLI connects to the Unix-domain socket and
    sends the validated `content_digest` (SHA-256 of the config bytes).
-3. **Server-side re-validation** — The server independently re-validates
+3. **Server-side re-validation**: The server independently re-validates
    the config to guard against TOCTOU drift.
-4. **Transition classification** — Server runs the canonical
+4. **Transition classification**: Server runs the canonical
    `classify_transition` policy against the active generation's config. The
    result contains a redacted `ConfigDiff`; expanded per-key paths
    (``providers.<id>``, ``accounts.<provider>/<name>``) inherit the
    LIVE disposition of their parent collection.
-5. **Restart-required check** — Any field with `RESTART_REQUIRED`
+5. **Restart-required check**: Any field with `RESTART_REQUIRED`
    disposition causes the entire operation to be rejected. The server
    lists the offending fields in the response.
-6. **Candidate generation** — A new `RuntimeGeneration` is built
+6. **Candidate generation**: A new `RuntimeGeneration` is built
    (router, DB connections, app state) without touching the active one.
-7. **Acceptance staging** — The candidate generation, task diff, and shared
+7. **Acceptance staging**: The candidate generation, task diff, and shared
    process wire policy are prepared while request admission remains reversible;
    preparation does not publish resolver behavior.
-8. **Persistence reconciliation** — Database state is reconciled in a
+8. **Persistence reconciliation**: Database state is reconciled in a
    transaction; failures trigger rollback.
-9. **Durable publication boundary** — After the database commit succeeds, the
+9. **Durable publication boundary**: After the database commit succeeds, the
    shared wire policy is published and the matching generation/task state is
    accepted while admission remains closed. Pre-accept failures leave the old
    process policy and generation authoritative.
-10. **Old generation retirement** — Active streams continue on their
+10. **Old generation retirement**: Active streams continue on their
    original generation. Old resources close only after all leases
    drain (timeout: 300s default).
 
@@ -235,14 +235,14 @@ Response (one JSON object per line):
 
 The CLI performs these steps:
 
-1. **Preflight validation** — Parses and semantically validates the bounded
+1. **Preflight validation**: Parses and semantically validates the bounded
    config bytes. On failure, prints a clear error and exits non-zero. The
    running configuration is never touched.
-2. **Connect to control socket** — Sends the validated
+2. **Connect to control socket**: Sends the validated
    `content_digest` to the running server. If the server is not
    running, prints "Control socket unavailable. Is the server running?"
    and exits with code `3`.
-3. **Render result** — On success, prints changed sections and the
+3. **Render result**: On success, prints changed sections and the
    new generation number. On failure, lists restart-required fields.
 
 ### Exit codes
@@ -256,7 +256,7 @@ deployment tooling can rely on:
 | `1` | Validation / configuration failure |
 | `2` | Restart required (one or more fields need a full restart) |
 | `3` | Control socket unavailable (server not running) |
-| `4` | Reload conflict / busy (`reload_in_progress` stage — another reload in progress) |
+| `4` | Reload conflict / busy (`reload_in_progress` stage: another reload in progress) |
 | `5` | Candidate preparation or publication failure |
 | `6` | Digest mismatch between CLI preflight and server read |
 
@@ -358,13 +358,13 @@ is explanatory guidance, not a generated copy of the table.
 
 ## Transaction safety
 
-- **Serialized** — One reload at a time. Concurrent `rehash` commands
+- **Serialized**: One reload at a time. Concurrent `rehash` commands
   are rejected with `reload_in_progress`.
-- **Content digest** — Prevents TOCTOU races: the server re-validates
+- **Content digest**: Prevents TOCTOU races: the server re-validates
   the exact bytes the CLI validated.
-- **Fail-closed** — All failures before publication are rolled back.
+- **Fail-closed**: All failures before publication are rolled back.
   The old generation remains active.
-- **No secrets in logs** — Secret fields render as `<changed>` in
+- **No secrets in logs**: Secret fields render as `<changed>` in
   diagnostic output.
 
 ## Connect and logout fallback policy
@@ -373,16 +373,16 @@ is explanatory guidance, not a generated copy of the table.
 `rust/src/operations/config_mutation.rs`, which shares the typed transition
 classifier with `eggpool rehash`. Its safe-fallback decision tree is:
 
-1. **Validate locally** — invalid config → return immediately, no
+1. **Validate locally**: invalid config → return immediately, no
    restart attempted.
-2. **Probe the control socket** — if the server accepts the reload,
+2. **Probe the control socket**: if the server accepts the reload,
    apply live.
-3. **Server healthy but socket missing** — return
+3. **Server healthy but socket missing**: return
    `(False, "control unavailable (server healthy)")` **without
    restarting**. The operator must intervene explicitly (check file
    permissions, restart the service, or investigate why the control
    socket disappeared).
-4. **Server not running** — return `ServerNotRunning` without starting a
+4. **Server not running**: return `ServerNotRunning` without starting a
    stopped service. Start or restart the service explicitly to apply the
    already-written configuration.
 
@@ -392,7 +392,7 @@ classifier with `eggpool rehash`. Its safe-fallback decision tree is:
 |----------|----------|-----------------|
 | Stale PID file, server dead | `ServerNotRunning` | Start or restart the service explicitly |
 | Server healthy, control socket missing | No restart; `(False, "control unavailable (server healthy)")` | Check socket permissions, restart the service |
-| Server healthy, control socket reachable | Live rehash applied | None — automatic |
+| Server healthy, control socket reachable | Live rehash applied | None: automatic |
 | Server dead, socket missing | `ServerNotRunning` | Start or restart the service explicitly |
 | Permission denied on socket | Control client error; exit 3 | Run as the same user as the server |
 
@@ -464,7 +464,7 @@ If `eggpool rehash` (or `connect`/`logout`) reports this but the
 server is actually running (e.g. `systemctl status eggpool` shows it
 active), the control socket file may have been removed or its
 permissions changed. The safe-fallback policy does **not** auto-restart
-a healthy server — the operator must intervene:
+a healthy server: the operator must intervene:
 
 1. Check that `~/.local/state/eggpool/eggpool.sock` exists and is
    owned by the same user as the server process.
@@ -475,11 +475,11 @@ a healthy server — the operator must intervene:
 
 ## See also
 
-- `architecture/deep-dive-control.md` (§§ Reload policy, Reload service) —
-  validation contract, diff shape, wire types, and runtime generations
-- `rust/src/config.rs` — reusable validation contract
-- `rust/src/config_reload_policy.rs` — typed diff and reload policy
-- `rust/src/runtime.rs` — CLI adapter, rehash JSON shaping, and `EXIT_*` constants (`cli.rs` owns argument parsing only)
-- `rust/src/operations/control.rs` — control socket server/client
-- `rust/src/reload.rs` — transactional reload manager
-- `rust/src/operations/config_mutation.rs` — safe connect/logout fallback policy
+- `architecture/deep-dive-control.md` (reload policy and service): validation
+  contract, diff shape, wire types, and runtime generations
+- `rust/src/config.rs`: reusable validation contract
+- `rust/src/config_reload_policy.rs`: typed diff and reload policy
+- `rust/src/runtime.rs`: CLI adapter, rehash JSON shaping, and `EXIT_*` constants (`cli.rs` owns argument parsing only)
+- `rust/src/operations/control.rs`: control socket server/client
+- `rust/src/reload.rs`: transactional reload manager
+- `rust/src/operations/config_mutation.rs`: safe connect/logout fallback policy

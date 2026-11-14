@@ -113,7 +113,7 @@ includes the policy revision, so clients can refresh after an access change.
 
 `eggpool configremote` prints one copy/paste block per desktop shell, pinned to the running EggPool release. Each block downloads the reviewed bootstrap (`eggpool-connect.sh` for macOS/Linux, `eggpool-connect.ps1` for Windows PowerShell) plus the release SHA256SUMS over HTTPS, verifies the bootstrap SHA-256, then runs it with the profile token as a data argument. The bootstrap in turn downloads the matching `eggpool-connect` helper binary, verifies its SHA-256 against the same SHA256SUMS, and executes `eggpool-connect install` once from a private temporary directory that is removed afterwards. No step evaluates the token, prints credentials, installs anything globally, or clones the EggPool repository.
 
-The advertised URL must be reachable from the desktop (a LAN/VPN address, not `localhost`, unless the desktop is the EggPool host itself). Desktops need no Python, Rust, or EggPool checkout — only `curl` plus `sha256sum`/`shasum` (POSIX) or built-in PowerShell/.NET facilities (Windows).
+The advertised URL must be reachable from the desktop (a LAN/VPN address, not `localhost`, unless the desktop is the EggPool host itself). Desktops need no Python, Rust, or EggPool checkout: only `curl` plus `sha256sum`/`shasum` (POSIX) or built-in PowerShell/.NET facilities (Windows).
 
 Windows support covers the `eggpool-connect` helper only and does not imply Windows proxy/server support: the EggPool proxy release matrix stays Linux x86_64/aarch64 plus macOS arm64 (see [Current Rust release procedure](releasing.md)). `configremote` does not install clients; it only exports the profile. Backup/restore commands live in the helper section below.
 
@@ -168,30 +168,30 @@ Behavior:
 ## Examples
 
 ```sh
-# OpenCode — print JSON config to stdout
+# OpenCode: print JSON config to stdout
 eggpool configsetup opencode
 
-# OpenCode — managed install with drift detection
+# OpenCode: managed install with drift detection
 eggpool configsetup opencode --apply
 eggpool configsetup opencode --check
 
-# Aider — write .env.eggpool with a specific model
+# Aider: write .env.eggpool with a specific model
 eggpool configsetup aider --model openai/gpt-4 --write
 
-# Continue — write YAML to a custom path
+# Continue: write YAML to a custom path
 eggpool configsetup continue --model claude-sonnet-4 --output ~/.continue/eggpool.yaml
 
-# Cline — skip clipboard
+# Cline: skip clipboard
 eggpool configsetup cline --no-clipboard
 
-# Codex — print the non-secret Responses provider block
+# Codex: print the non-secret Responses provider block
 eggpool configsetup codex --model <eggpool-model-or-alias> --no-clipboard
 
-# Codex — managed install with generated model catalog
+# Codex: managed install with generated model catalog
 eggpool configsetup codex --apply
 eggpool configsetup codex --check
 
-# Roo Code — write JSON profile
+# Roo Code: write JSON profile
 eggpool configsetup roo-code --write
 ```
 

@@ -1,8 +1,7 @@
 //! Provider-facing transport primitives.
 //!
-//! This module deliberately stops at neutral HTTP transport.  Provider
-//! authentication, wire selection, account routing, and retry policy belong to
-//! later migration milestones.
+//! This module stops at neutral HTTP transport. Provider authentication, wire
+//! selection, account routing, and retry policy live in their owning modules.
 
 mod client_pool;
 mod transport;

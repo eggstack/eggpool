@@ -40,7 +40,7 @@ pub(super) async fn models_api(
     json_response(StatusCode::OK, json!({"object": "list", "data": data}))
 }
 
-/// Authenticated EggPool-specific integration profile (Plan 211).
+/// Authenticated EggPool-specific integration profile.
 ///
 /// Returns the portable `AgentIntegrationProfileV1` built from the same
 /// conservative projection as local `configsetup`. Deterministic,

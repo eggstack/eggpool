@@ -100,9 +100,8 @@ DIAGNOSTIC_MAX_SAMPLES = 200
 PUBLICATION_STORAGE_MIN_SAMPLES = 20
 PUBLICATION_STORAGE_MAX_SAMPLES = 200
 PUBLICATION_PHASE_SAMPLES = 60
-# Persistence M001 qualification-only tuning bounds. The soft threshold must
-# stay at or below the SQLite automatic checkpoint safety ceiling so routine
-# maintenance always fires before the foreground fallback.
+# Qualification-only tuning bounds. The soft threshold must stay at or below
+# SQLite's automatic checkpoint ceiling so maintenance precedes the fallback.
 QUALIFICATION_CHECKPOINT_INTERVAL_MIN_S = 1.0
 QUALIFICATION_CHECKPOINT_INTERVAL_MAX_S = 3600.0
 QUALIFICATION_CHECKPOINT_SOFT_MIN_FRAMES = 1
@@ -3584,8 +3583,8 @@ def run_qualification(
                 commands.append(result)
                 if result.status != "pass":
                     raise QualificationError(f"{command_id}: {result.reason}")
-            # On-prem identity (M001/M002) retired the shared server key for
-            # inference and catalog: fresh databases are `fresh_uninitialized`,
+            # Managed identity retires the shared server key for inference
+            # and catalog: fresh databases are `fresh_uninitialized`,
             # so the runner bootstraps one synthetic administrator and uses
             # the issued personal token for managed inference. The password
             # and token never enter the report; only a redacted pass marker
@@ -3773,14 +3772,14 @@ def run_qualification(
                     result = _command(command_id, binary, config, env, args, timeout)
                     commands.append(result)
                     if result.status != "pass":
-                        # Managed mode (M001/M002) fences `/api/stats/runtime`
-                        # behind a browser session: the server-key CLI is
+                        # Managed mode fences `/api/stats/runtime` behind a
+                        # browser session: the server-key CLI is
                         # rejected with 401. That rejection is the expected
                         # managed fencing proof, not a qualification failure.
                         # Procfs/DB/WAL metrics are already captured via
                         # `resource_sample` (with `runtime_read_error` set);
                         # the full runtime projection remains available via
-                        # browser session (M011 evidence).
+                        # browser session.
                         if command_id == "runtime-status" and (
                             "401" in result.reason
                             or "authentication failed" in result.reason.lower()
@@ -3812,7 +3811,7 @@ def run_qualification(
                         headers={"Authorization": "Bearer q008-server-key"},
                     )
                     # Managed mode fences the dashboard shell (`/`) behind a
-                    # browser session (M002/M011); a 401 without a session is
+                    # browser session; a 401 without a session is
                     # the expected fencing proof. Static assets stay public
                     # and must still pass.
                     if path == "/" and status == 401:
@@ -4416,8 +4415,8 @@ def run_qualification(
                         }
                     final_tasks = _runtime_task_snapshot(final_runtime)
                     task_deltas = _task_tick_deltas(baseline_tasks, final_tasks)
-                    # M001 maintenance ticks are the measured subject, not
-                    # contamination: the per-record gate-wait phases already
+                    # Maintenance ticks are the measured subject, not
+                    # contamination: per-record gate-wait phases already
                     # capture any foreground wait behind PASSIVE work.
                     exempt_tasks: set[str] = (
                         {"checkpoint"}

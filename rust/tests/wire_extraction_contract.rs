@@ -1,9 +1,8 @@
-//! M002 extraction contract corpus.
+//! Deterministic wire compatibility contract corpus.
 //!
-//! Deterministic compatibility freeze: exact/adapted/rejected outcomes,
-//! ordered adaptation codes, presence semantics, native preservation,
-//! usage/tool/media cases, and stream terminal/chunk behavior. Must pass
-//! before and after the M003 source move without semantic change.
+//! Freezes exact/adapted/rejected outcomes, adaptation codes, presence
+//! semantics, native preservation, usage/tool/media cases, and stream
+//! terminal/chunk behavior across the root and extracted implementations.
 
 use eggpool::catalog::{CapabilityStatus, ThinkingCapability};
 use eggpool::request::{AdmissionOptions, admit_request};
@@ -563,11 +562,10 @@ fn contract_terminal_evidence_distinguishes_outcomes() {
 
 #[test]
 fn contract_client_tool_search_classifier_is_shared() {
-    // M005: one neutral `eggpool-wire` classifier backs both structural
-    // decode and EggPool native preservation. Client-executed `tool_search`
-    // decodes to a portable tool with no native blocker; server-owned,
-    // missing, null, wrong-type, and non-`tool_search` declarations agree on
-    // the negative outcome in both paths.
+    // One neutral classifier backs structural decode and EggPool native
+    // preservation. Client-executed `tool_search` decodes to a portable tool;
+    // server-owned, missing, null, wrong-type, and unrelated declarations are
+    // rejected consistently in both paths.
     let cases: &[(&str, Value, usize, usize)] = &[
         (
             "client execution is portable",

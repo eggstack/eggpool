@@ -1,4 +1,4 @@
-# Database Failure and Restart — Operator Runbook
+# Database Failure and Restart: Operator Runbook
 
 EggPool treats SQLite integrity and indeterminate runtime connection failures
 as local process failures. The worker closes admission and exits nonzero;

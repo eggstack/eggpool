@@ -1,9 +1,8 @@
 //! Remote integration-profile DTO.
 //!
-//! Plan 211 will serve this object over HTTP; this crate defines its portable
-//! schema so the server and `eggpool-connect` compile against one source of
-//! truth. The object is deterministic, bounded, secret-free, and sufficient
-//! for Codex/OpenCode rendering without another private server API.
+//! This crate defines the portable schema shared by the server and
+//! `eggpool-connect`. The object is deterministic, bounded, secret-free, and
+//! sufficient for Codex/OpenCode rendering without another private server API.
 
 use serde::{Deserialize, Serialize};
 

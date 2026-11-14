@@ -23,9 +23,8 @@ pub const QUALIFIED_OPENCODE_VERSION: &str = "1.18.30";
 
 /// Supported schema variants for automatic mutation.
 ///
-/// Codex TOML, OpenCode V1 (`provider` shape), and OpenCode V2 (`providers`
-/// plural shape) are supported through the portable JSONC-preserving editor
-/// qualified by Plan 213.
+/// Codex TOML and both OpenCode provider shapes are supported by the portable
+/// JSONC-preserving editor.
 pub const SUPPORTED_VARIANTS: &[ClientSchemaVariant] = &[
     ClientSchemaVariant::CodexToml,
     ClientSchemaVariant::OpencodeV1,

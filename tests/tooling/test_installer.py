@@ -28,14 +28,14 @@ def test_quick_installer_harness_passes() -> None:
     assert "fresh-linux-aarch64-stale-pipx-ignored" in cases
     assert "fresh-linux-aarch64-no-python" in cases
     assert "release-manifest-raw-contract" in cases
-    # M002 corrective regressions: --force never overwrites unowned files and
+    # Fresh-install regressions: --force never overwrites unowned files and
     # first-time config failure rolls back the committed executable.
     assert "fresh-force-unowned-regular-refusal" in cases
     assert "fresh-init-config-failure-rolls-back-binary" in cases
     assert "fresh-init-config-failure-preserves-preexisting-config" in cases
     assert "fresh-config-failure-destination-race-refusal" in cases
-    # M003 corrective regressions: transaction-owned staging + no-clobber
-    # publication; final config is never rollback scratch space.
+    # Transaction-owned staging and no-clobber publication; the final config
+    # is never rollback scratch space.
     assert "fresh-config-concurrent-writer-preserved" in cases
     assert "fresh-config-publish-race-preserves-winner" in cases
     assert "fresh-staged-first-config-created" in cases
@@ -50,8 +50,8 @@ def test_quick_installer_harness_passes() -> None:
     assert "existing-owner-first-config-uses-safe-staging" in cases
     assert "existing-owner-concurrent-config-preserved" in cases
     assert "existing-owner-package-standalone-unchanged" in cases
-    # M004 corrective regressions: PATH-hidden owner provenance, safe profile
-    # persistence, real Bash startup resolution, and parent-shell activation.
+    # Owner detection, safe profile persistence, shell startup resolution, and
+    # parent-shell activation coverage.
     assert "hidden-canonical-native-owner" in cases
     assert "hidden-canonical-manager-owner" in cases
     assert "hidden-foreign-force-refusal-preserves-bytes" in cases
@@ -65,8 +65,7 @@ def test_quick_installer_harness_passes() -> None:
     assert "failed-config-transaction-does-not-edit-profile" in cases
     assert "documented-parent-shell-activation" in cases
     assert "package-manager-profile-uses-verified-owner-bin" in cases
-    # M005 corrective regressions: Gregg guarded block and zsh tied-array
-    # recognition without false positives.
+    # Gregg guarded-block and zsh tied-array recognition without false positives.
     assert "gregg-guarded-active-path-reused" in cases
     assert "zsh-active-path-array-reused" in cases
     assert "inactive-guard-does-not-suppress-append" in cases

@@ -8,7 +8,7 @@ restore-compatible `.zip` archives every 24 hours (after a 5-minute startup
 delay) and retains the last 14 by default.
 
 ```toml
-# Optional — automatic backups are disabled by default
+# Optional: automatic backups are disabled by default
 [backup]
 enabled = true  # Opt in; disabled in the low-wear SBC example.
 interval_s = 86400         # every 24 hours
@@ -18,10 +18,10 @@ startup_delay_s = 300      # wait 5 min after boot before first backup
 include_env = true         # include .env file (may contain API keys)
 ```
 
-The default backup directory depends on the installation type:
-
-- **Production** (`/var/lib/eggpool` exists): `/var/lib/eggpool/backups`
-- **Personal**: `~/backups/eggpool/` (or `$XDG_BACKUP_HOME/eggpool`)
+Unless `[backup].directory` is set, `$XDG_BACKUP_HOME/eggpool` is used when
+`$XDG_BACKUP_HOME` is set. Otherwise, EggPool uses
+`/var/lib/eggpool/backups` when `/var/lib/eggpool` exists, or
+`~/backups/eggpool/` for personal installs.
 
 The automatic task uses the tokio-rusqlite `backup_to` API for consistent
 snapshots and writes archives atomically (write-to-temp + rename). Snapshot,
@@ -44,16 +44,18 @@ process is not running.
 
 ### Using the CLI (recommended)
 
-EggPool ships with `eggpool backup` that bundles `config.toml`, `.env`,
-and the SQLite database (plus `-wal`/`-shm` if present) into a single
-timestamped `.zip` archive.
+`eggpool backup` creates a timestamped `.zip` archive containing `config.toml`,
+the SQLite database snapshot, and the config-adjacent `.env` when
+`include_env` is enabled. The archive stores a single `usage.sqlite3` database
+member, not separate WAL or SHM files. A non-adjacent file selected by
+`$EGGPOOL_ENV` and credentials supplied only through the process environment are
+not included; back them up separately.
 
 The database snapshot includes local users, budget rules and audit records,
 active budget holds, settled user/model usage, and secret-free personal
-upstream bindings. The provider key for a personal account lives in `.env`,
-which this backup includes when `include_env` is true. Restoring the snapshot
-preserves the remaining budget state; crash reconciliation settles unknown
-in-flight use conservatively before new requests resume.
+upstream bindings. Credentials are not stored in the database. Restoring the
+snapshot preserves committed budget state. Pending requests and active holds
+follow the normal crash-recovery rules on the next server start.
 
 ```bash
 # Default location: ~/backups/eggpool/
@@ -80,7 +82,7 @@ eggpool-backup-20260624-120000.zip
 
 ### Manual backup without the CLI
 
-Prefer `eggpool backup --output-dir <dir>` — it stages a consistent
+Prefer `eggpool backup --output-dir <dir>`: it stages a consistent
 database snapshot plus `config.toml`/`.env` into one atomic ZIP. Only if
 the CLI is unavailable, copy the config files directly and snapshot the
 database to a cold copy first (never copy a live `-wal`/`-shm` pair):
@@ -123,11 +125,13 @@ eggpool recover
 eggpool recover ~/backups/eggpool/eggpool-backup-20260624-120000.zip
 ```
 
-The CLI stops the running server (if any), stages the restored files
-alongside the current ones, swaps them into place, and restarts the
-server on success. If any restore step fails, the original files are
-preserved under `<data-dir>/rollback-<timestamp>/` and the server is
-left stopped so the operator can intervene.
+Stop any foreground `eggpool serve --verbose` process before recovery. The CLI
+stops a daemon when its PID file is present, but does not detect a foreground
+server without one. After a successful restore, it leaves the server stopped
+and prints a reminder to restart it so the restored configuration is loaded.
+If a restore step fails, EggPool attempts to restore the original files
+atomically. If that rollback also fails, the CLI reports a rollback error.
+Keep the server stopped until the database and configuration are consistent.
 
 ### Manual restore
 
@@ -141,7 +145,7 @@ sudo systemctl stop eggpool
 
 ```bash
 sudo cp backup/config.toml /etc/eggpool/config.toml
-sudo cp backup/env /etc/eggpool/env
+sudo cp backup/.env /etc/eggpool/env
 sudo chown root:eggpool /etc/eggpool/config.toml /etc/eggpool/env
 sudo chmod 640 /etc/eggpool/config.toml /etc/eggpool/env
 ```
@@ -188,30 +192,29 @@ sudo systemctl start eggpool
 
 Migrations are idempotent and safe to run multiple times.
 
-Schema migrations 55–63 add local downstream identity, browser sessions,
-policy profiles, user budgets with enforceable hold/settlement state
-(migration 61), instance-global budgets (migration 62), the future-member
-default profile (migration 63), and administrative
-audit tables. Backups made after those migrations include usernames, password hashes, personal-token
-digests, session/CSRF digests, policy and budget state, bounded usage records,
+Migrations 55 to 63 added local user identity, browser sessions, policy
+profiles, user and instance budgets, the future-member default profile, and
+audit tables. The embedded migration inventory now reaches schema 66.
+Backups include usernames, password hashes, personal-token digests,
+session and CSRF digests, policy and budget state, bounded usage records,
 and secret-free audit facts. They do not contain plaintext passwords, API
-tokens, session cookies, or CSRF tokens. A backup taken while requests are in
-flight captures their pending rows and active budget holds exactly as
-committed; restoring such an image reconciles on next startup (pending
-requests interrupt, active holds release without folding usage) exactly like
-a crashed live database. After restoring an older backup, the
-migrations are applied by `eggpool migrate` or normal server startup; existing
-provider accounts and keys remain owned by TOML/environment as before.
-A schema-54 image restores and migrates forward through 55–63 with legacy
-requests, usage history, quarantine, and catalog state preserved; historical
-shared-key requests stay unattributed (`legacy_shared_key`, never converted
-to a fabricated human identity), and the upgraded database reports
-`legacy_unmigrated` until an administrator bootstraps.
-SQLite migrations are forward-only: an older executable may reject a database
-that has reached schema 63. Roll back by restoring a protected backup made
-before the upgrade together with the matching older binary; do not point an
-older executable at the upgraded database. Capture the protected backup
-before running `migrate`, not after.
+tokens, session cookies, or CSRF tokens. A backup taken during requests
+captures committed pending rows and active budget holds. On startup after
+restore, pending requests are interrupted and active holds are released
+without adding their usage, as they are after a crash.
+
+Migrations run with `eggpool migrate` or during normal server startup. Existing
+provider accounts and keys remain in TOML and the environment. A schema-54
+backup migrates forward through current schema 66, preserving legacy requests,
+usage history, quarantine, and catalog state. Requests made with the historical
+shared key remain unattributed as `legacy_shared_key`; they are not assigned
+to a fabricated user. Until an administrator bootstraps local access, the
+database reports `legacy_unmigrated`.
+
+Migrations are forward-only. An older executable may reject a database at
+schema 66. For rollback, restore a protected backup made before the upgrade
+and use the matching older binary. Do not point an older executable at the
+upgraded database. Capture the protected backup before running `migrate`.
 
 ## Uninstall
 
@@ -221,19 +224,21 @@ To remove EggPool entirely, run:
 eggpool uninstall
 ```
 
-The command interactively confirms each removal step:
+The command confirms removal, then removes the resolved executable and selected
+configuration, data, and state paths. It does not call `uv` or `pipx`, and it
+does not elevate privileges. For a package-manager-owned install, also remove
+the package with its owning manager. Run the command with permission to remove
+every selected path.
 
-1. Removes the binary via the install method that was detected
-   (`pipx uninstall eggpool`, `uv tool uninstall eggpool`, or local
-   cleanup for source/manual installs).
-2. Deletes the active `config.toml`, `.env`, and the SQLite database.
-3. Removes `eggpool` entries from the user's shell rc (`~/.zshrc`,
-   `~/.bashrc`, etc.), including the marker block installed by
-   `scripts/install.sh` and any `uv tool update-shell` lines.
-4. Leaves existing backups under `~/backups/eggpool/` in place.
+By default it also removes `eggpool` entries from the user's shell rc files,
+including the marker block installed by `scripts/install.sh`. The personal
+backup directory `~/backups/eggpool/` is outside the default data path and is
+left in place. In production, backups under `/var/lib/eggpool/backups` are part
+of the data directory and are removed unless `--keep-data` is used.
 
-Pass `--deploy-artifacts` to also remove systemd, logrotate, and cron
-artifacts (otherwise they are left in place):
+Pass `--deploy-artifacts` to also remove the known systemd, logrotate, and
+cron artifacts. The command does not invoke `sudo`; run it with the required
+permissions. Without this flag, deployment artifacts are left in place.
 
 ```bash
 eggpool uninstall --yes --deploy-artifacts

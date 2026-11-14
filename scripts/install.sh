@@ -480,7 +480,7 @@ INSTALL_TMPDIR=""
 LOCK_HELD=0
 PROFILE_LOCK_DIR=""
 
-# Fresh-install transaction state (M002, hardened by M003). The fresh
+# Fresh-install transaction state. The fresh
 # transaction ends only after executable publication, provenance/version
 # revalidation, and first-time config seeding. Rollback removes only the
 # executable committed by this invocation when its identity still matches,
@@ -495,7 +495,7 @@ FRESH_TX_EXPECTED_HASH=""
 FRESH_TX_EXPECTED_VERSION=""
 FRESH_TX_CONFIG=""
 FRESH_TX_ROLLBACK_DONE=0
-# Transaction-owned config staging directory (M003). Set by
+# Transaction-owned config staging directory. Set by
 # safe_seed_config_via_staging while staging is live so EXIT/signal traps
 # can remove only staging. Never the final config path.
 CONFIG_STAGING_DIR=""
@@ -528,7 +528,7 @@ release_profile_lock() {
     PROFILE_LOCK_DIR=""
 }
 
-# Guarded fresh-install rollback (M003). Returns 0 when the executable
+# Guarded fresh-install rollback. Returns 0 when the executable
 # committed by this transaction was removed (or was already absent) and any
 # transaction-owned staging was cleaned. Returns 1 when manual recovery is
 # required (destination identity changed or removal failed). The final config
@@ -574,7 +574,7 @@ fresh_tx_rollback_guarded() {
         fi
     fi
 
-    # M003: clean only transaction-owned staging. The final config path
+    # Clean only transaction-owned staging. The final config path
     # (FRESH_TX_CONFIG) is never removed: absent-before does not imply
     # ownership under concurrency. A staging-cleanup failure is bounded
     # manual recovery, not a silent final-config delete.
@@ -642,7 +642,7 @@ fail_fresh_tx() {
     fi
 }
 
-# Shared safe first-config helper (M003). Generates canonical config into a
+# Shared safe first-config helper. Generates canonical config into a
 # private transaction-owned staging directory on the same filesystem as the
 # final path, then publishes with true no-clobber semantics (hard-link).
 # Never writes init-config output directly to the final path, never
@@ -969,7 +969,7 @@ same_path() {
 }
 
 # Fresh verified raw-binary install (WP-B). No Python/manager on this path.
-# M002: `--force` is a verified-repair switch, never permission to overwrite
+# `--force` is a verified-repair switch, never permission to overwrite
 # an unowned file. A fresh destination that already exists is always a
 # collision, even with `--force`, because no EggPool owner was classified.
 install_fresh_raw_binary() {
@@ -1070,7 +1070,7 @@ install_fresh_raw_binary() {
     if [[ -z "$cli_version" ]]; then
         fail_fresh_tx "installed eggpool returned an empty version"
     fi
-    # Transactional first-time config seeding (M003). Config is generated
+    # Transactional first-time config seeding. Config is generated
     # only into transaction-owned staging and published no-clobber; the final
     # path is never written directly and never deleted by rollback. Failure
     # after commit rolls back the executable committed by this invocation;
@@ -1088,7 +1088,7 @@ install_fresh_raw_binary() {
 }
 
 seed_config_after_commit() {
-    # Explicit result/ownership contract (M003 §6.4, shared helper):
+    # Explicit result/ownership contract:
     # - preserved-existing when config existed before invocation;
     # - created on first-time staged publish success;
     # - concurrent-existing-preserved when another actor wins the final path;
@@ -1126,7 +1126,7 @@ profile_bin_path_is_safe() {
 profile_has_active_bin() {
     local profile="$1" bin_dir="$2"
     [[ -f "$profile" && ! -L "$profile" ]] || return 1
-    # Read-only static detector (M005): recognizes working active shapes for
+    # Read-only static detector: recognizes working active shapes for
     # the actual wanted directory only. Never sources the profile. Gregg
     # guarded `case` blocks require the complete case/guard/export/esac shape;
     # zsh tied `path=(...)` arrays are matched before discarding the `path=`
@@ -1776,7 +1776,7 @@ run_package_authority() {
     }
 
     local config_path="${EGGPOOL_CONFIG:-${XDG_CONFIG_HOME:-$HOME/.config}/eggpool/config.toml}"
-    # M003: package-manager first-config also uses transaction-owned staging +
+    # Package-manager first-config also uses transaction-owned staging +
     # no-clobber publish; the final path is never written directly.
     if ! safe_seed_config_via_staging "$active_bin" "$config_path"; then
         restore_standalone_fn

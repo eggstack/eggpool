@@ -518,11 +518,10 @@ async fn current_database_can_be_opened_read_only_without_writes() {
 }
 
 // ---------------------------------------------------------------------------
-// M010: an independent byte-valid schema-54 image restores, migrates
-// forward, and recovers identity/policy/budgets without fabricating
-// history. The frozen image is `tests/fixtures/database/schema54-
-// pre-upgrade.sql` (SHA-256 recorded in the M010 closure); tests never run
-// migrations 1..54 themselves — only the production 55..63 upgrade path.
+// An independent byte-valid schema-54 image restores and migrates forward,
+// preserving identity, policy, and budgets without fabricating history. Tests
+// use the frozen fixture and production migrations 55..63; they do not recreate
+// migrations 1..54.
 // ---------------------------------------------------------------------------
 
 use eggpool::health::HealthManager;

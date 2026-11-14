@@ -1,4 +1,4 @@
-"""Run and summarize the frozen M002 ordinary-server qualification corpus.
+"""Run and summarize the frozen ordinary-server qualification corpus.
 
 The matrix separates named-account metadata from simultaneous requests. Each
 cell gets a fresh Q008 root and three independent runs; the tool writes the

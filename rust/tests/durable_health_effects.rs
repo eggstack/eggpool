@@ -1,10 +1,5 @@
-//! Durable health effects, quarantine gating, and restart survival.
-//!
-//! Every test in this target is a regression guard for a behavior the
-//! pre-milestone construction could not produce. Before the milestone the
-//! durable health repositories were never constructed in production, the
-//! quarantine was never attached to the router, and the routing path's
-//! failure effects never left a durable row.
+//! Regression coverage for durable health effects, quarantine gating, and
+//! restart survival.
 
 use std::{
     collections::{BTreeMap, BTreeSet},
@@ -1493,11 +1488,9 @@ async fn a_durable_terminal_quarantine_row_is_parsed_and_enforced() {
 /// The health subsystem has one effect-application path and no reachable
 /// terminal-withdrawal producer.
 ///
-/// This is a source-level contract, the same shape as the selection-path
-/// guard above. The parallel applier and the unreachable terminal producer
-/// must not come back, the durable terminal vocabulary must stay, and the
-/// live-path coverage must stay with them: a milestone that removes the
-/// live-path assertions has removed the coverage this milestone added.
+/// This source-level contract prevents the parallel applier or unreachable
+/// terminal producer from returning. The durable vocabulary and live-path
+/// assertions must remain together.
 #[test]
 fn the_health_effect_ownership_is_single_and_the_terminal_producer_is_gone() {
     let manifest = std::path::Path::new(env!("CARGO_MANIFEST_DIR"));
@@ -1552,10 +1545,8 @@ fn the_health_effect_ownership_is_single_and_the_terminal_producer_is_gone() {
         "the live effect path must not select the terminal withdrawal"
     );
 
-    // The live-path assertions are part of the contract. A milestone that
-    // removes them has removed the coverage the retired applier test gave.
-    // The needles are assembled at runtime so this guard's own source does
-    // not satisfy its own search.
+    // Keep live-path assertions alongside this guard; assemble the needles
+    // at runtime so this guard's own source cannot satisfy its search.
     let coverage = include_str!("../tests/durable_health_effects.rs");
     for assertion in [
         [

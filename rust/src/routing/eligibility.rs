@@ -279,11 +279,9 @@ pub fn build_eligible_candidates(
         };
         eligible.push(candidate);
     }
-    // Ordered private scoring path (routing-selection M001): borrowed
-    // account names in candidate order, one estimator snapshot under one
-    // lock, one request-wide projected-tokens scalar, and scores aligned by
-    // index so candidate ownership moves instead of reindexing through a
-    // String-keyed map. The public scorer contract is untouched.
+    // Score borrowed account names in candidate order with one estimator
+    // snapshot. Aligned results let us move candidates without per-selection
+    // maps; the public scorer contract remains unchanged.
     let scorer = QuotaFairScorer::new(policy.scorer);
     let names: Vec<&str> = eligible
         .iter()

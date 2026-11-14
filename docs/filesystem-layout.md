@@ -26,10 +26,10 @@ defaults are resolved by the native runtime's path helpers.
 └── cron.log             # Watchdog cron output (when using `deploy cron`)
 ```
 
-The CLI's config-path precedence is `--config PATH` > `$EGGPOOL_CONFIG`
-> `~/.config/eggpool/config.toml` (when present) > `./config.toml`
-(deliberate checkout default). The resolver is implemented by the Rust CLI
-and operations path.
+The CLI checks config paths in this order: `--config PATH`,
+`$EGGPOOL_CONFIG`, `$XDG_CONFIG_HOME/eggpool/config.toml` (or
+`~/.config/eggpool/config.toml` when unset, if present), then `./config.toml`
+for deliberate checkout use. The resolver is implemented by the Rust CLI.
 
 ### Personal permissions
 

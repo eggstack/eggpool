@@ -1,4 +1,4 @@
-//! Compact operator/provider health snapshot (Plan 202).
+//! Compact operator/provider health snapshot.
 //!
 //! This module owns the presentation-light status aggregation boundary. It
 //! combines active-generation account identity, live routing health, cached

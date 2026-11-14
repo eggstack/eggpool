@@ -6,9 +6,9 @@ Operator-facing guide for thinking/reasoning support in EggPool.
 
 EggPool models thinking/reasoning as a three-layer problem:
 
-1. **Native support** — a model may support extended thinking natively (e.g. Anthropic's `thinking` blocks, OpenAI's `reasoning_content`).
-2. **Transcoding** — EggPool may be able to translate client controls between protocols (OpenAI `reasoning_effort` ↔ Anthropic `thinking` blocks).
-3. **Discovery** — clients discover support through `eggpool.capabilities` in `/v1/models`.
+1. **Native support**: a model may support extended thinking natively (e.g. Anthropic's `thinking` blocks, OpenAI's `reasoning_content`).
+2. **Transcoding**: EggPool may be able to translate client controls between protocols (OpenAI `reasoning_effort` ↔ Anthropic `thinking` blocks).
+3. **Discovery**: clients discover support through `eggpool.capabilities` in `/v1/models`.
 
 Key invariants:
 
@@ -42,7 +42,7 @@ Status values (`CapabilityStatus`):
 |---|---|
 | `supported` | Confirmed upstream thinking support (from provider catalog, model-info source, or manual override) |
 | `unsupported` | Confirmed upstream does not support thinking |
-| `unknown` | No data observed yet — not a claim of either support or lack |
+| `unknown` | No data observed yet: not a claim of either support or lack |
 | `mixed` | Some backing providers support thinking, others do not |
 | `conflicting` | External sources disagree on support status; requires operator resolution via manual override |
 
@@ -182,8 +182,8 @@ emit_compat_aliases = false
 Operators can override discovered capability data with manual TOML configuration. Overrides are applied in a 3-layer chain with increasing precedence:
 
 1. **Defaults / discovered data** (from provider catalog, model-info sources)
-2. **Global overrides** — `[model_capabilities."<model_id>".thinking]`
-3. **Provider-scoped overrides** — `[providers.<id>.model_capabilities."<model_id>".thinking]`
+2. **Global overrides**: `[model_capabilities."<model_id>".thinking]`
+3. **Provider-scoped overrides**: `[providers.<id>.model_capabilities."<model_id>".thinking]`
 
 Provider-scoped overrides take highest precedence when the provider ID matches.
 
@@ -218,7 +218,7 @@ notes = "Operator-confirmed thinking support via OpenAI"
 
 The three control fields are independent of `status`: supported reasoning can
 be fixed/no-control, toggle-only, effort-only, budget-only, or any explicit
-combination. When `status = None`, the entire override is a no-op — all other
+combination. When `status = None`, the entire override is a no-op: all other
 fields are cleared. Existing `supported_efforts`, budget bounds, and explicit
 effort maps continue to decode into the corresponding canonical dimensions;
 an explicitly empty `supported_efforts` list means effort is unsupported.
@@ -265,7 +265,7 @@ Source: `rust/src/config.rs`, `rust/src/catalog/cache.rs`
 
 ## 5. `/v1/models` Metadata
 
-Capabilities are exposed under `eggpool.capabilities.thinking` in each model object. The serialization is compact — unknown/empty values are omitted.
+Capabilities are exposed under `eggpool.capabilities.thinking` in each model object. The serialization is compact: unknown/empty values are omitted.
 
 ### Provider-Scoped Entry (full shape)
 
@@ -340,7 +340,7 @@ Source: `rust/src/catalog/cache.rs`
 
 ### Per-Status Policies
 
-**`unsupported_thinking`** — how to handle candidates whose thinking status is `"unsupported"`:
+**`unsupported_thinking`**: how to handle candidates whose thinking status is `"unsupported"`:
 
 | Value | Behavior |
 |---|---|
@@ -348,7 +348,7 @@ Source: `rust/src/catalog/cache.rs`
 | `warn_drop` | Routes but logs a warning |
 | `route_best_effort` | Ignores the status entirely |
 
-**`unknown_thinking`** — how to handle candidates whose thinking status is `"unknown"`:
+**`unknown_thinking`**: how to handle candidates whose thinking status is `"unknown"`:
 
 | Value | Behavior |
 |---|---|
@@ -356,7 +356,7 @@ Source: `rust/src/catalog/cache.rs`
 | `allow_with_warning` | Routes but logs a warning |
 | `route_best_effort` | Ignores the status entirely |
 
-**`mixed_collapsed_thinking`** — how to handle collapsed-model entries with mixed provider support:
+**`mixed_collapsed_thinking`**: how to handle collapsed-model entries with mixed provider support:
 
 | Value | Behavior |
 |---|---|
@@ -417,11 +417,11 @@ Source: `rust/src/wire/adaptation.rs`
 
 The resolver evaluates these sources in order, stopping at the first match:
 
-1. **Explicit `budget_tokens`** (Anthropic style) — validated and clamped to capability min/max.
-2. **`reasoning_effort` via capability mapping** — looks up the effort in `ThinkingCapability.effort_to_budget_tokens`.
-3. **Global config defaults** — `[transcoder.thinking_budget_defaults]`.
-4. **Hard-coded fallback** — `low=1024, medium=4096, high=16384`.
-5. **Unmapped effort** — if no verified target mapping exists:
+1. **Explicit `budget_tokens`** (Anthropic style): validated and clamped to capability min/max.
+2. **`reasoning_effort` via capability mapping**: looks up the effort in `ThinkingCapability.effort_to_budget_tokens`.
+3. **Global config defaults**: `[transcoder.thinking_budget_defaults]`.
+4. **Hard-coded fallback**: `low=1024, medium=4096, high=16384`.
+5. **Unmapped effort**: if no verified target mapping exists:
    - `"lenient"` mode: omits target thinking and emits an `unknown_effort`
      warning with `reason = "target_mapping_unknown"`.
    - `"strict"` mode: raises `BudgetResolutionError` (HTTP 400).
@@ -528,7 +528,7 @@ When `collapse_models = false`, the generator renders provider-suffixed model ID
 }
 ```
 
-Note that `gpt-4o/openai` has no `reasoning` field — its capability status is `unknown` or `unsupported`, so the annotation is omitted. Set `EGGPOOL_API_KEY` in the environment that launches OpenCode.
+Note that `gpt-4o/openai` has no `reasoning` field: its capability status is `unknown` or `unsupported`, so the annotation is omitted. Set `EGGPOOL_API_KEY` in the environment that launches OpenCode.
 
 Source: `rust/src/operations/integrations.rs`
 
@@ -575,7 +575,7 @@ Restart the service after configuration changes.
 
 **Symptoms:** `/v1/models` returns `thinking.status = "unknown"` for a model you believe supports thinking.
 
-**Cause:** No capability data has been populated yet. This is the default state — `"unknown"` means "no data observed", not "unsupported".
+**Cause:** No capability data has been populated yet. This is the default state: `"unknown"` means "no data observed", not "unsupported".
 
 **Fix:** Wait for a catalog refresh cycle, or set a manual override:
 
@@ -605,7 +605,7 @@ native_protocols = ["anthropic"]
 
 **Symptoms:** A collapsed model (collapse_models = true) sometimes routes to a thinking-capable provider, sometimes not.
 
-**Cause:** The aggregate status is `"mixed"` — some providers support thinking, others do not. The default `mixed_collapsed_thinking = "filter"` narrows to supported providers, but if the supported provider is unavailable, the request may fall through.
+**Cause:** The aggregate status is `"mixed"`: some providers support thinking, others do not. The default `mixed_collapsed_thinking = "filter"` narrows to supported providers, but if the supported provider is unavailable, the request may fall through.
 
 **Fix:**
 - Check per-provider status in the `providers` field of the collapsed model's capabilities.
@@ -651,9 +651,9 @@ classes, `thinking_trace` fields); the current Rust runtime implements the
 same semantics in `rust/src/catalog/cache.rs`, `rust/src/wire/`,
 `rust/src/routing/eligibility.rs`, and `rust/src/coordinator/`. Read the
 phase text for intended behavior, and the Rust modules for the current
-implementation — do not treat the Python method names as callable code.
+implementation: do not treat the Python method names as callable code.
 
-### Phase A — Missing Capability Metadata Is `unknown`
+### Phase A: Missing Capability Metadata Is `unknown`
 
 Routing now treats a catalog entry with **no** `capabilities.thinking` block as semantically equivalent to an explicit `status = "unknown"`. Previously, missing metadata would silently fall through to `"supported"`, masking misconfiguration.
 
@@ -669,11 +669,11 @@ Operator impact:
   source = "manual_override"
   ```
 
-### Phase B — `BudgetResolutionError` Is a `CapabilityError`
+### Phase B: `BudgetResolutionError` Is a `CapabilityError`
 
 `BudgetResolutionError` (raised when strict policy rejects an unknown effort level or a clamped budget) is now a subclass of `CapabilityError`. The proxy layer's existing `except CapabilityError` handler automatically renders it as **HTTP 400** without any manual mapping code. The error carries rich kwargs (`model_id`, `requested_budget_tokens`, `resolved_budget_tokens`, `budget_resolution_policy`, `reason`, `provider_id`) for diagnostic logging.
 
-### Phase C — Per-Provider Budget Recompute at Dispatch
+### Phase C: Per-Provider Budget Recompute at Dispatch
 
 After route selection but before upstream dispatch, `RequestCoordinator._recompute_thinking_budget_for_selected_provider()` re-runs `resolve_thinking_budget()` against the **selected provider's** capability (not the collapsed model-level one). This means:
 
@@ -681,7 +681,7 @@ After route selection but before upstream dispatch, `RequestCoordinator._recompu
 - Strict rejections here flow through the same `CapabilityError` → HTTP 400 path as Phase B.
 - The selected capability is recorded on the request trace under `thinking_trace.capability_status` / `thinking_trace.capability_source`.
 
-### Phase D — Trace Decisions + Rejection Attribution
+### Phase D: Trace Decisions + Rejection Attribution
 
 The transcoding trace now records a single string `decision` field with one of:
 
@@ -695,19 +695,19 @@ The transcoding trace now records a single string `decision` field with one of:
 
 Rejections from capability-aware routing are attributed with the relevant thinking status (`unknown` vs `unsupported`) so the rejection counter and the operator-facing reason distinguish them.
 
-### Phase E — Top-Level `reasoning_content` Detection
+### Phase E: Top-Level `reasoning_content` Detection
 
 `classify_thinking_request()` now detects top-level `reasoning_content` on assistant messages (string or list). Clients that attach thinking text alongside `content` without going through `reasoning_content` content-blocks are now correctly classified as thinking-required.
 
-### Phase F — `supports_tools` Removed from `ModelCapabilities`
+### Phase F: `supports_tools` Removed from `ModelCapabilities`
 
 The vestigial `supports_tools: True` field has been removed from `model_capabilities_to_dict()`. Tool support is owned by transcoder features (`[transcoder.features] tools = true`), not by `ModelCapabilities`. Tests pin the removal.
 
-### Phase G — Explicit `anthropic_top_level_thinking_dropped` Kind
+### Phase G: Explicit `anthropic_top_level_thinking_dropped` Kind
 
 When the Anthropic-style top-level `thinking` block is dropped during Anthropic→OpenAI transcoding (no verified mapping), the warning now uses an **explicit** kind `anthropic_top_level_thinking_dropped` instead of the generic `dropped_field` bucket. Operators can configure `loss_policy = "reject"` per-subsystem and have this drop attributed accurately to the thinking trace.
 
-### Phase H — Final Provider Budget Cleanup
+### Phase H: Final Provider Budget Cleanup
 
 This final cleanup pass closes two semantic gaps left after Phase C:
 
@@ -731,11 +731,11 @@ Phase C noted that strict rejections propagate as `CapabilityError`, but did not
 - Marks `thinking_trace.decision = "rejected"` and stamps `provider_id` on the trace.
 - Finalizes the request row as `client_error` with `thinking_trace_json` persisted.
 - Increments the thinking-metrics rejected counter with the rejection reason (`strict_clamp` / `unknown_effort_strict` / `capability_rejected`).
-- Does **not** record a health failure — this is a client-validation outcome, not an account health signal.
+- Does **not** record a health failure: this is a client-validation outcome, not an account health signal.
 
 The streaming and non-streaming dispatch paths share identical cleanup semantics via `_apply_selected_provider_transcode_adjustments()`.
 
-### Phase I — Final Polish
+### Phase I: Final Polish
 
 This small polish pass hardens the trace metadata and the no-health-penalty guarantee after Phase H:
 
@@ -749,15 +749,15 @@ This small polish pass hardens the trace metadata and the no-health-penalty guar
 The closing pass adds regression coverage in the native Rust suite
 (run serially with `--test-threads=1`):
 
-- `rust/tests/wire_adaptation.rs` — capability/routing classification phases
+- `rust/tests/wire_adaptation.rs`: capability/routing classification phases
   (thinking-status extraction, top-level `reasoning_content` detection,
   warning classification)
-- `rust/tests/wire_codecs.rs` + `rust/tests/wire_qualification.rs` —
+- `rust/tests/wire_codecs.rs` + `rust/tests/wire_qualification.rs`:
   budget-resolution error shape (`CapabilityError` semantics) and explicit
   dropped-thinking-kind coverage
-- `rust/tests/routing_domain.rs` (+ `routing_domain_d008.rs`) —
+- `rust/tests/routing_domain.rs` (+ `routing_domain_d008.rs`):
   selected-provider effort mapping and clamp validation
-- `rust/tests/coordinator_c007.rs` / `coordinator_c008.rs` —
+- `rust/tests/coordinator_c007.rs` / `coordinator_c008.rs`:
   strict-rejection cleanup invariants, streaming parity, idempotency,
   `upstream_fields` population + preservation, and the no-health-penalty
   regression (capability rejection stays a client-validation outcome and never

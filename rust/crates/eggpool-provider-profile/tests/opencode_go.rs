@@ -42,9 +42,8 @@ const MESSAGES_URL: &str = "https://opencode.ai/inference/go/anthropic/v1/messag
 /// The dispatch URLs this profile composes from its own base URL and its
 /// per-surface path templates.
 ///
-/// The first-party table publishes a different URL family. Both are live, and
-/// the endpoint URL metadata is a separate fact from the model-to-surface
-/// mapping this milestone changes.
+/// The first-party table publishes a different, still-live URL family. Its
+/// endpoint metadata is separate from the model-to-surface mapping under test.
 const PROFILE_RESPONSES_URL: &str = "https://opencode.ai/zen/go/v1/responses";
 const PROFILE_CHAT_URL: &str = "https://opencode.ai/zen/go/v1/chat/completions";
 const PROFILE_MESSAGES_URL: &str = "https://opencode.ai/zen/go/v1/messages";
@@ -412,11 +411,9 @@ const REVIEWED_TABLE: &[ReviewedRow] = &[
 /// The model the current first-party table places on a surface family the
 /// shared contract does not model.
 ///
-/// Adding a Google Generative AI surface would change `eggpool-wire`'s
-/// surface vocabulary and codec ownership, so this milestone records the
-/// finding and leaves the model unresolved. Mapping it onto an existing
-/// surface would be a **wrong** hint: a consumer would dispatch a
-/// Google-native model to an OpenAI-compatible endpoint.
+/// Supporting Google Generative AI requires a new wire surface and codec, so
+/// this model stays unresolved. Mapping it to an existing surface would send
+/// a Google-native model to an OpenAI-compatible endpoint.
 const UNMODELLED_PLACEMENT: &[UnresolvedModel] = &[UnresolvedModel {
     model_id: "gemini-4-argon-contributor",
     endpoint_url: Some(

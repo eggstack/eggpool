@@ -80,12 +80,11 @@ The built-in registry owns five closed surface IDs:
 ## Codex integration
 
 The Codex integration renderer emits a current `[model_providers.eggpool]`
-block with `wire_api = "responses"` and an `env_key = "EGGPOOL_API_KEY"`
-reference, with WebSockets disabled — see
-`eggpool configsetup codex --model <model>` and the managed
-`eggpool configsetup codex --apply` catalog lifecycle. Codex picker discovery
-is provided by the generated `model_catalog_json`, not by `/v1/models`;
-an explicit model or alias remains supported.
+block with `wire_api = "responses"`, an `env_key = "EGGPOOL_API_KEY"`
+reference, and WebSockets disabled. Use `eggpool configsetup codex --model <model>`
+to set an explicit model or alias. Use `eggpool configsetup codex --apply` for
+the managed catalog lifecycle. The generated `model_catalog_json` powers
+the Codex picker; `/v1/models` does not.
 
 ## Remote compaction compatibility
 
@@ -98,16 +97,15 @@ stored conversations, and background Responses remain outside the stateless
 contract.
 
 The endpoint is a distinct model-facing operation, not an ordinary assistant
-completion: it participates in the normal provider selection, failure
-isolation, health effects, quota/accounting, bounded-body, retry-budget, and
-cancellation ownership, and compact failures are distinguishable in safe
-diagnostics without storing prompts or replacement history. Only native
-same-surface forwarding is supported today — the source-native compact JSON
-is preserved exactly except for the EggPool-owned model rewrite — and
-targets without explicit `supports_remote_compaction_v1` capability plus a
-`compact_path_template` fail before upstream submission. There is
-deliberately no translated compaction fallback: correct rejection is
-preferable to a lossy compact result that breaks a long-running agent later.
+completion. It uses normal provider selection, failure isolation, health
+accounting, quota accounting, bounded-body handling, retry budgets, and
+cancellation ownership. Safe diagnostics distinguish compact failures without
+storing prompts or replacement history. Only native same-surface forwarding is
+supported: EggPool preserves the source-native compact JSON except for its own
+model rewrite. Targets need an explicit `supports_remote_compaction_v1`
+capability and a `compact_path_template`; otherwise the request fails before
+upstream submission. EggPool does not translate compaction requests, because a
+lossy result could break a long-running agent.
 
 Current v2 `compaction_trigger` items over the normal Responses endpoint
 require explicit native `supports_remote_compaction_v2` capability and are

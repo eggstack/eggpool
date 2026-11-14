@@ -228,7 +228,7 @@ fn local_user_budget_commands_parse_with_bounded_windows() {
         ])
         .is_err()
     );
-    // M008: enforcement mode is explicit and bounded; the default stays
+    // Enforcement mode is explicit and bounded; the default stays
     // estimated so existing rules are never silently promoted to hard.
     let estimated = Cli::try_parse_from([
         "eggpool",
@@ -279,7 +279,7 @@ fn local_user_budget_commands_parse_with_bounded_windows() {
         ])
         .is_err()
     );
-    // M009: instance ceilings share the window/enforcement contract without
+    // Instance ceilings share the window/enforcement contract without
     // a user argument.
     assert!(
         Cli::try_parse_from([

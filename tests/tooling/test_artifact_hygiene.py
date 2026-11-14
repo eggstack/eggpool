@@ -39,9 +39,8 @@ GENERATED_OUTPUTS = (
     "artifacts/qualification/release-rehearsal.md",
     "artifacts/qualification/m001-ssd-c4-u5-user-global-1.json",
 )
-# References that already failed to resolve before this milestone: historical
-# records that name a flat layout or a range that the repository never
-# committed. The set is pinned so that a new dangling reference fails.
+# Historical records that name an uncommitted flat layout or range. The set
+# is pinned so that any new dangling reference fails.
 HISTORICAL_DANGLING_REFERENCES = frozenset(
     {
         "artifacts/qualification/237-sbc-finite-tail-run-1..3.json",

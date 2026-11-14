@@ -145,9 +145,9 @@ nothing is silently upgraded to a guarantee.
   conservative tariff (`[providers.<id>.budget]
   max_microdollars_per_million_tokens`); unpriced providers fail closed, an
   explicit zero tariff means verified free, and estimator fallbacks are never
-  a hard price. Requests that cannot be bounded — unbounded output, unknown
-  tariff, arithmetic overflow — are denied with HTTP 429 and machine code
-  `hard_budget_not_enforceable` before any upstream submission. The response
+  a hard price. Requests with unbounded output, an unknown tariff, or arithmetic
+  overflow are denied with HTTP 429 and machine code
+  `hard_budget_not_enforceable` before upstream submission. The response
   advises callers to include a positive output cap supported by the API and
   operators to configure a tariff when hard USD rules apply. `budget_exceeded`
   identifies an exhausted rule. Observed provider usage above a hard hold is
@@ -218,11 +218,11 @@ section. Absent ceilings mean no additional cap, and single-admin behavior is
 otherwise unchanged.
 
 The shared ceiling is enforced atomically: concurrent requests from different
-users cannot both take the final global slot, and no retry, alternate model,
-identity switch, or legacy-key request bypasses it — unattributed requests
-count against it too. Each logical request counts once across failover and
-retries; hard/estimated semantics and the operator-tariff trust boundary match
-the per-user contract above. Global counters never depend on a user row, so
+users cannot both take the final global slot. Retries, alternate models,
+identity switches, and legacy-key requests cannot bypass it. Unattributed
+requests count against the ceiling too. Each logical request counts once across
+failover and retries; hard/estimated semantics and the operator-tariff trust
+boundary match the per-user contract above. Global counters never depend on a user row, so
 disabling or deleting a user preserves history and remaining headroom. Members
 see their own rules, their own settled windows, and the remaining allowance
 on those rules. They also see the configured instance ceilings. Instance

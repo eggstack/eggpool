@@ -84,10 +84,6 @@
 //! for event in tail { let _ = calls.push(&event).expect("accumulation succeeds"); }
 //! # let _ = body;
 //! ```
-//!
-//! `eggpool-wire 0.1.0` is available on crates.io. This milestone makes no
-//! release or semver-stability change; the initial sibling integration is
-//! expected to pin an immutable EggPool Git revision.
 
 pub mod adaptation;
 pub mod additional_codecs;

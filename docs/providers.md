@@ -273,7 +273,7 @@ that matches the provider you configured.
 
 Local OpenAI/Anthropic-compatible servers (Ollama, LM Studio, llama.cpp,
 vLLM, LocalAI) are first-class provider instances. Each template uses
-discovery-based verification — no hardcoded probe model. The connect flow
+discovery-based verification: no hardcoded probe model. The connect flow
 lets you choose a preset, assign a custom provider instance ID, and
 optionally override the default base URL for LAN hosts.
 
@@ -350,10 +350,10 @@ When several providers can serve the same base model, EggPool exposes two
 configuration knobs that decide *which* provider gets a given request and *how*
 the model appears in `/v1/models`:
 
-- **`routing_priority`** — per-provider integer (default `0`, must be `>= 0`).
+- **`routing_priority`**: per-provider integer (default `0`, must be `>= 0`).
   Higher values are preferred. Accounts inside the same priority tier are still
   load-balanced by the existing `QuotaFairScorer`.
-- **`collapse_models`** — top-level `[models]` flag (default `false`). When
+- **`collapse_models`**: top-level `[models]` flag (default `false`). When
   `false`, the catalog exposes one provider-suffixed entry per
   `(model_id, provider_id)` (e.g. `minimax-m2.7/minimax`,
   `minimax-m2.7/openrouter`, `minimax-m2.7/opencode-go`). When `true`, the same
@@ -418,9 +418,9 @@ routing_priority = 3  # tried first
 
 With `collapse_models = false` and the priorities above, `/v1/models` emits:
 
-- `minimax-m2.7/minimax` — `routing_priority = 3`
-- `minimax-m2.7/openrouter` — `routing_priority = 2`
-- `minimax-m2.7/opencode-go` — `routing_priority = 0`
+- `minimax-m2.7/minimax`: `routing_priority = 3`
+- `minimax-m2.7/openrouter`: `routing_priority = 2`
+- `minimax-m2.7/opencode-go`: `routing_priority = 0`
 
 A request for `minimax-m2.7/minimax` first hits the `minimax`
 accounts (load balanced by `QuotaFairScorer` inside the tier). If every

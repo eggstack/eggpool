@@ -1148,12 +1148,9 @@ mod tests {
 
     #[test]
     fn approximated_stays_reserved_on_the_request_path() {
-        // M005 pins the M004 contract: current request codecs drop
-        // unsupported reasoning controls with explicit loss instead of
-        // remapping them, so no corpus plan and no classified known code may
-        // emit Approximated. A future codec may emit it only for a conversion
-        // that provably preserves the intent level; existing Omitted/Rewritten
-        // outcomes must not be reclassified to use it.
+        // Current request codecs drop unsupported reasoning controls with
+        // explicit loss. Reserve Approximated for future conversions that
+        // provably preserve intent; do not reclassify Omitted/Rewritten outcomes.
         for (_, request) in corpus() {
             for (target, _, _) in all_targets() {
                 let plan = plan_request_translation(

@@ -56,7 +56,7 @@ pub fn neutral_native_summary(summary: &NativeFeatureSummary) -> NativeSummaryFa
 /// `reasoning_capability_notices` signature.
 ///
 /// Converts catalog facts into neutral kernel facts, then delegates to the
-/// pure kernel. Semantics are byte/value-equivalent to the M001 behavior.
+/// pure kernel with semantics matching the pre-extraction implementation.
 pub fn reasoning_capability_notices(
     request: &CanonicalRequest,
     capability: &ThinkingCapability,

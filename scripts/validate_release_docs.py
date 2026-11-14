@@ -177,7 +177,7 @@ def validate_release_docs() -> dict[str, object]:
         raise ReleaseDocsError("README quick start routes normal users to source")
     for command in ("eggpool update", "eggpool update 0.8.0", "install-provenance"):
         _require(readme, command, "README update/provenance guidance")
-    # Binary-first quick-install authority (ADR-0001 / M001).
+    # Binary-first quick-install authority (ADR-0001).
     for phrase in (
         "GitHub raw",
         "standalone-rust",

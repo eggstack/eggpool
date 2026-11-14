@@ -201,7 +201,7 @@ def _final_config_for_env() -> str:
 
 
 def _fake_raw_binary_config_concurrent_writer(path: Path, *, version: str) -> None:
-    # M003 race: concurrent operator creates FINAL while generation runs.
+    # Race: a concurrent operator creates FINAL while generation runs.
     # New code calls init-config STAGING; this fake writes operator bytes to
     # FINAL, writes a partial to STAGING, then fails. Old direct-final code
     # calls init-config FINAL; the fake writes operator bytes to FINAL then
@@ -254,7 +254,7 @@ else:
 
 
 def _fake_raw_binary_config_publish_race(path: Path, *, version: str) -> None:
-    # M003 publish race: generation succeeds but another actor wins FINAL
+    # Publish race: generation succeeds but another actor wins FINAL
     # before no-clobber publish. New code (staging) writes staged bytes to
     # STAGING and winner bytes to FINAL, exits 0; installer must preserve
     # winner via failed ln. Old direct-final code is called with FINAL: the
@@ -315,7 +315,7 @@ else:
 
 
 def _fake_raw_binary_blocking_init(path: Path, *, version: str) -> None:
-    # M003 signal fixture: init-config signals start via marker then blocks
+    # Signal fixture: init-config signals start via marker then blocks
     # so the harness can SIGTERM the installer mid-generation. Works for both
     # staging (new) and direct-final (old) invocation shapes.
     _exe(
@@ -1085,7 +1085,7 @@ def _case_dest_unrelated() -> dict[str, str]:
 
 
 def _case_fresh_force_unowned_refusal() -> dict[str, str]:
-    # M002 Finding A: fresh `--force` must not replace an unowned regular
+    # Fresh `--force` must not replace an unowned regular
     # file. No EggPool command is on PATH, so the destination is a collision
     # even with `--force`.
     with tempfile.TemporaryDirectory(prefix="eggpool-") as value:
@@ -1155,7 +1155,7 @@ def _assert_no_staging_residue(root: Path) -> None:
 
 
 def _case_fresh_init_config_failure_rollback() -> dict[str, str]:
-    # M002 Finding B: first-time `init-config` failure after executable commit
+    # A first-time `init-config` failure after executable commit
     # must roll back the executable and any partial config created by this
     # invocation.
     with tempfile.TemporaryDirectory(prefix="eggpool-") as value:
@@ -1217,7 +1217,7 @@ def _case_fresh_config_failure_race_refusal() -> dict[str, str]:
 
 
 def _case_fresh_config_concurrent_writer_preserved() -> dict[str, str]:
-    # M003 primary race: concurrent operator creates FINAL while staged
+    # Primary race: concurrent operator creates FINAL while staged
     # generation fails. Installer must preserve FINAL byte-for-byte, clean
     # staging, and roll back DEST. Baseline deletes FINAL (absent-before
     # implies ownership) and fails this assertion.
@@ -1238,7 +1238,7 @@ def _case_fresh_config_concurrent_writer_preserved() -> dict[str, str]:
 
 
 def _case_fresh_config_publish_race_preserves_winner() -> dict[str, str]:
-    # M003 publish race: staged generation succeeds but another actor wins
+    # Publish race: staged generation succeeds but another actor wins
     # FINAL before no-clobber publish. Installer must preserve the winner
     # and discard staging. Baseline overwrites FINAL with staged bytes.
     with tempfile.TemporaryDirectory(prefix="eggpool-") as value:
@@ -1468,7 +1468,7 @@ def _case_fresh_executable_rollback_on_generation_failure() -> dict[str, str]:
 
 
 def _case_fresh_executable_race_still_preserved() -> dict[str, str]:
-    # M002 executable-race guard must remain intact under M003 staging.
+    # Preserve executable-race protection during config staging.
     with tempfile.TemporaryDirectory(prefix="eggpool-") as value:
         root = Path(value)
         releases = _fresh_failing_release(root, version="0.8.1", kind="race")

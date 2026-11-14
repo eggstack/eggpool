@@ -55,7 +55,7 @@ EXPECTED_PHASE_NAMES: dict[tuple[float, int], str] = {
     (1.0, 64): "64-1s-run-1.json",
 }
 
-# M004 plan section 13 acceptance gates.
+# Acceptance thresholds for the maintenance profile.
 P95_TOTAL_LATENCY_GATE_MS = 100
 MAX_TOTAL_LATENCY_GATE_MS = 500
 FOREGROUND_COMMIT_GATE_US = 50_000

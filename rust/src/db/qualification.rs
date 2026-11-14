@@ -110,8 +110,8 @@ pub struct QualificationDedicatedCheckpointer {
     pub process_thread_count: Option<u64>,
 }
 
-/// Bounded, scalar-only maintenance checkpoint evidence (persistence M001).
-/// No SQL text, path, or request detail ever crosses this boundary.
+/// Bounded, scalar-only maintenance checkpoint evidence. No SQL text, path,
+/// or request detail crosses this boundary.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 pub struct QualificationCheckpointMaintenance {
     pub soft_threshold_frames: u32,

@@ -31,10 +31,9 @@ const DEFAULT_SHUTDOWN_TIMEOUT: Duration = Duration::from_secs(1);
 const MAX_TASK_NAME_BYTES: usize = 128;
 const MAX_CALLBACK_KIND_BYTES: usize = 128;
 
-/// Process-owned maintenance checkpoint cadence (persistence M001). The tick
-/// is cheap when idle: it inspects one in-memory transaction counter and only
-/// touches SQLite after durable writes occurred. The unchanged SQLite
-/// automatic checkpoint threshold remains the hard WAL-growth fallback.
+/// Process-owned checkpoint cadence. Idle ticks inspect a transaction counter
+/// and touch SQLite only after durable writes; SQLite's automatic checkpoint
+/// threshold remains the hard WAL-growth fallback.
 pub(crate) const CHECKPOINT_POLL_INTERVAL_S: f64 = 60.0;
 
 #[cfg(feature = "qualification-db-diagnostics")]
@@ -42,8 +41,8 @@ const QUALIFICATION_CHECKPOINT_INTERVAL_MIN_S: f64 = 1.0;
 #[cfg(feature = "qualification-db-diagnostics")]
 const QUALIFICATION_CHECKPOINT_INTERVAL_MAX_S: f64 = 3600.0;
 
-/// Qualification-only checkpoint cadence override (persistence M001 tuning
-/// matrix). Ordinary builds always use [`CHECKPOINT_POLL_INTERVAL_S`].
+/// Qualification builds may override the cadence; ordinary builds use
+/// [`CHECKPOINT_POLL_INTERVAL_S`].
 pub(crate) fn effective_checkpoint_interval_s() -> f64 {
     #[cfg(feature = "qualification-db-diagnostics")]
     if let Some(interval) = qualification_checkpoint_interval_override() {
@@ -456,15 +455,9 @@ impl TaskCallbackRegistry {
         self.event_notifications.get(callback_kind).cloned()
     }
 
-    /// The only business callback available in R006.  R008 supplies the
-    /// generation-leased maintenance callbacks and M9 supplies update/backup.
-    ///
-    /// Persistence M001: the checkpoint tick is opportunistic maintenance on
-    /// the existing worker. It skips cheaply when no durable transaction
-    /// completed since the previous tick and defers (rather than queueing)
-    /// when the single database gate is already owned by foreground work.
-    /// Only scalar outcome categories are retained; database detail never
-    /// enters task diagnostics.
+    /// Builds a checkpoint callback that skips idle ticks and defers when
+    /// foreground work owns the database gate. Diagnostics retain only
+    /// scalar outcome categories.
     pub fn with_checkpoint(database: Database) -> Self {
         let observed = Arc::new(AtomicU64::new(database.transaction_count()));
         let policy = crate::db::CheckpointMaintenancePolicy::effective();

@@ -113,14 +113,9 @@ impl QuotaFairScorer {
         scores
     }
 
-    /// Router-private ordered scoring (routing-selection M001). Accepts
-    /// borrowed account names in caller order, snapshots estimator state
-    /// once, and scores through the same [`Self::score_one`] core as the
-    /// public path. Active counts are read directly from the existing
-    /// snapshot, `projected_tokens` stays one request scalar, and the
-    /// current router path carries zero health penalty — without building
-    /// per-selection String-keyed maps. Missing accounts score exactly like
-    /// the public path's empty case.
+    /// Router-private scoring for borrowed account names in caller order.
+    /// Uses one estimator snapshot and the shared [`Self::score_one`] logic
+    /// without per-selection maps; missing accounts match the public path.
     pub(crate) fn score_ordered(
         &self,
         estimator: &QuotaEstimator,

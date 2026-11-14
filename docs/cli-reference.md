@@ -1,7 +1,8 @@
 # CLI Reference
 
 Every command accepts `--config /path/to/config.toml`. Config resolution:
-`--config` > `$EGGPOOL_CONFIG` > `~/.config/eggpool/config.toml` > `./config.toml`.
+`--config` > `$EGGPOOL_CONFIG` > `$XDG_CONFIG_HOME/eggpool/config.toml` (or
+`~/.config/eggpool/config.toml` when unset, if present) > `./config.toml`.
 Command list verified against `eggpool help` (0.8.3).
 
 ## Lifecycle

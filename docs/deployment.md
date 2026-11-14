@@ -29,34 +29,27 @@ must resolve that user's configuration, data directory, and home. Without
 `HOME`, the unit is written with `User=` the invoking user but `HOME=` root's
 home, and the service cannot read the configuration it was installed against.
 
-The installer is binary-first for fresh current-native installs: it verifies
-the GitHub raw executable for the detected target (SHA-256 before execution,
-staged self-check, atomic commit) and creates a `standalone-rust`
-installation. It never requires Python, uv, pipx, pip, Cargo, or a source
-checkout. Direct `uv tool install eggpool`, `pipx install eggpool`, and
-`cargo install eggpool` remain supported explicit alternatives. The installer
-detects an existing `eggpool` on PATH and preserves its owner — native
-installs delegate to `eggpool update`, legacy Python-era installs use their
-owning manager, and source-checkout or ambiguous ownership fails closed.
-Pass `--force` for an intentional same-owner repair of a verified EggPool
-installation; it never overwrites an unrelated file at the destination.
-A fresh install is transactional through first-time config seeding: if
-`init-config` fails after executable publication, the newly installed
-executable is removed again (unless the destination changed concurrently,
-in which case manual recovery is reported). First-time config is generated
-only into transaction-owned staging and published no-clobber (hard-link);
-the final config path is never written directly and never deleted by
-rollback. A concurrently created config wins byte-for-byte, symlink/special
-boundaries fail closed, and only staging is cleaned. It seeds
-`~/.config/eggpool/config.toml` from the example template only after the
-command is committed and verified, without overwriting an existing file, and
-prints the resolved config path.
+The installer is binary-first for fresh native installations. It downloads
+the executable for the detected target from GitHub raw, verifies its SHA-256,
+runs a staged self-check, and installs it as `standalone-rust`. It does not
+require Python, uv, pipx, pip, Cargo, or a source checkout. Direct installs with
+`uv tool install eggpool`, `pipx install eggpool`, and `cargo install eggpool`
+remain supported alternatives.
+
+When the installer finds an existing EggPool on PATH, it preserves the
+installation owner: native installs use `eggpool update`, legacy Python-era
+installs use their owning manager, and source-checkout or ambiguous ownership
+fails closed. Use `--force` only to repair a verified EggPool installation
+with the same owner; unrelated files are not overwritten. A fresh install
+seeds the default config from the example template only when no config exists,
+then prints the resolved config path.
 
 After install, `eggpool onboard` walks the operator through provider
-connections, configuration validation, and an optional server start. On a
-new database it also creates the initial local administrator with a
-non-default password and prints one personal API token once. That token is
-the inference credential. The same run does not write a new `[server].api_key`.
+connections, validates the configuration, prompts for an administrator
+password on a new database, creates the initial local administrator, and starts
+the server. It prints the administrator's personal API token once. That token is the inference
+credential. The same run does not write a new `[server].api_key`. If the server
+is already running, onboarding reports that without restarting it.
 Browser sign-in is `/login` on the listen address. For unattended
 bootstrap, pass `--password-stdin` and provide the password on stdin; the
 password is never accepted in argv. Secret output is suppressed when stdout
@@ -104,7 +97,7 @@ every provider those users can reach, configured as
 `[providers.<id>.budget] max_microdollars_per_million_tokens` (microdollars
 per million tokens, covering the most expensive model on that provider;
 omit for unknown price, `0` for verified free). Without a bound, hard-mode
-requests are denied before upstream dispatch — hard mode is unavailable rather
+requests are denied before upstream dispatch: hard mode is unavailable rather
 than approximate. See [model limits](model-limits.md#local-user-budgets).
 
 An optional instance-wide ceiling (`eggpool users global-budget set` or the
@@ -158,7 +151,7 @@ longevity.
 
 - Use a **high-endurance microSD card** (64GB+ rated for continuous writes)
 - Prefer a **USB SSD** for sustained multi-session workloads
-- Avoid cheap microSD cards for production use — they wear out quickly
+- Avoid cheap microSD cards for production use: they wear out quickly
   under continuous write patterns
 
 #### Low-wear metrics configuration
@@ -201,32 +194,10 @@ vacuum when you need to reclaim space after large data deletions.
 
 #### Backups
 
-Automatic in-process backups are opt-in. Set `[backup].enabled = true` to
-run the `automatic_backup` task, which produces restore-compatible `.zip`
-archives every 24 hours with count-based retention (default 14). Backups use
-the tokio-rusqlite `backup_to` API for consistent snapshots and atomic archive
-publication.
-
-The default backup directory depends on the installation type:
-
-- **Production** (`/var/lib/eggpool` exists): `/var/lib/eggpool/backups`
-- **Personal**: `~/backups/eggpool/` (or `$XDG_BACKUP_HOME/eggpool`)
-
-The production systemd unit grants write access to both `/var/lib/eggpool`
-and `/var/lib/eggpool/backups`, so automatic backups work out of the box.
-Override with `[backup].directory` if needed.
-
-The `eggpool deploy backup-cron` path remains available for operators
-who prefer external scheduling or want backups even when the server
-process is not running:
-
-```bash
-eggpool deploy backup-cron --install
-```
-
-Note that buffered analytics may lose at most the configured flush
-window (`flush_interval_s` seconds) of data after abrupt power loss.
-Correctness-critical request state is always persisted immediately.
+Automatic backups are disabled by default. See the
+[Backup and Restore guide](backup-restore.md) for setup and recovery. After
+sudden power loss, buffered analytics may lose up to one `flush_interval_s`
+window; correctness-critical request state is persisted immediately.
 
 ### 4. Cron fallback (no systemd)
 
@@ -248,7 +219,7 @@ crontab (or `SUDO_USER`'s crontab under sudo). Each line calls
 # END EggPool watchdog
 ```
 
-Absolute paths only — the watchdog does not depend on cron PATH or on
+Absolute paths only: the watchdog does not depend on cron PATH or on
 the operator's interactive shell environment. `ensure-running`
 atomically checks-and-starts without ever spawning a duplicate
 instance, and uses the stdlib-only fast-path CLI so the cron tick is
@@ -268,34 +239,7 @@ config, refuses to start a second instance, then spawns a detached
 child and returns promptly. See
 [Daemon Mode](#daemon-mode) below for the full contract.
 
-### 6. Backups (automatic + optional cron)
-
-The default installation does not create automatic backups. Enable the
-`automatic_backup` supervised task with `[backup].enabled = true` when the
-server should own backup scheduling.
-
-In production, backups are written to `/var/lib/eggpool/backups` (the
-systemd unit grants write access to this directory). For personal
-installs, the default is `~/backups/eggpool/`. Override with
-`[backup].directory` if needed.
-
-If you prefer external cron-based scheduling (e.g. backups when the
-server is not running), install the backup cron separately:
-
-```bash
-eggpool deploy backup-cron --install
-```
-
-This writes `/usr/local/bin/eggpool-backup` (a thin wrapper that execs
-`eggpool backup`, which produces the same staged atomic ZIP archives as the
-in-process task) and a `0 2 * * *` crontab entry. The wrapper targets the
-production backup dir (`/var/backups/eggpool`); the in-process `eggpool
-backup` default is `/var/lib/eggpool/backups` when that dir exists, else
-`~/backups/eggpool` (overridable with `[backup].directory`). Archive
-pruning (default keep 14, `[backup].retain_count`) runs in the in-process
-automatic backup task — the cron wrapper itself does not prune.
-
-### 7. Verify
+### 6. Verify
 
 ```bash
 eggpool accounts status
@@ -303,7 +247,7 @@ eggpool croncheck
 curl http://localhost:11300/v1/healthz
 ```
 
-### 8. Other deploy commands
+### 7. Other deploy commands
 
 ```bash
 sudo env "PATH=$PATH" "$(command -v eggpool)" deploy logrotate --install
@@ -320,7 +264,7 @@ intentionally separate.
 Without `--install`, each command prints the snippet and manual
 instructions for you to copy-paste.
 
-### 9. Configuration changes
+### 8. Configuration changes
 
 ```bash
 # Live reload for supported changes (no restart needed)
@@ -343,8 +287,8 @@ families as `LIVE`, so editing ``[providers.<id>]``,
 restart. Other
 fields (server bind host/port, runtime construction, database path,
 middleware, security headers and trusted-proxy attribution, metrics topology, backup paths,
-transcoder storage topology) remain `RESTART_REQUIRED` —
-use `eggpool restart` for those. A mixed live + restart-required
+transcoder storage topology) remain `RESTART_REQUIRED`. Use
+`eggpool restart` for those. A mixed live + restart-required
 change is rejected entirely (exit code `2`); no partial application.
 The CLI is fail-closed and never implicitly restarts the service.
 
@@ -369,7 +313,7 @@ reload commands.
 sudo systemctl restart eggpool
 ```
 
-### 10. Logs
+### 9. Logs
 
 ```bash
 sudo journalctl -u eggpool -f
@@ -379,19 +323,18 @@ sudo journalctl -u eggpool -f
 
 ## Configuration path resolution
 
-Every CLI command resolves `--config` against this precedence (single
-source of truth: the native runtime's config path resolver):
+Every CLI command resolves `--config` in this order:
 
-1. `--config PATH` (highest)
-2. `$EGGPOOL_CONFIG` environment variable
-3. `~/.config/eggpool/config.toml` (XDG default for installed copies)
-4. `./config.toml` (CWD fallback for deliberate checkout workflows)
+1. `--config PATH`
+2. `$EGGPOOL_CONFIG`
+3. `$XDG_CONFIG_HOME/eggpool/config.toml`, or `~/.config/eggpool/config.toml` when `XDG_CONFIG_HOME` is unset, if that file exists
+4. `./config.toml` as the checkout fallback
 
 For the environment file:
 
-1. `$EGGPOOL_ENV` (explicit override)
+1. `$EGGPOOL_ENV`
 2. `<config-dir>/.env` next to the resolved config
-3. `~/.config/eggpool/.env` (XDG default)
+3. `$XDG_CONFIG_HOME/eggpool/.env`, or `~/.config/eggpool/.env` when `XDG_CONFIG_HOME` is unset
 
 After install, drop the `--config` flag by exporting
 `$EGGPOOL_CONFIG` in your shell rc. The install script prints the
@@ -662,7 +605,7 @@ For public-facing or multi-user deployments. Uses a dedicated
 `eggpool` system user with proper file permissions and a hardened
 systemd unit.
 
-**Not recommended for personal LAN use** — the personal-use path
+**Not recommended for personal LAN use**: the personal-use path
 above is simpler and sufficient for single-user setups.
 
 ### Automated production install
@@ -735,11 +678,11 @@ sudo env "PATH=$PATH" "$(command -v eggpool)" deploy backup-cron --install --pro
 
 ### Systemd unit features
 
-- `ProtectSystem=strict` — read-only system directories
-- `ReadWritePaths=/var/lib/eggpool` — data directory writable
-- `NoNewPrivileges`, `PrivateTmp`, `RestrictNamespaces` — hardened
-- `User=eggpool`, `Group=eggpool` — never runs as root
-- No `ExecReload` — config changes require `systemctl restart` (run `eggpool check-config` or `eggpool rehash` first for fast validation)
+- `ProtectSystem=strict`: read-only system directories
+- `ReadWritePaths=/var/lib/eggpool`: data directory writable
+- `NoNewPrivileges`, `PrivateTmp`, `RestrictNamespaces`: hardened
+- `User=eggpool`, `Group=eggpool`: never runs as root
+- No `ExecReload`: config changes require `systemctl restart` (run `eggpool check-config` or `eggpool rehash` first for fast validation)
 - `Restart=on-failure` with `RestartSec=5` and a 300s burst cap
 
 ---
@@ -838,7 +781,7 @@ The generated block uses absolute binary, config, and log paths:
 # END EggPool watchdog
 ```
 
-`ensure-running` is the stdlib-only fast-path CLI — it does not
+`ensure-running` is the stdlib-only fast-path CLI: it does not
 import the heavy application graph on every cron tick, so a
 5-minute cadence is cheap on Raspberry Pi-class hardware. The block
 is bracketed by `# BEGIN EggPool watchdog` / `# END EggPool watchdog`
@@ -865,8 +808,8 @@ active-generation account identity, live routing health, and cached catalog
 probe evidence without making outbound provider requests or consuming quota.
 Exit codes are `0` when the proxy is reachable and ready (including degraded
 with a viable route), `1` when reachable but unready, and `3` when the server
-is unreachable — in which case locally configured providers are still listed
-as `unknown`/`disabled` from static config. `eggpool status --json` prints the
+is unreachable, locally configured providers are still listed as
+`unknown`/`disabled` from static config. `eggpool status --json` prints the
 typed server snapshot (deterministic provider ordering, numeric durations in
 named units, no credentials or raw upstream error text).
 
@@ -887,26 +830,26 @@ message.  It does not start the server.
 
 The output covers:
 
-- **Server** — PID, uptime, configured server threads, Rust version.
-- **Processes** — observed EggPool process count vs expected; a warning
+- **Server**: PID, uptime, configured server threads, Rust version.
+- **Processes**: observed EggPool process count vs expected; a warning
   is printed when the observed count exceeds expected by more than one.
-- **Memory** — RSS, VMS, open FD count, thread count.
-- **Background tasks** — per-task running/done/cancelled state,
+- **Memory**: RSS, VMS, open FD count, thread count.
+- **Background tasks**: per-task running/done/cancelled state,
   iteration count, restart count, last error class and timestamp.
   Cadence diagnostics include `configured_interval_s`,
   `observed_last_interval_s`, `last_tick_drift_s`, and
   `initial_delay_consumed` so operators can spot scheduler drift or
   stuck tasks directly from the snapshot.
-- **Database** — path, WAL mode, file/WAL/SHM sizes, contention
+- **Database**: path, WAL mode, file/WAL/SHM sizes, contention
   counters (cumulative lock wait, max lock wait, write/read ops).
-- **Routing** — active requests, pending count, active reservations,
+- **Routing**: active requests, pending count, active reservations,
   reserved microdollars, health states, active backoff rows.
-- **Terminal finalization** — the bounded `finalization_supervisor` snapshot
+- **Terminal finalization**: the bounded `finalization_supervisor` snapshot
   reports active and retry-pending jobs, bounded failures/history, saturation
   counters, and configured capacity/retry-age limits. `null` means the server
   has no active production generation supervisor (for example during partial
   startup).
-- **Generation retirement ownership** — `runtime_manager.finalization_ownership`
+- **Generation retirement ownership**: `runtime_manager.finalization_ownership`
   reports the active generation, retiring-generation count, total terminal
   references, oldest retiring age, and bounded blocked/failure facts. A live
   retiring generation is never closed while terminal references remain; an
@@ -936,12 +879,11 @@ endpoints to inspect the effective runtime and background-task state.
 
 The watchdog cron uses `eggpool ensure-running`, which is a separate
 fast-path command. Do not use `eggpool runtime-status` in cron
-entries — it opens an authenticated local TCP connection and parses a
+entries: it opens an authenticated local TCP connection and parses a
 full runtime snapshot per invocation, so it is not designed for
 high-frequency polling.
 
-Backup cron is a separate command (`eggpool deploy backup-cron`) —
-do not mix the two.
+Use backup cron separately from the watchdog cron.
 
 ---
 
@@ -952,23 +894,21 @@ eggpool uninstall --yes                       # binary, config, data, PATH
 eggpool uninstall --yes --deploy-artifacts    # also systemd, logrotate, cron
 ```
 
-`eggpool uninstall` detects the install method (pipx / uv tool /
-source / manual), asks for confirmation, then reverses the install:
-it stops any running server, removes the binary via the matching
-installer (or directly, for source installs), deletes the
-configuration and SQLite database, and scrubs `eggpool`-related PATH
-entries from the user's shell rc files (previewed and confirmed
-before any write).
+`eggpool uninstall` stops the server, removes the resolved executable and
+selected configuration, data, and state paths, and scrubs EggPool entries from
+the user's shell rc files. It does not call `uv` or `pipx`, and it does not
+elevate privileges. For a package-manager-owned install, remove the package
+with its owning manager as well. Run the command with permission to remove each
+selected path.
 
-Pass `--deploy-artifacts` to also remove the system-level deploy
-artifacts that `eggpool deploy` created: the systemd unit, the
-logrotate config, the watchdog and backup crontab blocks, and the
-backup script. Files under `/etc` and `/usr/local/bin` are removed
-via `sudo`. Without `--deploy-artifacts` the uninstall command
-prints manual cleanup commands and leaves those files in place.
+Pass `--deploy-artifacts` to remove the known systemd, logrotate, and cron
+artifacts created by `eggpool deploy`. The command does not invoke `sudo`; run
+it with the required permissions. Without this flag, deployment artifacts are
+left in place.
 
-Existing backups under `~/backups/eggpool/` are always left in
-place — uninstall does not touch them.
+The personal backup directory `~/backups/eggpool/` is outside the default data
+path and is left in place. Production backups under `/var/lib/eggpool/backups`
+are removed with the data directory unless `--keep-data` is set.
 
 ---
 
@@ -1080,7 +1020,7 @@ If RSS still grows continuously after the above:
 
 1. Check for leaked pending requests (see above).
 2. Verify WAL checkpointing is working: `PRAGMA wal_checkpoint(PASSIVE)`.
-3. Consider restarting the process to reclaim memory — the database
+3. Consider restarting the process to reclaim memory: the database
    file itself does not grow from in-memory leaks.
 
 ### WAL file growth
@@ -1148,10 +1088,10 @@ probe before readiness is reopened.
 | `eggpool runtime-status --json` | Print machine-readable JSON for scripting/monitoring |
 | `eggpool backup` | Create a timestamped `.zip` backup archive (default `~/backups/eggpool/`) |
 | `eggpool recover [path]` | Restore from a backup archive (interactive menu if no path) |
-| `eggpool uninstall` | Detect install method, preview PATH edits, remove binary + config + data + shell-rc entries |
+| `eggpool uninstall` | Remove the resolved executable, selected config/data, and shell-rc entries; requires permission for each path |
 | `eggpool uninstall --deploy-artifacts` | Also remove systemd unit, logrotate config, watchdog + backup cron blocks, backup script |
-| `eggpool croncheck` | Check if server is running (exit 0/1) — fast-path, no heavy imports |
-| `eggpool ensure-running` | Atomically check-and-start the server; no-op when already alive — fast-path, no heavy imports |
+| `eggpool croncheck` | Check if server is running (exit 0/1): fast-path, no heavy imports |
+| `eggpool ensure-running` | Atomically check-and-start the server; no-op when already alive: fast-path, no heavy imports |
 # Local gateway profile
 
 For a gateway in front of local models, copy

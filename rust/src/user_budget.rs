@@ -664,7 +664,7 @@ impl BudgetPriceSource {
 /// the publication transaction only decides against it, so there is no
 /// check-then-dispatch gap.
 ///
-/// Formal accounting assumptions (M008 corrective):
+/// Formal accounting assumptions:
 /// - `input_worst_case_tokens` is a byte-length upper bound on input tokens
 ///   (every token encodes at least one ingress byte), never an average.
 /// - `requested_output_tokens` is the caller's explicit compatible output cap
@@ -1273,10 +1273,9 @@ pub(crate) fn record_attempt_and_maybe_settle(
         tokens_known,
         cost_known,
     } = settlement;
-    // Per-attempt usage facts are request-scoped, not user-scoped: they are
-    // recorded unconditionally so instance-global settlement (M009) can fold
-    // the same attempts for unattributed requests. Only the usage-bucket
-    // fold below is gated on a user reservation.
+    // Per-attempt usage facts are request-scoped and recorded even without a
+    // user reservation, allowing instance-global settlement to include
+    // unattributed requests. Only the usage-bucket fold below is user-gated.
     if attempt_transitioned {
         record_attempt_usage(
             connection,

@@ -56,10 +56,10 @@ eligible provider surface advertising the capability fails with
 body names only the configuration keys an operator must set; it carries no
 account name, credential material, provider secret configuration, or request
 body material. A capability failure consumes no provider attempt, no quota
-reservation, and no durable attribution row. A compact request that fails for
-an unrelated reason — for example, no eligible account serves the requested
-model — keeps the ordinary `503 Service Unavailable` selection failure, so a
-missing capability is distinguishable from a missing account. See
+reservation, and no durable attribution row. A compact request that fails for another reason, such as no eligible account
+serving the requested model, keeps the ordinary `503 Service Unavailable`
+selection failure. This distinguishes a missing capability from a missing
+account. See
 [Stateless Responses](stateless-responses.md).
 
 `/v1/models` remains the standard OpenAI-compatible model-list contract. It is
