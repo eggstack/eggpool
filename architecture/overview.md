@@ -108,7 +108,10 @@ explicit `--config` > `$EGGPOOL_CONFIG` > `$XDG_CONFIG_HOME`-aware
 the `rust/config.example.toml` and `rust/config.sbc.example.toml`;
 `rust/build.rs` (via `rust/build_support.rs`) embeds the default example for
 `eggpool init-config` and embeds the `rust/assets/db/migrations/` chain with
-checksums.
+checksums. The configuration-owned `server.api_key`, account `api_key`, and
+provider static-header `value` use the public `config::SecretString` wrapper;
+TOML remains plain-string-compatible. Its source-level Rust API change is
+recorded in [ADR-0011](../plans/adrs/ADR-0011-configuration-secret-wrapper-rust-api.md).
 
 `rust/src/config_reload_policy.rs::classify_transition` is the only
 reload-vs-restart authority. It returns one redacted typed result for
@@ -356,7 +359,7 @@ is the only persistence boundary. `db/` owns only the `backup_to` snapshot
 primitive; backup orchestration lives in `operations/backup.rs` and crash
 repair in `runtime_lifecycle/recovery.rs` plus coordinator reconciliation.
 Migrations (`rust/assets/db/migrations/`,
-currently v1–v66 with `checksums.json`) are embedded and immutable; commit or
+currently v1–v68 with `checksums.json`) are embedded and immutable; commit or
 ownership ambiguity fails closed; startup reconciliation repairs only covered
 states. Repositories accept no unbounded diagnostic content and never store
 credentials, prompts, raw bodies, or cache keys.
@@ -466,7 +469,14 @@ Deep dives: [Observability](deep-dive-observability.md),
 `user_credentials`, and `user_access_state` records, Argon2id password
 verification (fixed parameters, bounded hashing concurrency before the SQLite
 gate), high-entropy `epk1_` personal credentials stored as digests only, the
-administrative audit trail, and the request-attribution types. The
+administrative audit trail, and the request-attribution types. Agent-token
+scopes are enforced by `server/middleware.rs` using the fixed path map in
+`identity.rs`; browser sessions and legacy shared keys remain outside that gate.
+`rust/src/security_events.rs` owns a bounded, drop-tolerant, process-supervised
+writer for minute-aggregated authentication and authorization outcomes. The
+administrator audit page reads its capped, durable, content-free projection;
+records exclude credentials, usernames, raw IP addresses, prompts, headers, and
+request bodies. The
 `legacy_unmigrated` → `admin_initialized` → `managed` access-state singleton
 is the explicit switch from the shared server key to managed access; a
 partial unique index keeps at most one active administrator.

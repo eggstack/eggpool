@@ -115,7 +115,7 @@ async fn new_account_is_projected_before_candidate_build_and_persisted_atomicall
             base_url: "https://provider.example.test".to_owned(),
             accounts: vec![AccountConfig {
                 name: "one".to_owned(),
-                api_key: Some("test-key-one".to_owned()),
+                api_key: Some("test-key-one".into()),
                 ..AccountConfig::default()
             }],
             ..ProviderConfig::default()
@@ -145,7 +145,7 @@ async fn new_account_is_projected_before_candidate_build_and_persisted_atomicall
         .accounts
         .push(AccountConfig {
             name: "two".to_owned(),
-            api_key: Some("test-key-two".to_owned()),
+            api_key: Some("test-key-two".into()),
             ..AccountConfig::default()
         });
     let result = reload

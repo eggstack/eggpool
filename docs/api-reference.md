@@ -156,12 +156,25 @@ Request ingestion is bounded by `[server].max_request_body_bytes` (default 10 Mi
 
 In `legacy_unmigrated`, the shared server key keeps its legacy behavior. After
 local identity initialization, inference uses per-user agent tokens and
-browser sessions; the legacy key is retired. A personal token grants only its
-inference/discovery scopes and does not grant dashboard or account access.
-Browser sessions authenticate the web surface, with CSRF proof required for
-state-changing requests. In managed mode, `[dashboard].public` does not make
-dashboard or `/api/*` data public. Health, readiness, login, and static assets
-are unauthenticated. See [deployment](deployment.md) and [firewall](firewall.md)
+browser sessions; the legacy key is retired. Agent-token scopes are enforced
+for these paths only:
+
+| Scope | Paths |
+|---|---|
+| `inference` | `POST /v1/chat/completions`, `POST /v1/messages`, `POST /v1/responses`, `POST /v1/responses/compact`, `POST /v1/embeddings`, `GET /api/user-budget` |
+| `discovery` | `GET /v1/models` |
+| `integrations` | `GET /api/integrations/v1/profile` |
+
+Current issuance grants all three scopes. A missing required scope returns
+HTTP 403 with `detail.code = "required_scope_missing"`; the response does not
+echo scope values. Unknown `/v1/*` paths remain ordinary route-level 404s.
+Browser sessions and the legacy shared key are outside this agent-token scope
+gate; existing browser-session access to `/api/user-budget` is unchanged.
+Agent tokens do not grant dashboard or account access. Browser sessions
+authenticate the web surface, with CSRF proof required for state-changing
+requests. In managed mode, `[dashboard].public` does not make dashboard or
+`/api/*` data public. Health, readiness, login, and static assets are
+unauthenticated. See [deployment](deployment.md) and [firewall](firewall.md)
 for operator-managed HTTPS termination, trusted proxy, and loopback guidance.
 Managed users receive policy-filtered model discovery, and runtime dispatch
 enforces the same rules even when a client submits a hidden model manually.
@@ -226,4 +239,10 @@ tokens never authenticate these pages. A newly issued token is returned once
 in a `no-store` response and omitted from the account page thereafter.
 Profile edits use a version check so a stale form cannot overwrite a newer
 edit. The audit view contains actor, action, target type, target ID, and time;
-it does not record passwords, token values, prompts, or request bodies.
+it does not record passwords, token values, prompts, or request bodies. Its
+administrator-only `Security events` section shows up to 200 newest-first
+minute aggregates with event code, outcome, principal kind, count, and a
+username resolved for display (or `-` when unavailable). Event rows do not
+store usernames, credentials, raw IP addresses, request paths, prompts, or
+bodies; this section is separate from and does not change the gateway audit
+export.

@@ -158,7 +158,7 @@ pub(super) use api::{
     stats_request_segmentation, stats_request_shaping, stats_transcoding, summary, timeseries_api,
 };
 pub(super) use assets::{static_chart_js, static_css, static_favicon, static_js, theme_css};
-pub(super) use response::{degraded, json_response};
+pub(super) use response::{apply_html_security_headers, degraded, json_response};
 pub(super) use routes::{
     accounts_page, bandwidth_page, cache_page, events_page, latency_page, model_detail_page,
     models_page, overview, pings_page, reliability_page, routing_page, runtime_page, sync_accounts,

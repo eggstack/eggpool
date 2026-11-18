@@ -56,6 +56,32 @@ and browser sessions. The configured shared key stops authenticating when the
 first local identity is created. Upgraded schemas remain `legacy_unmigrated`
 until that identity is initialized.
 
+Agent-token scopes are enforced after token verification and before route
+execution. Current issuance grants all three scopes:
+
+| Scope | Agent-token paths |
+|---|---|
+| `inference` | `POST /v1/chat/completions`, `POST /v1/messages`, `POST /v1/responses`, `POST /v1/responses/compact`, `POST /v1/embeddings`, `GET /api/user-budget` |
+| `discovery` | `GET /v1/models` |
+| `integrations` | `GET /api/integrations/v1/profile` |
+
+A missing scope returns HTTP 403 with the fixed detail code
+`required_scope_missing`; the response does not echo scope values, consume a
+throttle failure, or revoke the token. Unknown `/v1/*` routes still reach the
+ordinary 404 path. Browser sessions and the legacy shared key are explicitly
+outside this gate; their existing access is unchanged.
+
+Authentication and authorization outcomes also feed the bounded
+`security_events` audit. A fixed vocabulary records event code, outcome,
+principal kind, an optional internal user ID, minute window, and aggregate
+count—including refused legacy shared-key attempts—never a username, credential,
+token, raw IP address, prompt, header, or request body. A process-supervised writer uses a bounded non-blocking queue,
+coalesces same-minute outcomes, and drops events rather than slowing an auth
+decision when full. Retention is capped at 30 days and 10,000 rows; shutdown
+flush is bounded. The administrator-only `/admin/audit` page shows the newest
+200 rows and resolves an existing user ID only for display, using a dash when
+no user remains. The existing JSON audit export is unchanged.
+
 Sessions have a 12-hour idle bound and 7-day absolute expiry. Both cookies —
 `eggpool_session` and `eggpool_csrf` — are HttpOnly, SameSite=Lax, root-path
 scoped, and Secure when the accepted connection is HTTPS. The CSRF cookie is
@@ -109,6 +135,13 @@ account and administration HTML containing identity, budget, or CSRF data is
 not retained by shared or browser caches. Sign-in responses carry the same
 header; `/login` is an unconditionally public path that the middleware returns
 from before it applies the header, so the sign-in surface sets it itself.
+Every HTML response also receives `X-Content-Type-Options: nosniff`,
+`Referrer-Policy: no-referrer`, `X-Frame-Options: DENY`, and
+`Content-Security-Policy: frame-ancestors 'none'; base-uri 'none'; form-action
+'self'` from the shared HTML response helper. JSON and static assets do not
+receive these HTML-only headers. This policy does not add `script-src` or
+`style-src`; the existing inline dashboard scripts and handlers remain
+compatible. The headers supplement rather than replace `no-store`.
 Privileged browser mutations also
 revalidate the exact session, user role, auth epoch, and forced-password state
 inside the SQLite transaction that commits the write; creating a user and
@@ -129,17 +162,31 @@ No token, prompt, body, IP, or provider outcome is retained in limiter state.
 Provider credentials are added only at dispatch-header construction. Incoming
 headers forwarded toward provider selection pass through
 `filtered_incoming_headers` in `rust/src/server/inference.rs`, which drops
-exactly ten entries: `authorization`, `proxy-authorization`, `x-api-key`,
-`host`, `content-length`, the route-session header
+twelve entries: `authorization`, `proxy-authorization`, `x-api-key`, `cookie`,
+`cookie2`, `host`, `content-length`, the route-session header
 (`x-eggpool-route-session`, hashed never forwarded), and hop-by-hop framing
-(`connection`, `transfer-encoding`, `upgrade`, `keep-alive`); log
-redaction defaults to `["authorization", "x-api-key"]` via
-`SecurityConfig::redact_headers`. Raw
-request/response bodies, prompts, cache keys, and token values are excluded
-from persistence and operational snapshots (`dashboard.store_request_content`
-is validated `false`). Control sockets and state files use owner-only
-permissions (`0o700` runtime/config directories, `0o600` control socket and
-secret-bearing files) and fail closed when ownership is ambiguous.
+(`connection`, `transfer-encoding`, `upgrade`, `keep-alive`). Log and persisted
+terminal-detail redaction use fixed rules in
+`rust/src/coordinator/finalization.rs` and `rust/src/operations/status.rs`;
+`SecurityConfig::redact_headers` is accepted for compatibility but does not
+configure those rules. Raw request/response bodies, prompts, cache keys, and
+token values are excluded from persistence and operational snapshots
+(`dashboard.store_request_content` is validated `false`). Control sockets and
+state files use owner-only permissions (`0o700` runtime/config directories,
+`0o600` control socket and secret-bearing files) and fail closed when ownership
+is ambiguous.
+
+The parsed settings `security.allowed_hosts`, `security.cors_origins`,
+`security.redact_headers`, `security.persist_redacted_error_detail`, and
+`server.access_log` have no runtime consumer. Non-default values remain
+parseable for compatibility but produce secret-free startup warnings naming
+the setting and directing operators to an external proxy/log pipeline or to
+remove the setting. `security.trusted_proxies` and
+`security.allow_insecure_web_auth` remain active controls. EggPool does not
+provide Host allowlisting, CORS, configurable log redaction, or access logging.
+On Unix, startup warns when a secret-bearing config file or the adjacent `.env`
+is readable by group/other users; it checks metadata only, never reads file
+contents, and does not change permissions.
 
 ### Persisted terminal detail
 
@@ -224,6 +271,19 @@ explicitly resolved EggPool targets. Secrets resolve from
 `api_key`/`api_key_env` indirection or `$EGGPOOL_ENV`-adjacent `.env`
 files, stay `[REDACTED]` in `Debug` impls, and never reach
 metrics/status/diagnostics payloads.
+
+The configuration-owned values in `ServerConfig.api_key`,
+`AccountConfig.api_key`, and `ProviderStaticHeaderConfig.value` use the public
+`config::SecretString` wrapper over `Zeroizing<String>`. Each wrapper clone
+zeroizes its own string when dropped; TOML continues to serialize and parse
+these fields as ordinary strings, and resolution precedence is unchanged.
+Plaintext access is explicit through `expose_secret()`, and no `Display`
+implementation is provided. This is a source-level Rust API change recorded
+in [ADR-0011](../plans/adrs/ADR-0011-configuration-secret-wrapper-rust-api.md);
+it does not change config keys, CLI behavior, HTTP contracts, or runtime
+semantics. It does not zeroize OS environment variables, CLI arguments, `.env`
+parsing buffers, request bodies, HTTP header copies, database rows, or crash
+dumps.
 
 ## Verification
 

@@ -105,7 +105,11 @@ impl CredentialStore {
         let mut store = Self::default();
         for provider in config.providers.values() {
             for account in &provider.accounts {
-                let value = account.api_key.clone().or_else(|| {
+                let value = account
+                    .api_key
+                    .as_ref()
+                    .map(|secret| secret.expose_secret().to_owned())
+                    .or_else(|| {
                     if account.api_key_env.is_empty() {
                         return None;
                     }

@@ -75,6 +75,8 @@ capability passes. Solo SBC/microSD remains the lightweight reference; ordinary
 on-prem server hardware with durable storage is the expected team host.
 No new runtime, schema or performance claim lands with these plans.
 
+Security hardening (2026-11-17, baseline `dcbd820e9b978d47bd43d237eded1f488d3449ee`): a repository security review found two unpatched `russh` advisories in the default build, an inbound `Cookie` header forwarded to providers, five parsed-but-inert security/access-log settings, no durable authentication-event record, an unenforced credential scope field, tag-pinned CI actions in four workflows, checksum-only release verification, unit/header hardening gaps, and plain configuration secret strings. [Security hardening](subsystems/security-hardening-roadmap.md) registers M001–M009. [ADR-0011](adrs/ADR-0011-configuration-secret-wrapper-rust-api.md) records the user-approved public Rust field-type change for M009; it leaves TOML and runtime-facing contracts unchanged. M001–M005, M007, and M009 remain active; M006 is blocked on a signature-authority ADR and M008 on a compatible Eggress release or an approved vendoring/no-SSH ADR. No closed milestone is reopened and no accepted ADR is changed.
+
 ## Status vocabulary
 
 - **proposed** — roadmap or plan exists but is not approved for execution.
@@ -100,6 +102,7 @@ No new runtime, schema or performance claim lands with these plans.
 | Provider transport | closed | `plans/subsystems/provider-transport-roadmap.md` | M006 closed — Eggress 1.0.12 dependency refresh and requalification | M001–M006 closed; no successor registered. |
 | Provider profile metadata corrective | closed | `plans/subsystems/provider-profile-metadata-corrective-roadmap.md` | M001 closed — provider template endpoint/source reconciliation | M001 terminal; no successor registered. |
 | Provider profile metadata planning/documentation reconciliation | closed | `plans/subsystems/provider-profile-metadata-planning-reconciliation-corrective-roadmap.md` | C001 closed — closed-roadmap/source-truth reconciliation | No successor registered. |
+| Security hardening | active | [security hardening roadmap](subsystems/security-hardening-roadmap.md) | M001–M005, M007, M009 active; M006, M008 blocked | Review baseline `dcbd820e9b`; M006 needs a signature-authority ADR and key custody; M008 needs an Eggress release permitting `russh >=0.65` or an approved vendoring/no-SSH ADR. |
 | Shared provider profile contract | closed | `plans/subsystems/shared-provider-profile-contract-roadmap.md` | M002 closed — OpenCode Go wire hints for the current first-party endpoint table | M001 and M002 closed; the roadmap re-opened on evidence and closed again on the same evidence. The four placed-but-unhinted models now resolve on their reviewed surfaces — `beam-free`, `minimax-m3.1-flash-free` and `step-5-preview` on Chat Completions, `claude-haiku-5-5` on Anthropic Messages. `gemini-4-argon-contributor` and the five unplaced catalog ids stay unresolved. The six entries the current table no longer places keep their hints with a recorded disposition, and a drift guard compares the wire map, the reviewed record and a dated catalog snapshot, failing closed on an unexplained delta. CodeGG consumption of M001 remains unblocked at immutable revision `9ac6a131`; CodeGG consumption of M002 is pinned to the M002 closure revision. `longcat-2.5-preview-free` stays withdrawn upstream and is not M002's to restore. |
 | Routing selection | active | `plans/subsystems/routing-selection-roadmap.md` | M009 closed — health effect ownership and terminal-withdrawal producer retirement | Reopened on evidence at baseline `e6822d8f78`: M001–M003 remain closed. M004, M005, and M006 are closed through M007. M008 is closed through `plans/closure/routing-selection/008-status.md`. M009 is closed through `plans/closure/routing-selection/009-status.md`. No further milestone is registered in this subsystem. |
 | Runtime efficiency | closed | `plans/subsystems/runtime-efficiency-roadmap.md` | M004 closed — behavior-identical request-path cost removal; policy revision probe declined | M001–M004 closed. No successor is registered. `eggpool users` can commit a policy revision while `serve` is running, so the per-request revision read stays. Persistence M007 remains rejected; production storage is unchanged. |
@@ -314,8 +317,13 @@ record is `plans/closure/deployment-packaging/008-status.md`.
 
 | Subsystem | Milestone | Status | Implementation plan | Dependencies / handoff note |
 |---|---|---|---|---|
-
-None.
+| Security hardening | M001 — provider request credential-header exclusion | ready | [M001](implementation/security-hardening/001-provider-request-credential-header-exclusion.md) | No dependencies; two header filters plus an observed-upstream test. |
+| Security hardening | M002 — security configuration truthfulness | ready | [M002](implementation/security-hardening/002-security-configuration-truthfulness.md) | No dependencies; keeps serde compatibility and reload classification unchanged. |
+| Security hardening | M003 — authentication event audit | ready | [M003](implementation/security-hardening/003-authentication-event-audit.md) | No hard dependencies; soft on M004 for the denial vocabulary; one additive migration. |
+| Security hardening | M004 — personal credential scope enforcement | ready | [M004](implementation/security-hardening/004-personal-credential-scope-enforcement.md) | Interface on the persisted scope vocabulary; soft on M003; stop for an ADR if review treats it as auth semantics. |
+| Security hardening | M005 — CI workflow pinning and least privilege | ready | [M005](implementation/security-hardening/005-ci-workflow-pinning-and-least-privilege.md) | No dependencies; four uncovered workflows plus a text-based guard. |
+| Security hardening | M007 — service-unit and HTTP response hardening | ready | [M007](implementation/security-hardening/007-service-unit-and-http-response-hardening.md) | No dependencies; needs a disposable systemd host for closure evidence. |
+| Security hardening | M009 — credential memory hygiene | ready | [M009](implementation/security-hardening/009-credential-memory-hygiene.md) | Interface on the already-resolved `zeroize`; deliberately partial scope. |
 
 Application boundary and retrieval closure audit (2026-11-10, baseline `e049025274a397d7799c3ae21ed106947c2a1572`, uncommitted): searched the application-boundary and retrieval roadmaps, their implementation plans, and the ready, active, and blocked registry tables. M001, M002, M003, and R002 are closed. M004 is conditionally closed with disposition `not measured` and authorizes no optimization. No registered successor exists in either subsystem. Nothing else was blocked on these milestones, so nothing is promoted. Tool-integration M003 and M004 stay conditionally closed as historical records; their open evidence conditions stay vacated. The blocked table stays empty of R001.
 
@@ -338,8 +346,8 @@ Unblock audit (on-prem member access, 2026-11-10): M001–M005 are closed by the
 
 | Subsystem | Milestone | Blocker |
 |---|---|---|
-
-None.
+| Security hardening | M006 — release artifact signature authority | Hard: an accepted ADR for the signature mechanism, key custody, rotation, and installer behavior. Operational: signing-key provisioning in the release environment. |
+| Security hardening | M008 — russh advisory resolution | Hard: an Eggress release permitting `russh >=0.65`, or an accepted ADR for vendoring a patched `0.62.x` or for removing the default `ssh` feature. No advisory exception is an acceptable path. |
 
 Unblock audit (application boundary, 2026-11-10, baseline `e049025274a397d7799c3ae21ed106947c2a1572`): ADR-0009 supersedes ADR-0007's gateway and hosted-execution decisions. Retrieval R001 is no longer a blocked handoff; R002 is the successor and is documentation only. Tool-integration M003 and M004 stay conditionally closed as historical records, and their open evidence conditions are vacated rather than promoted into new tool-integration work. Nothing else on the blocked table was waiting on R001. M004's missing shared host is an allowed `not measured` closure, not a registry block. The same-day closure audit above records M001–M003 and R002 closed and M004 conditionally closed. Nothing further is promoted.
 

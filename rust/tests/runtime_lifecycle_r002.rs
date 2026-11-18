@@ -31,7 +31,7 @@ fn provider_config() -> ProviderConfig {
         },
         headers: vec![ProviderStaticHeaderConfig {
             name: "x-secret".to_owned(),
-            value: Some("super-secret-api-key".to_owned()),
+            value: Some("super-secret-api-key".into()),
             value_env: None,
         }],
         accounts: Vec::new(),

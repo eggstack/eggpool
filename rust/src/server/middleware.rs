@@ -34,10 +34,22 @@ pub(super) async fn authenticate(
         // With the configured shared key present, an absent key cannot be
         // valid in either legacy-key or managed mode. Reject before the
         // access-state SQLite lookup.
+        state.record_security_event(
+            crate::security_events::SecurityEventCode::AgentTokenRejected,
+            crate::security_events::SecurityEventOutcome::Refused,
+            crate::security_events::SecurityPrincipalKind::AgentToken,
+            None,
+        );
         return unauthorized("Invalid or missing API key");
     }
     if token_candidate.is_some() && !crate::web_session::personal_token_attempt_allowed(token_peer)
     {
+        state.record_security_event(
+            crate::security_events::SecurityEventCode::AgentTokenThrottled,
+            crate::security_events::SecurityEventOutcome::Throttled,
+            crate::security_events::SecurityPrincipalKind::AgentToken,
+            None,
+        );
         return unauthorized("Invalid or missing personal API credential");
     }
     let access_state = match crate::identity::access_state(&state.database).await {
@@ -46,6 +58,12 @@ pub(super) async fn authenticate(
     };
     if legacy_server_key_allowed(Some(&access_state)) {
         if requires_browser_session(&path) {
+            state.record_security_event(
+                crate::security_events::SecurityEventCode::SessionRejected,
+                crate::security_events::SecurityEventOutcome::Refused,
+                crate::security_events::SecurityPrincipalKind::BrowserSession,
+                None,
+            );
             return unauthorized("Browser session required");
         }
         if !requires_auth(&path, request.method(), &state.server)
@@ -64,6 +82,12 @@ pub(super) async fn authenticate(
             }
             return next.run(request).await;
         }
+        state.record_security_event(
+            crate::security_events::SecurityEventCode::LegacySharedKeyRejected,
+            crate::security_events::SecurityEventOutcome::Refused,
+            crate::security_events::SecurityPrincipalKind::LegacySharedKey,
+            None,
+        );
         return unauthorized("Invalid or missing API key");
     }
     if personal_credential_allowed(&path)
@@ -71,15 +95,49 @@ pub(super) async fn authenticate(
     {
         match crate::identity::verify_api_token_principal(&state.database, token).await {
             Ok(Some(principal)) => {
+                if principal.kind == crate::identity::PrincipalKind::AgentToken
+                    && let Some(required_scope) = crate::identity::required_agent_scope(&path)
+                    && !principal.has_scope(required_scope)
+                {
+                    state.record_security_event(
+                        crate::security_events::SecurityEventCode::ScopeDenied,
+                        crate::security_events::SecurityEventOutcome::Denied,
+                        crate::security_events::SecurityPrincipalKind::AgentToken,
+                        principal.user_id.as_deref(),
+                    );
+                    return (
+                        StatusCode::FORBIDDEN,
+                        axum::Json(serde_json::json!({
+                            "detail": { "code": "required_scope_missing" }
+                        })),
+                    )
+                        .into_response();
+                }
                 let mut request = request;
                 request.extensions_mut().insert(principal);
                 return next.run(request).await;
             }
-            Ok(None) => crate::web_session::record_personal_token_failure(token_peer),
+            Ok(None) => {
+                state.record_security_event(
+                    crate::security_events::SecurityEventCode::AgentTokenRejected,
+                    crate::security_events::SecurityEventOutcome::Refused,
+                    crate::security_events::SecurityPrincipalKind::AgentToken,
+                    None,
+                );
+                crate::web_session::record_personal_token_failure(token_peer);
+            }
             Err(_) => return auth_unavailable(),
         }
     }
     if personal_credential_allowed(&path) && path != "/api/user-budget" {
+        if token_candidate.is_none() {
+            state.record_security_event(
+                crate::security_events::SecurityEventCode::AgentTokenRejected,
+                crate::security_events::SecurityEventOutcome::Refused,
+                crate::security_events::SecurityPrincipalKind::AgentToken,
+                None,
+            );
+        }
         return unauthorized("Invalid or missing personal API credential");
     }
 
@@ -90,11 +148,27 @@ pub(super) async fn authenticate(
         {
             return super::auth::sign_in_handoff_response();
         }
+        if token_candidate.is_none() {
+            state.record_security_event(
+                crate::security_events::SecurityEventCode::SessionRejected,
+                crate::security_events::SecurityEventOutcome::Refused,
+                crate::security_events::SecurityPrincipalKind::BrowserSession,
+                None,
+            );
+        }
         return unauthorized("Sign in required");
     };
     let principal = match crate::web_session::authenticate(&state.database, &session_token).await {
         Ok(Some(principal)) => principal,
-        Ok(None) => return unauthorized("Sign in required"),
+        Ok(None) => {
+            state.record_security_event(
+                crate::security_events::SecurityEventCode::SessionRejected,
+                crate::security_events::SecurityEventOutcome::Refused,
+                crate::security_events::SecurityPrincipalKind::BrowserSession,
+                None,
+            );
+            return unauthorized("Sign in required");
+        }
         Err(_) => return auth_unavailable(),
     };
     let account_surface = matches!(
@@ -115,11 +189,16 @@ pub(super) async fn authenticate(
         // A member is refused an administrative path with a page that names
         // the refusal and points at the member surface the member does have,
         // rather than a bare text body.
-        return (
+        state.record_security_event(
+            crate::security_events::SecurityEventCode::AdminAccessDenied,
+            crate::security_events::SecurityEventOutcome::Denied,
+            crate::security_events::SecurityPrincipalKind::BrowserSession,
+            Some(&principal.user_id),
+        );
+        return super::auth::session_html_response(
             StatusCode::FORBIDDEN,
-            axum::response::Html(super::auth::member_refusal_html()),
-        )
-            .into_response();
+            super::auth::member_refusal_html(),
+        );
     }
     if principal.must_change_password
         && !matches!(path.as_str(), "/account" | "/account/password" | "/logout")
@@ -134,13 +213,31 @@ pub(super) async fn authenticate(
         request.headers(),
         &state.server,
     );
-    if !super::auth::web_auth_transport_allowed(
+    let transport_allowed = super::auth::web_auth_transport_allowed(
         connection.map(|extension| &extension.0),
         request.headers(),
         &state.server,
-    ) || (is_unsafe_method(request.method())
-        && !super::auth::same_origin(request.headers(), secure))
-    {
+    );
+    let origin_allowed =
+        !is_unsafe_method(request.method()) || super::auth::same_origin(request.headers(), secure);
+    if !transport_allowed || !origin_allowed {
+        let (code, outcome) = if !transport_allowed {
+            (
+                crate::security_events::SecurityEventCode::TransportRejected,
+                crate::security_events::SecurityEventOutcome::Refused,
+            )
+        } else {
+            (
+                crate::security_events::SecurityEventCode::OriginRejected,
+                crate::security_events::SecurityEventOutcome::Denied,
+            )
+        };
+        state.record_security_event(
+            code,
+            outcome,
+            crate::security_events::SecurityPrincipalKind::BrowserSession,
+            Some(&principal.user_id),
+        );
         return (
             StatusCode::FORBIDDEN,
             "Cross-origin or insecure request rejected.",
@@ -769,16 +866,50 @@ mod tests {
 
     #[test]
     fn personal_credentials_are_limited_to_agent_surfaces() {
-        for path in [
-            "/v1/chat/completions",
-            "/v1/messages",
-            "/v1/responses",
-            "/v1/responses/compact",
-            "/v1/models",
-            "/api/integrations/v1/profile",
+        for (path, required) in [
+            (
+                "/v1/chat/completions",
+                crate::identity::RequiredAgentScope::Inference,
+            ),
+            (
+                "/v1/messages",
+                crate::identity::RequiredAgentScope::Inference,
+            ),
+            (
+                "/v1/responses",
+                crate::identity::RequiredAgentScope::Inference,
+            ),
+            (
+                "/v1/responses/compact",
+                crate::identity::RequiredAgentScope::Inference,
+            ),
+            (
+                "/v1/embeddings",
+                crate::identity::RequiredAgentScope::Inference,
+            ),
+            (
+                "/api/user-budget",
+                crate::identity::RequiredAgentScope::Inference,
+            ),
+            ("/v1/models", crate::identity::RequiredAgentScope::Discovery),
+            (
+                "/api/integrations/v1/profile",
+                crate::identity::RequiredAgentScope::Integrations,
+            ),
         ] {
             assert!(personal_credential_allowed(path), "{path}");
+            assert_eq!(
+                crate::identity::required_agent_scope(path),
+                Some(required),
+                "every registered agent surface has one required scope: {path}"
+            );
         }
+        assert!(personal_credential_allowed("/v1/unregistered"));
+        assert_eq!(
+            crate::identity::required_agent_scope("/v1/unregistered"),
+            None
+        );
+        assert_eq!(crate::identity::required_agent_scope("/v1/healthz"), None);
         for path in [
             "/",
             "/api/status",

@@ -3,6 +3,8 @@ Description=EggPool
 Documentation=https://github.com/eggstack/eggpool
 After=network-online.target
 Wants=network-online.target
+StartLimitIntervalSec=300
+StartLimitBurst=5
 
 [Service]
 Type=simple
@@ -15,23 +17,31 @@ ExecStart=/usr/local/bin/eggpool --config /etc/eggpool/config.toml serve
 # wired to any reload action.
 Restart=on-failure
 RestartSec=5
-StartLimitIntervalSec=300
-StartLimitBurst=5
 
 # Graceful shutdown
 TimeoutStopSec=30
 KillSignal=SIGTERM
 
-# Security hardening (note: MemoryDenyWriteExecute removed; PyTorch-style
-# runtimes in newer Python builds may legitimately need W^X relaxations).
+# Security hardening. MemoryDenyWriteExecute is intentionally omitted pending
+# separate compatibility qualification for the native runtime.
 NoNewPrivileges=yes
+CapabilityBoundingSet=
+AmbientCapabilities=
+UMask=0077
 ProtectSystem=strict
 ProtectHome=yes
 ReadWritePaths=/var/lib/eggpool /var/lib/eggpool/backups /var/log/eggpool
 PrivateTmp=yes
+PrivateDevices=yes
+ProtectClock=yes
+ProtectHostname=yes
+ProtectProc=invisible
+ProcSubset=pid
+ProtectKernelLogs=yes
 ProtectKernelTunables=yes
 ProtectKernelModules=yes
 ProtectControlGroups=yes
+RemoveIPC=yes
 RestrictSUIDSGID=yes
 RestrictNamespaces=yes
 RestrictRealtime=yes
@@ -40,8 +50,9 @@ LockPersonality=yes
 # Network
 RestrictAddressFamilies=AF_INET AF_INET6 AF_UNIX
 
-# System call filtering
-SystemCallFilter=@system-service
+# Exclude privileged, mount, and debug syscalls from the service allowlist.
+SystemCallFilter=@system-service ~@privileged ~@mount ~@debug
+SystemCallErrorNumber=EPERM
 SystemCallArchitectures=native
 
 # Environment

@@ -91,6 +91,29 @@ pub struct AdminAuditEntry {
     pub created_at: String,
 }
 
+pub(crate) struct SecurityEventAuditEntry {
+    pub(crate) window_start: String,
+    pub(crate) event_code: crate::security_events::SecurityEventCode,
+    pub(crate) outcome: crate::security_events::SecurityEventOutcome,
+    pub(crate) principal_kind: crate::security_events::SecurityPrincipalKind,
+    pub(crate) event_count: i64,
+    pub(crate) username: Option<String>,
+}
+
+impl std::fmt::Debug for SecurityEventAuditEntry {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        formatter
+            .debug_struct("SecurityEventAuditEntry")
+            .field("window_start", &self.window_start)
+            .field("event_code", &self.event_code)
+            .field("outcome", &self.outcome)
+            .field("principal_kind", &self.principal_kind)
+            .field("event_count", &self.event_count)
+            .field("has_username", &self.username.is_some())
+            .finish()
+    }
+}
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct UserRequestSummary {
     pub proxy_request_id: Option<String>,
@@ -353,6 +376,42 @@ impl PrincipalKind {
     }
 }
 
+/// The fixed endpoint families enforced for agent-token credentials:
+/// `inference` covers the five inference paths plus `/api/user-budget`,
+/// `discovery` covers `/v1/models`, and `integrations` covers the versioned
+/// integration profile. Browser sessions and legacy shared keys are outside
+/// this scope gate.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum RequiredAgentScope {
+    Inference,
+    Discovery,
+    Integrations,
+}
+
+impl RequiredAgentScope {
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            Self::Inference => "inference",
+            Self::Discovery => "discovery",
+            Self::Integrations => "integrations",
+        }
+    }
+}
+
+pub fn required_agent_scope(path: &str) -> Option<RequiredAgentScope> {
+    match path {
+        "/v1/chat/completions"
+        | "/v1/messages"
+        | "/v1/responses"
+        | "/v1/responses/compact"
+        | "/v1/embeddings"
+        | "/api/user-budget" => Some(RequiredAgentScope::Inference),
+        "/v1/models" => Some(RequiredAgentScope::Discovery),
+        "/api/integrations/v1/profile" => Some(RequiredAgentScope::Integrations),
+        _ => None,
+    }
+}
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct AuthenticatedPrincipal {
     pub user_id: Option<String>,
@@ -361,6 +420,12 @@ pub struct AuthenticatedPrincipal {
     pub scopes: Vec<String>,
     pub auth_epoch: Option<i64>,
     pub kind: PrincipalKind,
+}
+
+impl AuthenticatedPrincipal {
+    pub fn has_scope(&self, required: RequiredAgentScope) -> bool {
+        self.scopes.iter().any(|scope| scope == required.as_str())
+    }
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize)]
@@ -1131,6 +1196,69 @@ pub async fn admin_audit(
                     })
                 })?
                 .collect()
+        })
+        .await
+        .map_err(IdentityError::Database)
+}
+
+/// Return a newest-first, bounded projection for the administrator security
+/// events section. Usernames are resolved for display only and never stored in
+/// security-event rows.
+pub(crate) async fn security_event_audit(
+    database: &Database,
+    limit: usize,
+) -> Result<Vec<SecurityEventAuditEntry>, IdentityError> {
+    use crate::security_events::{SecurityEventCode, SecurityEventOutcome, SecurityPrincipalKind};
+    use tokio_rusqlite::rusqlite::types::Type;
+
+    let limit = limit.clamp(1, 500) as i64;
+    database
+        .call(move |connection| {
+            let mut statement = connection.prepare(
+                "SELECT strftime('%Y-%m-%d %H:%M:00', event.window_start, 'unixepoch'), \
+                        event.event_code, event.outcome, event.principal_kind, \
+                        event.event_count, users.username \
+                 FROM security_events AS event \
+                 LEFT JOIN users ON users.id = event.user_id \
+                 ORDER BY event.window_start DESC, event.id DESC LIMIT ?1",
+            )?;
+            statement
+                .query_map([limit], |row| {
+                    let code_text: String = row.get(1)?;
+                    let event_code = SecurityEventCode::parse(&code_text).ok_or_else(|| {
+                        tokio_rusqlite::rusqlite::Error::InvalidColumnType(
+                            1,
+                            "event_code".to_owned(),
+                            Type::Text,
+                        )
+                    })?;
+                    let outcome_text: String = row.get(2)?;
+                    let outcome = SecurityEventOutcome::parse(&outcome_text).ok_or_else(|| {
+                        tokio_rusqlite::rusqlite::Error::InvalidColumnType(
+                            2,
+                            "outcome".to_owned(),
+                            Type::Text,
+                        )
+                    })?;
+                    let principal_text: String = row.get(3)?;
+                    let principal_kind =
+                        SecurityPrincipalKind::parse(&principal_text).ok_or_else(|| {
+                            tokio_rusqlite::rusqlite::Error::InvalidColumnType(
+                                3,
+                                "principal_kind".to_owned(),
+                                Type::Text,
+                            )
+                        })?;
+                    Ok(SecurityEventAuditEntry {
+                        window_start: row.get(0)?,
+                        event_code,
+                        outcome,
+                        principal_kind,
+                        event_count: row.get(4)?,
+                        username: row.get(5)?,
+                    })
+                })?
+                .collect::<Result<Vec<_>, _>>()
         })
         .await
         .map_err(IdentityError::Database)

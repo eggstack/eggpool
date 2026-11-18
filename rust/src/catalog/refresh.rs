@@ -771,12 +771,16 @@ fn catalog_headers(
 ) -> Result<HeaderMap, String> {
     let mut headers = HeaderMap::new();
     for header in &provider.headers {
-        let value = header.value.clone().or_else(|| {
-            header
-                .value_env
-                .as_deref()
-                .and_then(|name| env::var(name).ok())
-        });
+        let value = header
+            .value
+            .as_ref()
+            .map(|secret| secret.expose_secret().to_owned())
+            .or_else(|| {
+                header
+                    .value_env
+                    .as_deref()
+                    .and_then(|name| env::var(name).ok())
+            });
         if let Some(value) = value {
             // The header name is config (secret-free); the value stays
             // redacted so a key pasted into a header value never lands in

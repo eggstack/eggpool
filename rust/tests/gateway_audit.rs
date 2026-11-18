@@ -172,7 +172,7 @@ async fn administrator_session_can_export_and_other_principals_cannot() {
         .await
         .expect("member session");
     let mut config = Config::default();
-    config.server.api_key = Some("audit-export-server-key".to_owned());
+    config.server.api_key = Some("audit-export-server-key".into());
     config.security.allow_insecure_web_auth = true;
     let router = app(database, config).await;
 

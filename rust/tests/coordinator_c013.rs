@@ -16,6 +16,7 @@ use eggpool::{
         WireResolver, WireResolverConfig, classify, parse_retry_after,
     },
     providers::ProviderClientPool,
+    request::{AdmissionOptions, admit_compact_request},
     wire::{
         ConfiguredWireProfile, WireCodecId, WireProfileDefinition, WireRuntime, WireSurface,
         ir::ClientSurface,
@@ -40,7 +41,12 @@ fn profile(surface: WireSurface, priority: u32) -> ConfiguredWireProfile {
             WireCodecId::AnthropicMessages,
             WireCodecId::AnthropicMessagesSse,
         ),
-        _ => unreachable!("C013 fixture only needs Chat and Messages"),
+        WireSurface::OpenaiResponses => (
+            WireCodecId::OpenaiResponses,
+            WireCodecId::OpenaiResponses,
+            WireCodecId::OpenaiResponsesSse,
+        ),
+        _ => unreachable!("C013 fixture only needs Chat, Messages, and Responses"),
     };
     ConfiguredWireProfile {
         definition: WireProfileDefinition {
@@ -422,7 +428,7 @@ async fn c013_wire_precedence_ttl_eviction_and_concurrency_are_bounded() {
 }
 
 #[tokio::test]
-async fn c013_attempt_submission_observes_native_alias_and_one_request() {
+async fn c013_attempt_submission_excludes_cookies_for_finite_streaming_and_compact() {
     let listener = tokio::net::TcpListener::bind((std::net::Ipv4Addr::LOCALHOST, 0))
         .await
         .expect("fixture listener");
@@ -430,39 +436,42 @@ async fn c013_attempt_submission_observes_native_alias_and_one_request() {
     let observed = Arc::new(Mutex::new(Vec::new()));
     let observed_by_server = Arc::clone(&observed);
     let server = tokio::spawn(async move {
-        let (mut socket, _) = listener.accept().await.expect("request");
-        let mut request = Vec::new();
-        let mut buffer = [0_u8; 1024];
-        loop {
-            let count = socket.read(&mut buffer).await.expect("request bytes");
-            request.extend_from_slice(&buffer[..count]);
-            if request.windows(4).any(|window| window == b"\r\n\r\n") {
-                break;
+        for _ in 0..3 {
+            let (mut socket, _) = listener.accept().await.expect("request");
+            let mut request = Vec::new();
+            let mut buffer = [0_u8; 1024];
+            loop {
+                let count = socket.read(&mut buffer).await.expect("request bytes");
+                request.extend_from_slice(&buffer[..count]);
+                if request.windows(4).any(|window| window == b"\r\n\r\n") {
+                    break;
+                }
             }
+            let header_end = request
+                .windows(4)
+                .position(|window| window == b"\r\n\r\n")
+                .unwrap()
+                + 4;
+            let head = String::from_utf8_lossy(&request[..header_end]);
+            let content_length = head
+                .lines()
+                .find_map(|line| {
+                    let (name, value) = line.split_once(':')?;
+                    name.eq_ignore_ascii_case("content-length")
+                        .then(|| value.trim().parse::<usize>().ok())
+                        .flatten()
+                })
+                .unwrap_or_default();
+            while request.len() < header_end + content_length {
+                let count = socket.read(&mut buffer).await.expect("body bytes");
+                request.extend_from_slice(&buffer[..count]);
+            }
+            observed_by_server.lock().unwrap().push(request);
+            socket
+                .write_all(b"HTTP/1.1 200 OK\r\ncontent-length: 2\r\nconnection: close\r\n\r\nok")
+                .await
+                .expect("response");
         }
-        let header_end = request
-            .windows(4)
-            .position(|window| window == b"\r\n\r\n")
-            .unwrap()
-            + 4;
-        let head = String::from_utf8_lossy(&request[..header_end]);
-        let content_length = head
-            .lines()
-            .find_map(|line| {
-                line.strip_prefix("content-length:")
-                    .or_else(|| line.strip_prefix("Content-Length:"))
-            })
-            .and_then(|value| value.trim().parse::<usize>().ok())
-            .unwrap_or_default();
-        while request.len() < header_end + content_length {
-            let count = socket.read(&mut buffer).await.expect("body bytes");
-            request.extend_from_slice(&buffer[..count]);
-        }
-        observed_by_server.lock().unwrap().push(request);
-        socket
-            .write_all(b"HTTP/1.1 200 OK\r\ncontent-length: 2\r\nconnection: close\r\n\r\nok")
-            .await
-            .expect("response");
     });
 
     let mut config = Config::default();
@@ -495,6 +504,14 @@ async fn c013_attempt_submission_observes_native_alias_and_one_request() {
             ..Default::default()
         },
     );
+    provider.wire_surfaces.insert(
+        "openai_responses".into(),
+        ProviderWireSurfaceConfig {
+            supports_remote_compaction_v1: true,
+            compact_path_template: Some("/v1/responses/compact".into()),
+            ..Default::default()
+        },
+    );
     config
         .providers
         .insert("provider-a".into(), provider.clone());
@@ -522,54 +539,150 @@ async fn c013_attempt_submission_observes_native_alias_and_one_request() {
     };
     let mut incoming = http::HeaderMap::new();
     incoming.insert("x-allowed", "forwarded".parse().unwrap());
-    incoming.insert("authorization", "client-secret".parse().unwrap());
+    incoming.insert("authorization", "client-only-fixture".parse().unwrap());
+    incoming.append("cookie", "first=fixture".parse().unwrap());
+    incoming.append("cookie", "second=fixture".parse().unwrap());
+    incoming.append("cookie2", "first=fixture".parse().unwrap());
+    incoming.append("cookie2", "second=fixture".parse().unwrap());
     incoming.insert("connection", "x-denied".parse().unwrap());
     incoming.insert("x-denied", "connection-nominated".parse().unwrap());
     incoming.insert("x-eggpool-route-session", "raw-session".parse().unwrap());
-    let attempt = builder
+
+    let finite = builder
         .prepare(AttemptInput {
-            identity,
-            provider,
+            identity: identity.clone(),
+            provider: provider.clone(),
             account_api_key: Some("synthetic-secret-sentinel".into()),
-            incoming_headers: incoming,
+            incoming_headers: incoming.clone(),
             request_id: Some("request-id".into()),
             correlation_id: Some("correlation-id".into()),
             raw_body: Bytes::from_static(br#"{"model":"canonical-alias","messages":[]}"#),
             client_surface: ClientSurface::ChatCompletions,
             profile: profile(WireSurface::OpenaiChatCompletions, 0),
             stream: false,
-            candidate_fingerprint: "fixture".into(),
+            candidate_fingerprint: "fixture-finite".into(),
         })
-        .expect("prepare");
-    assert_eq!(attempt.path, "/v1/provider-native/dispatch");
-    assert_eq!(
-        attempt.headers["authorization"],
-        "Bearer synthetic-secret-sentinel"
-    );
-    assert_eq!(attempt.headers["x-provider-static"], "provider");
-    assert_eq!(attempt.headers["x-surface-static"], "surface");
-    assert!(!attempt.headers.contains_key("x-denied"));
-    assert!(!attempt.headers.contains_key("x-eggpool-route-session"));
-    let mut evidence = builder.submit_once(attempt).await.expect("submit once");
-    assert_eq!(evidence.status, StatusCode::OK);
-    assert_eq!(
-        evidence.body.read_to_bytes(64).await.unwrap(),
-        Bytes::from_static(b"ok")
-    );
+        .expect("prepare finite");
+    let streaming = builder
+        .prepare(AttemptInput {
+            identity: identity.clone(),
+            provider: provider.clone(),
+            account_api_key: Some("synthetic-secret-sentinel".into()),
+            incoming_headers: incoming.clone(),
+            request_id: Some("request-id".into()),
+            correlation_id: Some("correlation-id".into()),
+            raw_body: Bytes::from_static(
+                br#"{"model":"canonical-alias","messages":[],"stream":true}"#,
+            ),
+            client_surface: ClientSurface::ChatCompletions,
+            profile: profile(WireSurface::OpenaiChatCompletions, 0),
+            stream: true,
+            candidate_fingerprint: "fixture-streaming".into(),
+        })
+        .expect("prepare streaming");
+    let compact_body = Bytes::from_static(br#"{"model":"canonical-alias","input":"history"}"#);
+    let compact_admission = admit_compact_request(
+        &compact_body,
+        AdmissionOptions {
+            client_surface: ClientSurface::Responses,
+            ..Default::default()
+        },
+    )
+    .expect("compact admission");
+    let compact = builder
+        .prepare_compact(
+            AttemptInput {
+                identity,
+                provider,
+                account_api_key: Some("synthetic-secret-sentinel".into()),
+                incoming_headers: incoming,
+                request_id: Some("request-id".into()),
+                correlation_id: Some("correlation-id".into()),
+                raw_body: compact_body,
+                client_surface: ClientSurface::Responses,
+                profile: profile(WireSurface::OpenaiResponses, 0),
+                stream: false,
+                candidate_fingerprint: "fixture-compact".into(),
+            },
+            &compact_admission,
+        )
+        .expect("prepare compact");
+
+    assert_eq!(finite.path, "/v1/provider-native/dispatch");
+    assert_eq!(streaming.path, "/v1/provider-native/stream");
+    assert_eq!(compact.path, "/v1/responses/compact");
+    for attempt in [&finite, &streaming, &compact] {
+        assert_eq!(attempt.headers.get_all("authorization").iter().count(), 1);
+        assert!(attempt.headers["authorization"] == "Bearer synthetic-secret-sentinel");
+        assert!(!attempt.headers.contains_key("cookie"));
+        assert!(!attempt.headers.contains_key("cookie2"));
+        assert!(!attempt.headers.contains_key("x-denied"));
+        assert!(!attempt.headers.contains_key("x-eggpool-route-session"));
+        assert_eq!(attempt.headers["x-provider-static"], "provider");
+    }
+    assert_eq!(finite.headers["x-surface-static"], "surface");
+    assert_eq!(streaming.headers["x-surface-static"], "surface");
+
+    for attempt in [finite, streaming, compact] {
+        let mut evidence = builder.submit_once(attempt).await.expect("submit once");
+        assert_eq!(evidence.status, StatusCode::OK);
+        assert_eq!(
+            evidence.body.read_to_bytes(64).await.unwrap(),
+            Bytes::from_static(b"ok")
+        );
+        assert!(!format!("{evidence:?}").contains("synthetic-secret-sentinel"));
+    }
     server.await.expect("server");
-    let request = observed.lock().unwrap().pop().expect("observed request");
-    let request_text = String::from_utf8_lossy(&request);
-    assert!(request_text.starts_with("POST /v1/provider-native/dispatch HTTP/1.1"));
-    assert!(request_text.contains("x-allowed: forwarded"));
-    assert!(request_text.contains("x-request-id: request-id"));
-    assert!(request_text.contains("x-correlation-id: correlation-id"));
-    let body = String::from_utf8_lossy(
-        &request[request
-            .windows(4)
-            .position(|window| window == b"\r\n\r\n")
-            .unwrap()
-            + 4..],
-    );
-    assert!(body.contains("provider-native"));
-    assert!(!format!("{evidence:?}").contains("synthetic-secret-sentinel"));
+
+    let observed = observed.lock().unwrap();
+    assert_eq!(observed.len(), 3);
+    for (request, expected_path) in observed.iter().zip([
+        "/v1/provider-native/dispatch",
+        "/v1/provider-native/stream",
+        "/v1/responses/compact",
+    ]) {
+        let request_text = String::from_utf8_lossy(request);
+        let request_headers = request_text
+            .split_once("\r\n\r\n")
+            .expect("request header terminator")
+            .0;
+        assert!(request_headers.starts_with(&format!("POST {expected_path} HTTP/1.1")));
+        assert!(
+            request_headers
+                .lines()
+                .any(|line| line == "x-allowed: forwarded")
+        );
+        assert!(
+            request_headers
+                .lines()
+                .any(|line| line == "x-request-id: request-id")
+        );
+        assert!(
+            request_headers
+                .lines()
+                .any(|line| line == "x-correlation-id: correlation-id")
+        );
+        for blocked in ["cookie", "cookie2", "x-denied", "x-eggpool-route-session"] {
+            assert!(!request_headers.lines().any(|line| {
+                line.split_once(':')
+                    .is_some_and(|(name, _)| name.eq_ignore_ascii_case(blocked))
+            }));
+        }
+        let authorization: Vec<_> = request_headers
+            .lines()
+            .filter_map(|line| {
+                let (name, value) = line.split_once(':')?;
+                name.eq_ignore_ascii_case("authorization")
+                    .then_some(value.trim())
+            })
+            .collect();
+        assert_eq!(authorization.len(), 1);
+        assert!(authorization[0] == "Bearer synthetic-secret-sentinel");
+    }
+    let finite_request_text = String::from_utf8_lossy(&observed[0]);
+    let finite_body = finite_request_text
+        .split_once("\r\n\r\n")
+        .expect("finite request body")
+        .1;
+    assert!(finite_body.contains("provider-native"));
 }

@@ -9,7 +9,6 @@ host = "0.0.0.0"
 port = 11300
 # api_key = "ep_..." # Auto-generated on first `configsetup`; use `eggpool newkey` to regenerate
 log_level = "INFO"
-access_log = false
 # Retained for configuration compatibility and runtime diagnostics. EggPool
 # currently runs on Tokio's current-thread runtime; this value does not select
 # Tokio worker threads. Use connection-pool and bounded-writer settings for
@@ -452,8 +451,6 @@ cleanup_max_rows_per_pass = 5000
 # cleanup_max_rows_per_pass = 5000
 
 [security]
-allowed_hosts = []
-cors_origins = []
 # Honor forwarded client-attribution headers only when the immediate peer is
 # listed here. For browser login over proxy-terminated HTTPS, EggPool trusts
 # one X-Forwarded-Proto: https from an exact listed peer IP. Browser sign-in
@@ -473,8 +470,6 @@ trusted_proxies = []
 # Set true only for a deliberately insecure development deployment. Remote
 # browser authentication otherwise requires direct HTTPS or a trusted proxy.
 allow_insecure_web_auth = false
-redact_headers = ["authorization", "x-api-key"]
-persist_redacted_error_detail = false
 
 # ─── Automatic Backups ────────────────────────────────────────────────
 # EggPool can create automatic daily backups. Archives are

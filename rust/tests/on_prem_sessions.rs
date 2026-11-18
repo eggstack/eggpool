@@ -32,6 +32,19 @@ async fn database() -> (tempfile::TempDir, Database) {
     (directory, database)
 }
 
+async fn reopen_database(directory: &tempfile::TempDir) -> Database {
+    Database::open(DatabaseConfig {
+        path: directory
+            .path()
+            .join("eggpool.sqlite3")
+            .to_string_lossy()
+            .into_owned(),
+        ..DatabaseConfig::default()
+    })
+    .await
+    .expect("database reopens after server shutdown")
+}
+
 async fn create_admin(database: &Database) -> (String, String) {
     identity::mark_fresh_uninitialized(database).await.unwrap();
     let (user, credential) =
@@ -340,6 +353,66 @@ async fn http_request(address: std::net::SocketAddr, raw: &str) -> String {
     String::from_utf8_lossy(&response).into_owned()
 }
 
+async fn bearer_request(
+    address: std::net::SocketAddr,
+    method: &str,
+    path: &str,
+    body: &str,
+    token: &str,
+) -> String {
+    let body_headers = if body.is_empty() {
+        String::new()
+    } else {
+        format!(
+            "Content-Type: application/json\r\nContent-Length: {}\r\n",
+            body.len()
+        )
+    };
+    http_request(
+        address,
+        &format!(
+            "{method} {path} HTTP/1.1\r\nHost: {address}\r\nAuthorization: Bearer {token}\r\n{body_headers}Connection: close\r\n\r\n{body}"
+        ),
+    )
+    .await
+}
+
+fn assert_html_security_headers(response: &str) {
+    let headers = response
+        .split_once("\r\n\r\n")
+        .expect("HTTP response includes headers and body")
+        .0
+        .to_ascii_lowercase();
+    for expected in [
+        "x-content-type-options: nosniff",
+        "referrer-policy: no-referrer",
+        "x-frame-options: deny",
+        "content-security-policy: frame-ancestors 'none'; base-uri 'none'; form-action 'self'",
+    ] {
+        assert!(headers.contains(expected), "missing {expected}: {response}");
+    }
+}
+
+async fn set_agent_scopes(database: &Database, token: &str, scopes: &'static str) {
+    let principal = identity::verify_api_token_principal(database, token)
+        .await
+        .expect("issued token verifies")
+        .expect("issued token is active");
+    let credential_id = principal
+        .credential_id
+        .expect("agent token has a credential id");
+    database
+        .call(move |connection| {
+            connection.execute(
+                "UPDATE user_credentials SET scopes = ?1 WHERE id = ?2 AND revoked_at IS NULL",
+                (scopes, credential_id),
+            )?;
+            Ok(())
+        })
+        .await
+        .expect("test fixture narrows token scopes");
+}
+
 fn cookie(response: &str, name: &str) -> String {
     response
         .lines()
@@ -364,7 +437,7 @@ async fn legacy_public_dashboard_stays_available_without_a_sign_in_redirect() {
     let process = ProcessRuntime::new(database.clone()).expect("process runtime");
     let mut config = Config::default();
     config.server.host = "127.0.0.1".to_owned();
-    config.server.api_key = Some("legacy-server-key-0123456789".to_owned());
+    config.server.api_key = Some("legacy-server-key-0123456789".into());
     config.dashboard.enabled = true;
     config.dashboard.public = true;
     let candidate = RuntimeGenerationFactory::prepare(
@@ -378,6 +451,10 @@ async fn legacy_public_dashboard_stays_available_without_a_sign_in_redirect() {
     let manager = Arc::new(RuntimeManager::new(
         candidate.transfer().expect("generation transfer"),
     ));
+    process
+        .install_initial_tasks((*manager).clone(), &config)
+        .await
+        .expect("tasks install");
     let runtime = ServerRuntime::new(process, manager, config);
     let handle = runtime.handle();
     let listener = TcpListener::bind(("127.0.0.1", 0)).await.expect("listener");
@@ -396,9 +473,267 @@ async fn legacy_public_dashboard_stays_available_without_a_sign_in_redirect() {
         "{dashboard}"
     );
 
+    let legacy_models = bearer_request(
+        address,
+        "GET",
+        "/v1/models",
+        "",
+        "legacy-server-key-0123456789",
+    )
+    .await;
+    assert!(
+        legacy_models.starts_with("HTTP/1.1 200"),
+        "legacy shared-key access is outside the agent-scope gate: {legacy_models}"
+    );
+    let invalid_legacy_key = bearer_request(
+        address,
+        "GET",
+        "/api/status",
+        "",
+        "invalid-legacy-shared-key-0123456789",
+    )
+    .await;
+    assert!(
+        invalid_legacy_key.starts_with("HTTP/1.1 401"),
+        "invalid legacy shared key is refused: {invalid_legacy_key}"
+    );
+    let legacy_admin_audit = bearer_request(
+        address,
+        "GET",
+        "/admin/audit",
+        "",
+        "legacy-server-key-0123456789",
+    )
+    .await;
+    assert!(
+        legacy_admin_audit.starts_with("HTTP/1.1 401"),
+        "legacy mode still requires a browser session for admin paths: {legacy_admin_audit}"
+    );
+
     handle.request_shutdown(ShutdownReason::Requested);
-    task.await.unwrap().unwrap();
-    database.close().await.unwrap();
+    let shutdown = task.await.unwrap().unwrap();
+    assert!(
+        shutdown.database_closed,
+        "server closes its process database"
+    );
+    let reopened = reopen_database(&_directory).await;
+    let legacy_session_refusals: i64 = reopened
+        .call(|connection| {
+            connection.query_row(
+                "SELECT COALESCE(SUM(event_count), 0) FROM security_events \
+                 WHERE event_code = 'session_rejected' AND principal_kind = 'browser_session'",
+                [],
+                |row| row.get(0),
+            )
+        })
+        .await
+        .expect("legacy session refusal audit is durable");
+    assert!(
+        legacy_session_refusals >= 1,
+        "legacy browser-session refusal was recorded"
+    );
+    let legacy_key_refusals: i64 = reopened
+        .call(|connection| {
+            connection.query_row(
+                "SELECT COALESCE(SUM(event_count), 0) FROM security_events \
+                 WHERE event_code = 'legacy_shared_key_rejected' \
+                   AND outcome = 'refused' \
+                   AND principal_kind = 'legacy_shared_key' \
+                   AND user_id IS NULL",
+                [],
+                |row| row.get(0),
+            )
+        })
+        .await
+        .expect("legacy key refusal audit is durable");
+    assert_eq!(
+        legacy_key_refusals, 1,
+        "invalid legacy shared-key refusal was recorded without a user identifier"
+    );
+    reopened.close().await.unwrap();
+}
+
+#[tokio::test]
+async fn agent_scope_enforcement_is_token_only_and_preserves_all_mapped_paths() {
+    let (_directory, database) = database().await;
+    let (admin_id, full_scope_token) = create_admin(&database).await;
+    identity::enable_managed(&database, &admin_id)
+        .await
+        .unwrap();
+    let inference_token =
+        identity::issue_personal_api_token(&database, &admin_id, &admin_id, "inference-only")
+            .await
+            .expect("issue inference-only fixture");
+    let discovery_token =
+        identity::issue_personal_api_token(&database, &admin_id, &admin_id, "discovery-only")
+            .await
+            .expect("issue discovery-only fixture");
+    set_agent_scopes(&database, &inference_token.token, "inference").await;
+    set_agent_scopes(&database, &discovery_token.token, "discovery").await;
+
+    let process = ProcessRuntime::new(database.clone()).expect("process runtime");
+    let mut config = Config::default();
+    config.server.host = "127.0.0.1".to_owned();
+    config.server.api_key = None;
+    config.dashboard.enabled = true;
+    let candidate = RuntimeGenerationFactory::prepare(
+        &process,
+        config.clone(),
+        "scope-enforcement-test".to_owned(),
+        1,
+    )
+    .await
+    .expect("initial generation");
+    let manager = Arc::new(RuntimeManager::new(
+        candidate.transfer().expect("generation transfer"),
+    ));
+    process
+        .install_initial_tasks((*manager).clone(), &config)
+        .await
+        .expect("tasks install");
+    let runtime = ServerRuntime::new(process, manager, config);
+    let handle = runtime.handle();
+    let listener = TcpListener::bind(("127.0.0.1", 0)).await.expect("listener");
+    let address = listener.local_addr().unwrap();
+    let task = tokio::spawn(async move { runtime.serve_listener(listener).await });
+
+    let inference_paths = [
+        ("POST", "/v1/chat/completions", "not-json"),
+        ("POST", "/v1/messages", "not-json"),
+        ("POST", "/v1/responses", "not-json"),
+        ("POST", "/v1/responses/compact", "not-json"),
+        ("POST", "/v1/embeddings", "not-json"),
+        ("GET", "/api/user-budget", ""),
+    ];
+    for token in [&full_scope_token, &inference_token.token] {
+        for (method, path, body) in inference_paths {
+            let response = bearer_request(address, method, path, body, token).await;
+            assert!(
+                !response.starts_with("HTTP/1.1 403"),
+                "inference scope must permit {path}: {response}"
+            );
+        }
+    }
+
+    let full_models = bearer_request(address, "GET", "/v1/models", "", &full_scope_token).await;
+    assert!(full_models.starts_with("HTTP/1.1 200"), "{full_models}");
+    let full_profile = bearer_request(
+        address,
+        "GET",
+        "/api/integrations/v1/profile",
+        "",
+        &full_scope_token,
+    )
+    .await;
+    assert!(
+        !full_profile.starts_with("HTTP/1.1 403"),
+        "full scope retains integration-profile access: {full_profile}"
+    );
+
+    let inference_models =
+        bearer_request(address, "GET", "/v1/models", "", &inference_token.token).await;
+    assert_scope_denial(&inference_models, "discovery", &inference_token.token);
+    let inference_profile = bearer_request(
+        address,
+        "GET",
+        "/api/integrations/v1/profile",
+        "",
+        &inference_token.token,
+    )
+    .await;
+    assert_scope_denial(&inference_profile, "integrations", &inference_token.token);
+
+    let unknown = bearer_request(
+        address,
+        "GET",
+        "/v1/not-a-route",
+        "",
+        &discovery_token.token,
+    )
+    .await;
+    assert!(
+        unknown.starts_with("HTTP/1.1 404"),
+        "unknown route stays 404: {unknown}"
+    );
+    let requests_before_denial: i64 = database
+        .call(|connection| {
+            connection.query_row("SELECT COUNT(*) FROM requests", [], |row| row.get(0))
+        })
+        .await
+        .expect("request count before scope denial");
+    let peer = Some("127.0.0.1".parse().expect("loopback IP"));
+    let throttle_was_allowed = web_session::personal_token_attempt_allowed(peer);
+    let discovery_inference = bearer_request(
+        address,
+        "POST",
+        "/v1/chat/completions",
+        "not-json",
+        &discovery_token.token,
+    )
+    .await;
+    assert_scope_denial(&discovery_inference, "inference", &discovery_token.token);
+    let requests_after_denial: i64 = database
+        .call(|connection| {
+            connection.query_row("SELECT COUNT(*) FROM requests", [], |row| row.get(0))
+        })
+        .await
+        .expect("request count after scope denial");
+    assert_eq!(requests_after_denial, requests_before_denial);
+    assert_eq!(
+        web_session::personal_token_attempt_allowed(peer),
+        throttle_was_allowed,
+        "scope denial does not consume token-throttle budget"
+    );
+    assert!(
+        identity::verify_api_token_principal(&database, &discovery_token.token)
+            .await
+            .expect("token remains verifiable")
+            .is_some(),
+        "scope denial does not revoke the token"
+    );
+    let discovery_models =
+        bearer_request(address, "GET", "/v1/models", "", &discovery_token.token).await;
+    assert!(
+        discovery_models.starts_with("HTTP/1.1 200"),
+        "{discovery_models}"
+    );
+
+    handle.request_shutdown(ShutdownReason::Requested);
+    let shutdown = task.await.unwrap().unwrap();
+    assert!(
+        shutdown.database_closed,
+        "server closes its process database"
+    );
+    let reopened = reopen_database(&_directory).await;
+    let scope_events: i64 = reopened
+        .call(|connection| {
+            connection.query_row(
+                "SELECT COALESCE(SUM(event_count), 0) FROM security_events WHERE event_code = 'scope_denied'",
+                [],
+                |row| row.get(0),
+            )
+        })
+        .await
+        .expect("scope-denial event is durable");
+    assert!(
+        scope_events >= 3,
+        "scope denials were recorded: {scope_events}"
+    );
+    reopened.close().await.unwrap();
+}
+
+fn assert_scope_denial(response: &str, denied_scope: &str, token: &str) {
+    assert!(response.starts_with("HTTP/1.1 403"), "{response}");
+    let body = response
+        .split_once("\r\n\r\n")
+        .expect("HTTP response includes a body")
+        .1;
+    assert!(body.contains("required_scope_missing"), "{body}");
+    assert!(
+        !body.contains(denied_scope),
+        "scope names are not echoed: {body}"
+    );
+    assert!(!body.contains(token), "token values are not echoed: {body}");
 }
 
 #[tokio::test]
@@ -512,7 +847,38 @@ async fn managed_browser_login_account_csrf_and_logout_work_over_loopback() {
     )
     .await;
     assert!(login_page.starts_with("HTTP/1.1 200"), "{login_page}");
+    assert_html_security_headers(&login_page);
     assert!(login_page.contains("name=\"password\""), "{login_page}");
+
+    let bad_origin_form = "username=admin&password=not-used";
+    let bad_origin_login = http_request(address, &format!(
+        "POST /login HTTP/1.1\r\nHost: {address}\r\nOrigin: https://cross-origin.invalid\r\nContent-Type: application/x-www-form-urlencoded\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{bad_origin_form}", bad_origin_form.len()
+    )).await;
+    assert!(
+        bad_origin_login.starts_with("HTTP/1.1 403"),
+        "{bad_origin_login}"
+    );
+
+    let failed_form = "username=admin&password=deliberately+incorrect+password";
+    let failed_login = http_request(address, &format!(
+        "POST /login HTTP/1.1\r\nHost: {address}\r\nOrigin: {origin}\r\nContent-Type: application/x-www-form-urlencoded\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{failed_form}", failed_form.len()
+    )).await;
+    assert!(failed_login.starts_with("HTTP/1.1 401"), "{failed_login}");
+
+    for _ in 0..10 {
+        web_session::record_login_failure(
+            "security-event-throttle",
+            Some("127.0.0.1".parse().unwrap()),
+        );
+    }
+    let throttle_form = "username=security-event-throttle&password=not-checked";
+    let throttled_login = http_request(address, &format!(
+        "POST /login HTTP/1.1\r\nHost: {address}\r\nOrigin: {origin}\r\nContent-Type: application/x-www-form-urlencoded\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{throttle_form}", throttle_form.len()
+    )).await;
+    assert!(
+        throttled_login.starts_with("HTTP/1.1 429"),
+        "{throttled_login}"
+    );
 
     let form = "username=admin&password=M002+strong+test+passphrase";
     let login = http_request(address, &format!(
@@ -530,6 +896,7 @@ async fn managed_browser_login_account_csrf_and_logout_work_over_loopback() {
 
     let account = http_request(address, &format!("GET /account HTTP/1.1\r\nHost: {address}\r\nCookie: {cookie_header}\r\nConnection: close\r\n\r\n")).await;
     assert!(account.starts_with("HTTP/1.1 200"), "{account}");
+    assert_html_security_headers(&account);
     assert!(
         account
             .to_ascii_lowercase()
@@ -598,9 +965,115 @@ async fn managed_browser_login_account_csrf_and_logout_work_over_loopback() {
 
     let stale = http_request(address, &format!("GET /account HTTP/1.1\r\nHost: {address}\r\nCookie: {cookie_header}\r\nConnection: close\r\n\r\n")).await;
     assert!(stale.starts_with("HTTP/1.1 401"), "{stale}");
+
+    let expected_codes = [
+        "sign_in_succeeded",
+        "sign_in_failed",
+        "sign_in_throttled",
+        "csrf_rejected",
+        "origin_rejected",
+        "session_rejected",
+        "agent_token_rejected",
+    ];
+    let events = tokio::time::timeout(Duration::from_secs(5), async {
+        loop {
+            let rows: Vec<(String, String, String, Option<String>, i64)> = database
+                .call(|connection| {
+                    let mut statement = connection.prepare(
+                        "SELECT event_code, outcome, principal_kind, user_id, event_count FROM security_events",
+                    )?;
+                    statement
+                        .query_map([], |row| {
+                            Ok((row.get(0)?, row.get(1)?, row.get(2)?, row.get(3)?, row.get(4)?))
+                        })?
+                        .collect::<Result<Vec<_>, _>>()
+                })
+                .await
+                .expect("security events are readable");
+            if expected_codes
+                .iter()
+                .all(|code| rows.iter().any(|row| row.0 == *code))
+            {
+                break rows;
+            }
+            tokio::time::sleep(Duration::from_millis(25)).await;
+        }
+    })
+    .await
+    .expect("process-owned writer drains the event queue");
+    for code in expected_codes {
+        assert!(
+            events.iter().any(|row| row.0 == code),
+            "missing {code}: {events:?}"
+        );
+    }
+    assert!(events.iter().any(|row| {
+        row.0 == "sign_in_failed" && row.1 == "refused" && row.2 == "anonymous" && row.4 == 1
+    }));
+    assert!(events.iter().any(|row| {
+        row.0 == "sign_in_throttled" && row.1 == "throttled" && row.2 == "anonymous"
+    }));
+    assert!(events.iter().any(|row| {
+        row.0 == "sign_in_succeeded" && row.1 == "success" && row.2 == "browser_session"
+    }));
+    let event_columns: Vec<String> = database
+        .call(|connection| {
+            let mut statement = connection.prepare("PRAGMA table_info(security_events)")?;
+            statement
+                .query_map([], |row| row.get(1))?
+                .collect::<Result<Vec<_>, _>>()
+        })
+        .await
+        .unwrap();
+    assert_eq!(
+        event_columns,
+        vec![
+            "id",
+            "window_start",
+            "event_code",
+            "outcome",
+            "principal_kind",
+            "user_id",
+            "event_count"
+        ]
+        .into_iter()
+        .map(str::to_owned)
+        .collect::<Vec<_>>()
+    );
+    let serialized_events = format!("{events:?}");
+    for secret in [
+        "M002 strong test passphrase",
+        "deliberately incorrect password",
+        "not-checked",
+        &agent_token,
+        &session,
+    ] {
+        assert!(!serialized_events.contains(secret));
+    }
+
     handle.request_shutdown(ShutdownReason::Requested);
     task.await.unwrap().unwrap();
+    let persisted_path = _directory.path().join("eggpool.sqlite3");
     database.close().await.unwrap();
+
+    let reopened = Database::open(DatabaseConfig {
+        path: persisted_path.to_string_lossy().into_owned(),
+        ..DatabaseConfig::default()
+    })
+    .await
+    .expect("database reopens after server shutdown");
+    MigrationRunner::new(&reopened)
+        .run()
+        .await
+        .expect("existing event schema survives restart");
+    let persisted_events: i64 = reopened
+        .call(|connection| {
+            connection.query_row("SELECT COUNT(*) FROM security_events", [], |row| row.get(0))
+        })
+        .await
+        .expect("security events survive reopen");
+    assert!(persisted_events > 0, "shutdown flush persists audit rows");
+    reopened.close().await.unwrap();
 }
 
 #[tokio::test]
@@ -737,7 +1210,7 @@ async fn browser_sessions_can_read_scoped_user_budget_api() {
     let process = ProcessRuntime::new(database.clone()).expect("process runtime");
     let mut config = Config::default();
     config.server.host = "127.0.0.1".to_owned();
-    config.server.api_key = Some("configured-shared-key-for-budget-api-test".to_owned());
+    config.server.api_key = Some("configured-shared-key-for-budget-api-test".into());
     config.dashboard.enabled = true;
     config.dashboard.public = true;
     let candidate = RuntimeGenerationFactory::prepare(
@@ -833,7 +1306,7 @@ async fn token_guess_throttle_runs_before_access_state_and_database_lookup() {
     let process = ProcessRuntime::new(database.clone()).expect("process runtime");
     let mut config = Config::default();
     config.server.host = "127.0.0.1".to_owned();
-    config.server.api_key = Some("legacy-shared-key-for-test-only".to_owned());
+    config.server.api_key = Some("legacy-shared-key-for-test-only".into());
     config.dashboard.enabled = true;
     config.dashboard.public = true;
     let candidate =
@@ -886,6 +1359,158 @@ async fn token_guess_throttle_runs_before_access_state_and_database_lookup() {
         database.stats().calls,
         before_blocked,
         "the exhausted peer bucket rejects before any SQLite operation"
+    );
+
+    handle.request_shutdown(ShutdownReason::Requested);
+    task.await.unwrap().unwrap();
+    database.close().await.unwrap();
+}
+
+#[tokio::test]
+async fn agent_token_scopes_gate_only_the_documented_agent_surfaces() {
+    let (_directory, database) = database().await;
+    let (admin_id, _) = create_admin(&database).await;
+    identity::enable_managed(&database, &admin_id)
+        .await
+        .unwrap();
+    let all_scopes =
+        identity::issue_personal_api_token(&database, &admin_id, &admin_id, "scope matrix full")
+            .await
+            .unwrap();
+    let narrowed = identity::issue_personal_api_token(
+        &database,
+        &admin_id,
+        &admin_id,
+        "scope matrix narrowed",
+    )
+    .await
+    .unwrap();
+
+    let process = ProcessRuntime::new(database.clone()).expect("process runtime");
+    let mut config = Config::default();
+    config.server.host = "127.0.0.1".to_owned();
+    config.server.api_key = None;
+    config.dashboard.enabled = true;
+    config.dashboard.public = true;
+    let candidate = RuntimeGenerationFactory::prepare(
+        &process,
+        config.clone(),
+        "agent-scope-test".to_owned(),
+        1,
+    )
+    .await
+    .expect("initial generation");
+    let manager = Arc::new(RuntimeManager::new(
+        candidate.transfer().expect("generation transfer"),
+    ));
+    process
+        .install_initial_tasks((*manager).clone(), &config)
+        .await
+        .expect("process tasks install");
+    let runtime = ServerRuntime::new(process, manager, config);
+    let handle = runtime.handle();
+    let listener = TcpListener::bind(("127.0.0.1", 0)).await.unwrap();
+    let address = listener.local_addr().unwrap();
+    let task = tokio::spawn(async move { runtime.serve_listener(listener).await });
+
+    let all_scope_surfaces = [
+        ("POST", "/v1/chat/completions", "{}"),
+        ("POST", "/v1/messages", "{}"),
+        ("POST", "/v1/responses", "{}"),
+        ("POST", "/v1/responses/compact", "{}"),
+        ("POST", "/v1/embeddings", "{}"),
+        ("GET", "/v1/models", ""),
+        ("GET", "/api/user-budget", ""),
+        ("GET", "/api/integrations/v1/profile", ""),
+    ];
+    for (method, path, body) in all_scope_surfaces {
+        let response = bearer_request(address, method, path, body, &all_scopes.token).await;
+        assert!(
+            !response.contains("required_scope_missing"),
+            "full-scope token retains access to {path}: {response}"
+        );
+    }
+
+    set_agent_scopes(&database, &narrowed.token, "inference").await;
+    let budget = bearer_request(address, "GET", "/api/user-budget", "", &narrowed.token).await;
+    assert!(budget.starts_with("HTTP/1.1 200"), "{budget}");
+    let inference = bearer_request(
+        address,
+        "POST",
+        "/v1/chat/completions",
+        "{}",
+        &narrowed.token,
+    )
+    .await;
+    assert!(!inference.contains("required_scope_missing"), "{inference}");
+    for path in ["/v1/models", "/api/integrations/v1/profile"] {
+        let denied = bearer_request(address, "GET", path, "", &narrowed.token).await;
+        assert!(denied.starts_with("HTTP/1.1 403"), "{denied}");
+        assert!(
+            denied.contains("required_scope_missing"),
+            "scope denial has a typed code: {denied}"
+        );
+        for scope in ["inference", "discovery", "integrations"] {
+            assert!(
+                !denied.contains(scope),
+                "response must not echo scopes: {denied}"
+            );
+        }
+    }
+    assert!(
+        identity::verify_api_token_principal(&database, &narrowed.token)
+            .await
+            .unwrap()
+            .is_some(),
+        "scope denials neither revoke the token nor consume token-failure state"
+    );
+
+    set_agent_scopes(&database, &narrowed.token, "discovery").await;
+    let models = bearer_request(address, "GET", "/v1/models", "", &narrowed.token).await;
+    assert!(models.starts_with("HTTP/1.1 200"), "{models}");
+    let denied_inference = bearer_request(
+        address,
+        "POST",
+        "/v1/chat/completions",
+        "{}",
+        &narrowed.token,
+    )
+    .await;
+    assert!(
+        denied_inference.starts_with("HTTP/1.1 403"),
+        "{denied_inference}"
+    );
+    assert!(
+        denied_inference.contains("required_scope_missing"),
+        "{denied_inference}"
+    );
+
+    set_agent_scopes(&database, &narrowed.token, "integrations").await;
+    let profile = bearer_request(
+        address,
+        "GET",
+        "/api/integrations/v1/profile",
+        "",
+        &narrowed.token,
+    )
+    .await;
+    assert!(!profile.contains("required_scope_missing"), "{profile}");
+    let unknown = bearer_request(address, "GET", "/v1/not-a-route", "", &narrowed.token).await;
+    assert!(unknown.starts_with("HTTP/1.1 404"), "{unknown}");
+    assert!(!unknown.contains("required_scope_missing"), "{unknown}");
+
+    let session = web_session::issue(&database, &admin_id).await.unwrap();
+    let browser_budget = http_request(
+        address,
+        &format!(
+            "GET /api/user-budget HTTP/1.1\r\nHost: {address}\r\nCookie: eggpool_session={}\r\nConnection: close\r\n\r\n",
+            session.session_token
+        ),
+    )
+    .await;
+    assert!(
+        browser_budget.starts_with("HTTP/1.1 200"),
+        "browser-session budget access remains unchanged: {browser_budget}"
     );
 
     handle.request_shutdown(ShutdownReason::Requested);

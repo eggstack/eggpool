@@ -237,7 +237,7 @@ async fn reload_matrix_matches_r001_and_keeps_task_state_transactional() {
     assert_eq!(applied.category, ReloadResultCategory::Applied);
     assert_eq!(fixture.manager.publication_epoch(), 1);
     assert_eq!(fixture.manager.active_slot().generation_id(), 2);
-    assert_eq!(fixture.process.task_supervisor().task_count(), 3);
+    assert_eq!(fixture.process.task_supervisor().task_count(), 4);
     assert_eq!(
         fixture.process.task_supervisor().transition_count(),
         initial_transition_count + 1
@@ -473,7 +473,7 @@ async fn axum_live_authority_uses_reloaded_body_limit_before_buffering() {
 async fn task_inventory_is_real_or_explicitly_deferred_and_never_duplicates() {
     let fixture = fixture(true).await;
     let inventory = fixture.process.task_capability_inventory();
-    assert_eq!(inventory.len(), 6);
+    assert_eq!(inventory.len(), 7);
     assert_eq!(
         inventory
             .iter()
@@ -484,6 +484,7 @@ async fn task_inventory_is_real_or_explicitly_deferred_and_never_duplicates() {
             "catalog_refresh",
             "retention_cleanup",
             "checkpoint",
+            "security_events",
             "update_checker",
         ]
     );
@@ -491,8 +492,8 @@ async fn task_inventory_is_real_or_explicitly_deferred_and_never_duplicates() {
         assert!(capability.future_owner.is_some());
         assert!(capability.reason.is_some());
     }
-    assert_eq!(fixture.process.task_supervisor().task_count(), 3);
-    assert_eq!(fixture.process.task_supervisor().join_handle_count(), 3);
+    assert_eq!(fixture.process.task_supervisor().task_count(), 4);
+    assert_eq!(fixture.process.task_supervisor().join_handle_count(), 4);
 
     let mut next = Config::default();
     next.models.refresh_interval_s = 1;
@@ -501,8 +502,8 @@ async fn task_inventory_is_real_or_explicitly_deferred_and_never_duplicates() {
         .reload_bytes("config.toml", toml_for(&next), None)
         .await;
     assert_eq!(result.category, ReloadResultCategory::Applied);
-    assert_eq!(fixture.process.task_supervisor().task_count(), 3);
-    assert_eq!(fixture.process.task_supervisor().join_handle_count(), 3);
+    assert_eq!(fixture.process.task_supervisor().task_count(), 4);
+    assert_eq!(fixture.process.task_supervisor().join_handle_count(), 4);
     assert!(
         fixture
             .process
@@ -567,7 +568,7 @@ async fn startup_recovery_precedes_first_request_and_same_db_remains_readable() 
             base_url: "https://recovery.invalid".to_owned(),
             accounts: vec![AccountConfig {
                 name: "recovery-account".to_owned(),
-                api_key: Some("recovery-test-key".to_owned()),
+                api_key: Some("recovery-test-key".into()),
                 api_key_env: "RECOVERY_KEY".to_owned(),
                 ..AccountConfig::default()
             }],
@@ -640,7 +641,7 @@ async fn diagnostics_and_debug_remain_bounded_and_secret_free_after_cycles() {
     let fixture = fixture(true).await;
     let sentinel = "r011-api-key-proxy-session-body-error-secret";
     let mut next = Config::default();
-    next.server.api_key = Some(sentinel.to_owned());
+    next.server.api_key = Some(sentinel.into());
     next.pricing.catalogs.openrouter.api_key = Some(sentinel.to_owned());
     let result = fixture
         .reload

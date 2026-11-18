@@ -601,7 +601,7 @@ pub(super) async fn build_status_snapshot(state: &AppState) -> status_service::P
                     configured
                         .api_key
                         .as_ref()
-                        .is_some_and(|key| !key.trim().is_empty())
+                        .is_some_and(|key| !key.expose_secret().trim().is_empty())
                         || (!configured.api_key_env.is_empty()
                             && std::env::var(&configured.api_key_env)
                                 .is_ok_and(|key| !key.trim().is_empty()))
@@ -760,7 +760,10 @@ pub(super) fn has_loaded_credentials(config: &Config) -> bool {
         provider.accounts.iter().any(|account| {
             account.enabled
                 && (provider_is_anonymous
-                    || account.api_key.as_ref().is_some_and(|key| !key.is_empty())
+                    || account
+                        .api_key
+                        .as_ref()
+                        .is_some_and(|key| !key.expose_secret().is_empty())
                     || std::env::var(&account.api_key_env).is_ok_and(|key| !key.is_empty()))
         })
     })

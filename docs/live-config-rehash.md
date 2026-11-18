@@ -70,10 +70,9 @@ candidate builder already constructs as generation-owned objects:
   ``allow_stale_catalog``. Startup-only fields
   (``startup_refresh``, ``ping_retain_days``,
   ``catalog_withdrawal_policy``) remain ``RESTART_REQUIRED``.
-- **Security error-detail persistence**
-  (``security.persist_redacted_error_detail``): the flag is
-  threaded into the candidate ``RequestCoordinator`` via the
-  ``persist_error_detail=`` kwarg.
+`security.persist_redacted_error_detail` remains parseable for configuration
+compatibility but has no runtime effect. Its existing reload classification is
+unchanged and does not imply an active persistence control.
 
 ### Closure pass D2: background and observability expansion
 
@@ -330,8 +329,9 @@ families as `LIVE`. The D1 expansion extends the inventory to
 request-policy fields: the entire `[transcoder]` block,
 and the runtime-tunable subset
 of `[models]` (`expose_mode`, `collapse_models`, `refresh_interval_s`,
-`stale_after_s`, `allow_stale_catalog`), and
-`security.persist_redacted_error_detail`. The D2 expansion adds
+`stale_after_s`, `allow_stale_catalog`), The legacy `security.persist_redacted_error_detail` key remains parseable but
+has no runtime consumer; its reload classification is retained for compatibility.
+The D2 expansion adds
 background-task cadences and retention durations:
 `dashboard.retain_request_stats_days`, `dashboard.retain_event_days`,
 `models.ping_retain_days`,

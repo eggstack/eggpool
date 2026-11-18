@@ -53,7 +53,7 @@ fn provider(id: &str, account: Option<AccountConfig>) -> ProviderConfig {
 fn account(name: &str, api_key: &str) -> AccountConfig {
     AccountConfig {
         name: name.to_owned(),
-        api_key: Some(api_key.to_owned()),
+        api_key: Some(api_key.into()),
         ..AccountConfig::default()
     }
 }
@@ -318,7 +318,7 @@ fn provider_account_and_router_paths_are_stable() {
 #[test]
 fn secret_values_are_absent_from_all_change_projections() {
     let mut old = Config::default();
-    old.server.api_key = Some(SERVER_SECRET.to_owned());
+    old.server.api_key = Some(SERVER_SECRET.into());
     old.pricing.catalogs.openrouter.api_key = Some(PROXY_SECRET.to_owned());
     old.proxies.insert(
         "corp".to_owned(),
@@ -332,13 +332,13 @@ fn secret_values_are_absent_from_all_change_projections() {
         provider("provider", Some(account("default", ACCOUNT_SECRET))),
     );
     let mut new = old.clone();
-    new.server.api_key = Some("ep-r005-server-rotated-sentinel".to_owned());
+    new.server.api_key = Some("ep-r005-server-rotated-sentinel".into());
     new.pricing.catalogs.openrouter.api_key = Some("pricing-r005-rotated-sentinel".to_owned());
     new.providers
         .get_mut("provider")
         .expect("provider")
         .accounts[0]
-        .api_key = Some("sk-r005-account-rotated-sentinel".to_owned());
+        .api_key = Some("sk-r005-account-rotated-sentinel".into());
 
     let changes = diff(&old, &new);
     let debug = format!("{changes:?}");

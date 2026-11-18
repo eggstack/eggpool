@@ -12,6 +12,8 @@ use std::{
 
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
+
+pub use crate::secret::SecretString;
 use thiserror::Error;
 
 const DEFAULT_HOST: &str = "0.0.0.0";
@@ -61,7 +63,7 @@ impl ConfigError {
 pub struct ServerConfig {
     pub host: String,
     pub port: u16,
-    pub api_key: Option<String>,
+    pub api_key: Option<SecretString>,
     pub api_key_env: String,
     pub log_level: String,
     pub access_log: bool,
@@ -503,7 +505,7 @@ pub struct ProxyConfig {
 #[serde(deny_unknown_fields, default)]
 pub struct AccountConfig {
     pub name: String,
-    pub api_key: Option<String>,
+    pub api_key: Option<SecretString>,
     pub api_key_env: String,
     pub enabled: bool,
     pub weight: f64,
@@ -597,7 +599,7 @@ impl Default for ProviderAuthConfig {
 #[serde(deny_unknown_fields)]
 pub struct ProviderStaticHeaderConfig {
     pub name: String,
-    pub value: Option<String>,
+    pub value: Option<SecretString>,
     pub value_env: Option<String>,
 }
 
@@ -1982,7 +1984,8 @@ impl Config {
                 }
                 let value = account
                     .api_key
-                    .clone()
+                    .as_ref()
+                    .map(|secret| secret.expose_secret().to_owned())
                     .or_else(|| account_secret_from_env(config_path, account.api_key_env.as_str()));
                 let Some(key) = value else {
                     return Err(ConfigError::validation(format!(
@@ -2016,10 +2019,58 @@ impl Config {
     pub fn resolved_server_api_key(&self) -> Option<String> {
         self.server
             .api_key
-            .clone()
+            .as_ref()
+            .map(|secret| secret.expose_secret().to_owned())
             .or_else(|| env::var(&self.server.api_key_env).ok())
             .map(|value| value.trim().to_owned())
             .filter(|value| !value.is_empty())
+    }
+
+    /// Parsed security settings that remain accepted for compatibility but
+    /// have no runtime consumer. Only non-default values are reported.
+    #[must_use]
+    pub fn reserved_security_settings(&self) -> Vec<&'static str> {
+        let defaults = SecurityConfig::default();
+        let mut reserved = Vec::new();
+        if !self.security.allowed_hosts.is_empty() {
+            reserved.push("security.allowed_hosts");
+        }
+        if !self.security.cors_origins.is_empty() {
+            reserved.push("security.cors_origins");
+        }
+        if self.security.redact_headers != defaults.redact_headers {
+            reserved.push("security.redact_headers");
+        }
+        if self.security.persist_redacted_error_detail {
+            reserved.push("security.persist_redacted_error_detail");
+        }
+        if self.server.access_log {
+            reserved.push("server.access_log");
+        }
+        reserved
+    }
+
+    /// Whether this parsed configuration contains a non-empty inline secret
+    /// covered by the startup file-permission warning.
+    pub(crate) fn has_inline_secret_values(&self) -> bool {
+        let has_value = |value: &SecretString| !value.expose_secret().trim().is_empty();
+        self.server.api_key.as_ref().is_some_and(has_value)
+            || self.providers.values().any(|provider| {
+                provider
+                    .accounts
+                    .iter()
+                    .any(|account| account.api_key.as_ref().is_some_and(has_value))
+                    || provider
+                        .headers
+                        .iter()
+                        .any(|header| header.value.as_ref().is_some_and(has_value))
+                    || provider.wire_surfaces.values().any(|surface| {
+                        surface
+                            .headers
+                            .iter()
+                            .any(|header| header.value.as_ref().is_some_and(has_value))
+                    })
+            })
     }
 }
 
@@ -2494,10 +2545,11 @@ fn validate_headers(
                 "{owner} contains an invalid, duplicate, or authentication-conflicting static header"
             )));
         }
-        if h.value
-            .as_ref()
-            .is_some_and(|v| v.chars().any(|c| matches!(c, '\r' | '\n' | '\0')))
-        {
+        if h.value.as_ref().is_some_and(|v| {
+            v.expose_secret()
+                .chars()
+                .any(|c| matches!(c, '\r' | '\n' | '\0'))
+        }) {
             return Err(ConfigError::validation(
                 "HTTP header values must not contain CR, LF, or NUL",
             ));
@@ -2678,6 +2730,86 @@ mod tests {
         assert_eq!(
             config.admission_fairness.requests_per_minute_per_principal,
             None
+        );
+    }
+
+    #[test]
+    fn reserved_security_settings_report_only_non_default_values() {
+        let mut config = Config::default();
+        assert!(config.reserved_security_settings().is_empty());
+
+        config.security.allowed_hosts.push("example.test".into());
+        config
+            .security
+            .cors_origins
+            .push("https://example.test".into());
+        config.security.redact_headers = vec!["x-private".into()];
+        config.security.persist_redacted_error_detail = true;
+        config.server.access_log = true;
+        assert_eq!(
+            config.reserved_security_settings(),
+            vec![
+                "security.allowed_hosts",
+                "security.cors_origins",
+                "security.redact_headers",
+                "security.persist_redacted_error_detail",
+                "server.access_log",
+            ]
+        );
+
+        let example: Config = toml::from_str(include_str!("../config.example.toml"))
+            .expect("the example remains parseable");
+        assert!(example.reserved_security_settings().is_empty());
+    }
+
+    #[test]
+    fn config_owned_secret_fields_round_trip_and_never_appear_in_debug() {
+        let source = r#"
+            [server]
+            api_key = "sentinel-server-secret"
+
+            [providers.demo]
+            [[providers.demo.accounts]]
+            name = "demo-account"
+            api_key = "sentinel-account-secret"
+
+            [[providers.demo.headers]]
+            name = "x-static-secret"
+            value = "sentinel-header-secret"
+        "#;
+        let config: Config = toml::from_str(source).expect("parse config secrets");
+        let rendered = toml::to_string(&config).expect("serialize config secrets");
+        for sentinel in [
+            "sentinel-server-secret",
+            "sentinel-account-secret",
+            "sentinel-header-secret",
+        ] {
+            assert!(rendered.contains(sentinel));
+            assert!(!format!("{config:?}").contains(sentinel));
+        }
+
+        let parsed: Config = toml::from_str(&rendered).expect("round-trip config");
+        assert_eq!(
+            parsed
+                .server
+                .api_key
+                .as_ref()
+                .map(SecretString::expose_secret),
+            Some("sentinel-server-secret")
+        );
+        assert_eq!(
+            parsed.providers["demo"].accounts[0]
+                .api_key
+                .as_ref()
+                .map(SecretString::expose_secret),
+            Some("sentinel-account-secret")
+        );
+        assert_eq!(
+            parsed.providers["demo"].headers[0]
+                .value
+                .as_ref()
+                .map(SecretString::expose_secret),
+            Some("sentinel-header-secret")
         );
     }
 

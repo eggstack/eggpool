@@ -38,7 +38,7 @@ async fn runtime_fixture() -> (tempfile::TempDir, Database, ServerRuntime) {
         .expect("migrations run");
     let process = ProcessRuntime::new(database.clone()).expect("process runtime builds");
     let mut config = Config::default();
-    config.server.api_key = Some(SERVER_KEY.to_owned());
+    config.server.api_key = Some(SERVER_KEY.into());
     let candidate =
         RuntimeGenerationFactory::prepare(&process, config.clone(), "server-auth".to_owned(), 1)
             .await

@@ -87,6 +87,16 @@ models. The users page can use the instance default, select a specific profile,
 or explicitly leave a member without a profile. A browser-issued token is shown
 once in a no-store response; set it as
 `EGGPOOL_API_KEY` in the environment that launches the desktop client.
+
+The administrator-only `/admin/audit` page includes a **Security events** table
+of recent authentication and authorization outcomes, aggregated by minute.
+The local writer is bounded and non-blocking: if its queue is full, it drops an
+event rather than delaying authentication. Rows are capped at 30 days and
+10,000 records. The table may show an existing user's name resolved from its
+internal ID, but stored event rows do not contain usernames, credentials,
+tokens, raw IP addresses, prompts, headers, or request bodies. This is not a
+complete access log, alerting system, or addition to `eggpool audit export`.
+
 Remote browser login must use the operator's TLS proxy and trusted-proxy setup
 below: LAN reachability alone does not encrypt passwords or cookies.
 
@@ -507,7 +517,6 @@ dashboard responsiveness under request load.
 ```toml
 [server]
 threads = 1
-access_log = false
 
 [database]
 worker_threads = 1
@@ -531,7 +540,6 @@ For extremely constrained devices or in-memory test databases.
 ```toml
 [server]
 threads = 1
-access_log = false
 
 [database]
 worker_threads = 1
@@ -544,12 +552,12 @@ include_score_components = false
 
 ### Full-diagnostics
 
-For development, debugging, or high-power hosts where maximum
-diagnostic visibility is needed.
+For development or high-power hosts where detailed routing traces are useful.
+EggPool does not implement an HTTP access log; use an external log pipeline if
+request access logging is required.
 
 ```toml
 [server]
-access_log = true
 
 [database]
 worker_threads = 1
@@ -678,9 +686,24 @@ sudo env "PATH=$PATH" "$(command -v eggpool)" deploy backup-cron --install --pro
 
 ### Systemd unit features
 
-- `ProtectSystem=strict`: read-only system directories
-- `ReadWritePaths=/var/lib/eggpool`: data directory writable
-- `NoNewPrivileges`, `PrivateTmp`, `RestrictNamespaces`: hardened
+The production unit runs with an empty capability/ambient-capability set,
+`UMask=0077`, `NoNewPrivileges`, `ProtectSystem=strict`, `ProtectHome`,
+`PrivateTmp`, `PrivateDevices`, `ProtectClock`, `ProtectHostname`,
+`ProtectProc=invisible`, `ProcSubset=pid`, `ProtectKernelLogs`,
+kernel-tunable/module/control-group protection, `RemoveIPC`, and restrictions
+on namespaces, realtime scheduling, SUID/SGID, and personality. Its syscall
+filter excludes privileged, mount, and debug syscall groups and returns `EPERM`.
+`ReadWritePaths` is limited to EggPool data, backup, and log directories.
+
+The deployed unit and `render_production_systemd` are checked by the
+`operations_o009` directive-drift test. The renderer intentionally includes
+`/var/backups/eggpool` for its production backup-cron layout; the checked-in
+service unit retains its narrower writable-path set. Their `ExecStart` lines
+also intentionally differ by the renderer's `--verbose` flag. A disposable
+supported Linux/systemd host is still required to qualify service startup after
+sandbox changes; this repository's macOS development checks cannot establish
+that operational evidence.
+
 - `User=eggpool`, `Group=eggpool`: never runs as root
 - No `ExecReload`: config changes require `systemctl restart` (run `eggpool check-config` or `eggpool rehash` first for fast validation)
 - `Restart=on-failure` with `RestartSec=5` and a 300s burst cap

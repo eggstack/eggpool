@@ -65,6 +65,8 @@
     "0063_default_member_profile.sql": "853cc2e66f6e667f7010c88471b525d2b459393b148aab3fe051b789cec02558",
     "0064_account_backoffs_null_identity.sql": "28f0414454cae68530e86cec9e63efa1137f6298189cd588093f1104efec759e",
     "0065_tool_grants.sql": "757ce7d6e89585bf6f83246b5e4935d29639e037cd0047efcffc0fc160082aff",
-    "0066_personal_upstream.sql": "5f37ccad85c006e3e535322155d52a3bb75cc2fad649af54021c9905db742e4c"
+    "0066_personal_upstream.sql": "5f37ccad85c006e3e535322155d52a3bb75cc2fad649af54021c9905db742e4c",
+    "0067_security_events.sql": "a7264a17790a2526655e23461cc075c3248e09e6d10d81d6ca30ba57dee4fe38",
+    "0068_security_events_legacy_key_rejection.sql": "08f20493e5c9a5c77e2288f5dd0abfdabd442ec40a3bd98c32611717141b726e"
   }
 }

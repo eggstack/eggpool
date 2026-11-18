@@ -22,6 +22,8 @@ existing administration and request tables.
 |---|---|
 | `rust/src/identity.rs` | Local user records, password hashes, personal API credentials, the administrative audit trail, request attribution, and the content-free gateway audit export |
 | `rust/src/web_session.rs` | Opaque browser sessions, the CSRF digest, and bounded local login throttling |
+| `rust/src/security_events.rs` | Closed-vocabulary authentication/authorization events, bounded aggregation, retention, and the non-blocking sink |
+| `rust/src/runtime_lifecycle/process.rs` + `rust/src/task_supervisor.rs` | Process-owned event sink/writer wiring, supervised draining, and bounded shutdown flush |
 | `rust/src/model_policy.rs` | Versioned, user-specific model authorization (profiles, exact rules, per-user overrides, instance denials) |
 | `rust/src/user_budget.rs` | Durable per-user budget rules, admission holds, attempt usage, and settled usage windows |
 | `rust/src/instance_budget.rs` | The instance-global budget scope intersected with the per-user rules |
@@ -31,8 +33,9 @@ existing administration and request tables.
 The boundary is deliberately narrow:
 
 - `rust/src/db/` owns the SQLite connection, the gate, the transactions, and
-  the embedded migration chain. The subsystem owns no schema of its own and
-  opens no second writer; every read and write goes through `Database`.
+  the embedded migration chain. Identity and security-event tables are additive
+  migration artifacts; every read and write goes through the same `Database`
+  handle, and the subsystem opens no second writer.
 - `rust/src/coordinator/` owns request admission, durable publication, and
   terminal settlement. Hosted model turns enter through its ordinary
   attributed endpoint. The hosted controller does not add retry, provider
@@ -96,6 +99,24 @@ the request row at publication time. `auth_epoch` is bumped on credential
 revocation and password reset, so a snapshot taken before the change can no
 longer be presented as current.
 
+### Agent-token scope boundary
+
+`identity::required_agent_scope` maps only these known agent surfaces, and
+`server/middleware.rs` checks the mapped scope after verifying an agent token
+and before the route handler:
+
+| Scope | Paths |
+|---|---|
+| `inference` | `/v1/chat/completions`, `/v1/messages`, `/v1/responses`, `/v1/responses/compact`, `/v1/embeddings`, `/api/user-budget` |
+| `discovery` | `/v1/models` |
+| `integrations` | `/api/integrations/v1/profile` |
+
+Current token issuance grants all three scopes. Missing scope returns HTTP 403
+with `detail.code = "required_scope_missing"` without echoing scope values.
+The check applies only to `PrincipalKind::AgentToken`; browser sessions and
+legacy shared keys retain their existing behavior. Unknown `/v1/*` paths have
+no mapping and continue to the ordinary route-level 404.
+
 ## Browser session and CSRF boundary
 
 `web_session.rs` owns browser sessions. A session token is
@@ -147,6 +168,19 @@ mutations. It binds a mutation to the exact session and privilege snapshot
 that middleware admitted, so a revocation, password reset, role change, or
 disablement that lands before the commit makes the write fail closed instead
 of racing through.
+
+## Security-event audit
+
+`security_events.rs` records a closed vocabulary of authentication and
+authorization outcomes through a bounded non-blocking channel. The process-owned
+writer batches events into minute aggregates through the existing SQLite
+handle; a full queue increments a drop counter and never delays an auth
+response. Rows contain only an event code, outcome, principal kind, count,
+window, and an optional internal user id—never a username, credential, token,
+raw IP, path, prompt, header, or body. Rows are retained for 30 days or at most
+10,000 entries, whichever limit binds first. The administrator-only audit page
+resolves a username for display and shows `-` if the user no longer exists;
+the gateway audit export remains unchanged.
 
 ## Model policy
 
@@ -269,7 +303,7 @@ The local CLI surface is `eggpool users`, whose subcommands are `bootstrap`,
 
 ## Durable tables
 
-The subsystem's tables are migrations 55–63 and 66 of the embedded chain:
+Identity, session, policy, budget, upstream, and security-event tables are additive migrations of the embedded chain:
 
 | Migration | Tables |
 |---|---|
@@ -283,6 +317,7 @@ The subsystem's tables are migrations 55–63 and 66 of the embedded chain:
 | 62 `instance_budgets` | `instance_budget_rules`, `instance_budget_reservations`, `instance_budget_usage`, `instance_budget_rule_audit` |
 | 63 `default_member_profile` | `policy_state.default_member_profile_id` |
 | 66 `personal_upstream` | `personal_upstream_grants`, `personal_upstream_bindings` |
+| 67 `security_events` | `security_events` |
 
 `requests.user_id` is a nullable column without a foreign key, so disabling
 or removing a local user cannot erase request attribution. Internal semantic

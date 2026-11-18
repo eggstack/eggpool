@@ -121,7 +121,7 @@ runtime behavior. The repository-root `pyproject.toml`, `scripts/`, and
 - Runtime/reload: `rust/src/runtime_lifecycle/` (process, generation, lease, manager, recovery, diagnostics), `rust/src/reload.rs`, `rust/src/config_reload_policy.rs`, `rust/src/operations/lifecycle.rs`, `rust/src/task_supervisor.rs`
 - HTTP adapters: `rust/src/server/mod.rs`, `rust/src/server/middleware.rs`, `rust/src/server/health.rs`, `rust/src/server/inference.rs`, `rust/src/server/dashboard/` (`mod.rs`, `routes.rs`, `api.rs`, `assets.rs`, `theme.rs`, `response.rs`, `format.rs`, `tests.rs`, and the pure `render/` page-family modules)
 - Operations: `rust/src/operations/` (`lifecycle.rs`, `process.rs`, `paths.rs`, `control.rs`, `config_mutation.rs`, `deploy.rs`, `backup.rs`, `update.rs`, `catalog.rs`, `provenance.rs`, `operator.rs`, `status.rs`, `metrics.rs`, `integrations.rs`, `terminal.rs`)
-- Database/assets: `rust/src/db/` (`connection.rs`, `migrations.rs`, `repositories.rs`, `qualification.rs` — feature-gated diagnostics), `rust/assets/db/migrations/` (v1–v64, immutable), `rust/crates/eggpool-model-routing/src/` (`policy.rs`, `identity.rs`, `lib.rs`)
+- Database/assets: `rust/src/db/` (`connection.rs`, `migrations.rs`, `repositories.rs`, `qualification.rs` — feature-gated diagnostics), `rust/assets/db/migrations/` (v1–v68, immutable), `rust/crates/eggpool-model-routing/src/` (`policy.rs`, `identity.rs`, `lib.rs`)
 
 Start routing changes at `architecture/deep-dive-routing.md`, provider/transport
 changes at `architecture/deep-dive-providers.md`, and reload changes at

@@ -80,7 +80,7 @@ async fn runtime_status_is_always_authenticated_and_bounded_projection() {
         .expect("migrations run");
     let process = ProcessRuntime::new(database.clone()).expect("process runtime builds");
     let mut config = Config::default();
-    config.server.api_key = Some("o003-status-key".to_owned());
+    config.server.api_key = Some("o003-status-key".into());
     config.database.path = root.path().join("usage.sqlite3").display().to_string();
     let candidate =
         RuntimeGenerationFactory::prepare(&process, config.clone(), "o003-status".to_owned(), 1)

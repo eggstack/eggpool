@@ -33,6 +33,78 @@ async fn open_database(path: &std::path::Path) -> Database {
 }
 
 #[tokio::test(flavor = "current_thread")]
+async fn security_event_vocabulary_extension_preserves_existing_aggregates() {
+    let path = temporary_database_path("security-event-vocabulary");
+    let database = open_database(&path).await;
+    let prior_migrations = MigrationRunner::migrations()
+        .iter()
+        .take(67)
+        .map(|migration| (migration.version as i64, migration.name, migration.sql))
+        .collect::<Vec<_>>();
+    assert_eq!(prior_migrations.len(), 67);
+
+    database
+        .with_transaction(move |connection| {
+            connection.execute_batch(
+                "CREATE TABLE _migrations (\
+                    version INTEGER PRIMARY KEY,\
+                    name TEXT NOT NULL,\
+                    applied_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP\
+                )",
+            )?;
+            for (version, name, sql) in prior_migrations {
+                connection.execute_batch(sql)?;
+                connection.execute(
+                    "INSERT INTO _migrations (version, name) VALUES (?1, ?2)",
+                    (version, name),
+                )?;
+            }
+            connection.execute(
+                "INSERT INTO security_events \
+                 (window_start, event_code, outcome, principal_kind, user_id, event_count) \
+                 VALUES (0, 'session_rejected', 'refused', 'browser_session', NULL, 7)",
+                [],
+            )?;
+            Ok(())
+        })
+        .await
+        .expect("version-67 database and historical event are created");
+
+    let state = MigrationRunner::new(&database)
+        .run()
+        .await
+        .expect("version-68 event vocabulary migration applies");
+    assert_eq!(state.applied_this_run, vec![68]);
+
+    let event_counts = database
+        .call(|connection| {
+            let preserved = connection.query_row(
+                "SELECT event_count FROM security_events WHERE event_code = 'session_rejected'",
+                [],
+                |row| row.get::<_, i64>(0),
+            )?;
+            connection.execute(
+                "INSERT INTO security_events \
+                 (window_start, event_code, outcome, principal_kind, user_id, event_count) \
+                 VALUES (0, 'legacy_shared_key_rejected', 'refused', 'legacy_shared_key', NULL, 1)",
+                [],
+            )?;
+            let added = connection.query_row(
+                "SELECT event_count FROM security_events \
+                 WHERE event_code = 'legacy_shared_key_rejected'",
+                [],
+                |row| row.get::<_, i64>(0),
+            )?;
+            Ok((preserved, added))
+        })
+        .await
+        .expect("old and new event codes are both accepted");
+    assert_eq!(event_counts, (7, 1));
+    database.close().await.expect("database closes");
+    fs::remove_file(&path).expect("temporary database removed");
+}
+
+#[tokio::test(flavor = "current_thread")]
 async fn fresh_database_migrates_idempotently_and_preserves_pragmas() {
     let path = temporary_database_path("fresh");
     let database = open_database(&path).await;
@@ -40,8 +112,8 @@ async fn fresh_database_migrates_idempotently_and_preserves_pragmas() {
         .run()
         .await
         .expect("migrations apply");
-    assert_eq!(first.applied_versions.len(), 66);
-    assert_eq!(first.applied_this_run.len(), 66);
+    assert_eq!(first.applied_versions.len(), 68);
+    assert_eq!(first.applied_this_run.len(), 68);
     let default_member_profile: Option<String> = database
         .call(|connection| {
             connection.query_row(
@@ -270,8 +342,7 @@ async fn python_historical_fixture_upgrades_and_repositories_round_trip() {
         .await
         .expect("current migrations apply");
     assert_eq!(state.applied_this_run.first(), Some(&12));
-    assert_eq!(state.applied_this_run.last(), Some(&66));
-
+    assert_eq!(state.applied_this_run.last(), Some(&68));
     let account = AccountRepository::new(&database)
         .get_by_name("historical-account")
         .await
@@ -639,18 +710,34 @@ async fn schema54_image_upgrades_with_legacy_state_preserved() {
         .archive;
     BackupService::validate_archive(&archive).expect("pre-upgrade archive validates");
 
-    // Forward-only production upgrade: migrations 55 through 66 inclusive.
+    // Forward-only production upgrade: migrations 55 through 67 inclusive.
     let state = MigrationRunner::new(&database)
         .run()
         .await
         .expect("production upgrade applies");
     assert_eq!(state.applied_this_run.first(), Some(&55));
-    assert_eq!(state.applied_this_run.last(), Some(&66));
-    assert_eq!(state.applied_this_run.len(), 12);
+    assert_eq!(state.applied_this_run.last(), Some(&68));
+    assert_eq!(state.applied_this_run.len(), 14);
     database
         .quick_check()
         .await
         .expect("upgraded image is valid");
+    let security_event = database
+        .call(|connection| {
+            connection.execute(
+                "INSERT INTO security_events(window_start, event_code, outcome, principal_kind, user_id, event_count) \
+                 VALUES (60, 'sign_in_failed', 'refused', 'anonymous', NULL, 2)",
+                [],
+            )?;
+            connection.query_row(
+                "SELECT event_code, event_count FROM security_events WHERE window_start = 60",
+                [],
+                |row| Ok((row.get::<_, String>(0)?, row.get::<_, i64>(1)?)),
+            )
+        })
+        .await
+        .expect("upgraded database reads and writes the security-event table");
+    assert_eq!(security_event, ("sign_in_failed".to_owned(), 2));
 
     // Legacy history survives byte-identical: upstream accounts, the
     // completed request with its token/cost usage, quarantine, catalog.
@@ -1066,8 +1153,8 @@ async fn the_v64_migration_removes_the_legacy_rows_and_constrains_the_null_scope
     );
     assert_eq!(
         state.applied_versions.last(),
-        Some(&66),
-        "the migration chain is contiguous and ends at v66"
+        Some(&68),
+        "the migration chain is contiguous and ends at v68"
     );
 
     database

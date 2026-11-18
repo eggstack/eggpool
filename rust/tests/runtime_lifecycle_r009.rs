@@ -163,8 +163,8 @@ async fn initial_tasks_are_installed_once_before_acceptance() {
     tokio::task::yield_now().await;
     handle.request_shutdown(ShutdownReason::Requested);
     let report = task.await.expect("server task joins").expect("shutdown");
-    assert_eq!(report.task_count_at_start, 3);
-    assert_eq!(report.task_count_joined, 3);
+    assert_eq!(report.task_count_at_start, 4);
+    assert_eq!(report.task_count_joined, 4);
     database.close().await.expect("idempotent DB close");
 }
 
@@ -182,7 +182,7 @@ async fn first_run_creates_missing_database_parent_directory() {
     );
     let mut config = Config::default();
     config.server.host = "127.0.0.1".to_owned();
-    config.server.api_key = Some("test-key-first-run".to_owned());
+    config.server.api_key = Some("test-key-first-run".into());
     config.models.startup_refresh = false;
     config.database.path = path.to_string_lossy().into_owned();
     // Probe a free loopback port, then release it for the server under test.

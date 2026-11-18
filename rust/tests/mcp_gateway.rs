@@ -32,7 +32,7 @@ async fn router() -> (tempfile::TempDir, axum::Router) {
         .expect("schema migrates");
     let process = ProcessRuntime::new(database.clone()).expect("process runtime");
     let mut config = Config::default();
-    config.server.api_key = Some("withdrawn-route-key".to_owned());
+    config.server.api_key = Some("withdrawn-route-key".into());
     config.database.path = root.path().join("eggpool.sqlite3").display().to_string();
     let candidate =
         RuntimeGenerationFactory::prepare(&process, config.clone(), "withdrawn-routes".into(), 1)

@@ -47,7 +47,10 @@ pub fn account_list(config: &Config) -> Vec<Value> {
                     "routing_priority": provider.routing_priority,
                     "enabled": account.enabled,
                     "weight": account.weight,
-                    "credential_configured": account.api_key.as_ref().is_some_and(|key| !key.trim().is_empty()) || (!account.api_key_env.is_empty() && std::env::var(&account.api_key_env).is_ok()),
+                    "credential_configured": account
+                        .api_key
+                        .as_ref()
+                        .is_some_and(|key| !key.expose_secret().trim().is_empty()) || (!account.api_key_env.is_empty() && std::env::var(&account.api_key_env).is_ok()),
                     "api_key_env": account.api_key_env,
                 })
             })

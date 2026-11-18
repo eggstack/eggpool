@@ -29,12 +29,13 @@ jobs:
             rust_target: aarch64-apple-darwin
             runner: macos-15
     steps:
-      - uses: actions/checkout@v4
-      - uses: astral-sh/setup-uv@v4
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+      - uses: astral-sh/setup-uv@38f3f104447c67c051c4a08e39b64a148898af3a # v4.2.0
         with:
           python-version: "3.11"
-      - uses: dtolnay/rust-toolchain@stable
+      - uses: dtolnay/rust-toolchain@39008827e6b4319a349e9a42dfc90579dd25f1ca # stable
         with:
+          toolchain: stable
           targets: ${{ matrix.rust_target }}
       - run: uv sync --locked
       - run: cargo fmt --manifest-path rust/Cargo.toml --all -- --check
@@ -47,7 +48,7 @@ jobs:
           --config-fixture tests/tooling/fixtures/qualification/portability.toml
           --target-id ${{ matrix.target_id }}
           --output artifacts/qualification/005-run-${{ matrix.target_id }}.json
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
         with:
           name: q005-${{ matrix.target_id }}
           path: artifacts/qualification/005-run-${{ matrix.target_id }}.json

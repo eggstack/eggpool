@@ -99,11 +99,12 @@ pub(crate) fn validate_qualification_checkpoint_interval() -> Result<(), crate::
 }
 
 /// The canonical task names frozen by R001.
-pub const RUNTIME_TASK_NAMES: [&str; 6] = [
+pub const RUNTIME_TASK_NAMES: [&str; 7] = [
     "catalog_refresh",
     "retention_cleanup",
     "checkpoint",
     "metrics_flush",
+    "security_events",
     "update_checker",
     "automatic_backup",
 ];
@@ -271,6 +272,17 @@ pub fn runtime_task_inventory() -> Vec<RuntimeTaskSpec> {
             &["metrics.write_mode", "metrics.flush_interval_s"],
             &[],
             &["metrics_coalescer"],
+        ),
+        spec(
+            "security_events",
+            1.0,
+            None,
+            true,
+            TaskOwnership::Process,
+            "Drain bounded authentication event records to SQLite",
+            &[],
+            &[],
+            &["db"],
         ),
         spec(
             "update_checker",
@@ -574,6 +586,31 @@ impl TaskCallbackRegistry {
         registry
     }
 
+    /// Register the process-owned authentication-event writer callback.
+    pub(crate) fn register_security_events(
+        &mut self,
+        writer: std::sync::Arc<tokio::sync::Mutex<crate::security_events::SecurityEventWriter>>,
+    ) {
+        self.register(
+            "security_events",
+            task_callback(move |context| {
+                let writer = std::sync::Arc::clone(&writer);
+                async move {
+                    if !matches!(context, TaskTickContext::Process) {
+                        return Err(TaskCallbackError::Failed);
+                    }
+                    writer
+                        .lock()
+                        .await
+                        .flush_available()
+                        .await
+                        .map(|_| ())
+                        .map_err(|_| TaskCallbackError::Failed)
+                }
+            }),
+        );
+    }
+
     /// Register the process-owned, check-only release callback. The state is
     /// process-owned so it survives generation swaps and remains the single
     /// source for the dashboard update-status projection.
@@ -646,6 +683,7 @@ impl TaskCallbackRegistry {
                 } else {
                     let owner = match spec.name.as_str() {
                         "metrics_flush" => "M9 metrics/background integration",
+                        "security_events" => "M003 authentication event audit",
                         "update_checker" => "M9 operational update capability",
                         "automatic_backup" => "M9 backup/recovery capability",
                         _ => "future runtime maintenance plan",

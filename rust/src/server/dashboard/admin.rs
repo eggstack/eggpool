@@ -191,13 +191,23 @@ pub(in crate::server) struct MemberUpstreamRemoveForm {
 }
 
 fn csrf_valid(
+    state: &AppState,
     session: &crate::web_session::Principal,
     headers: &HeaderMap,
     supplied: &str,
 ) -> bool {
-    crate::web_session::verify_csrf(session, supplied)
+    let valid = crate::web_session::verify_csrf(session, supplied)
         && crate::web_session::csrf_cookie_value(headers)
-            .is_some_and(|cookie| crate::web_session::verify_csrf(session, &cookie))
+            .is_some_and(|cookie| crate::web_session::verify_csrf(session, &cookie));
+    if !valid {
+        state.record_security_event(
+            crate::security_events::SecurityEventCode::CsrfRejected,
+            crate::security_events::SecurityEventOutcome::Denied,
+            crate::security_events::SecurityPrincipalKind::BrowserSession,
+            Some(&session.user_id),
+        );
+    }
+    valid
 }
 
 fn admin_only(session: &crate::web_session::Principal) -> bool {
@@ -236,14 +246,6 @@ fn one_time_token_page(
     response.headers_mut().insert(
         header::CACHE_CONTROL,
         HeaderValue::from_static("no-store, max-age=0"),
-    );
-    response.headers_mut().insert(
-        http::HeaderName::from_static("referrer-policy"),
-        HeaderValue::from_static("no-referrer"),
-    );
-    response.headers_mut().insert(
-        http::HeaderName::from_static("x-content-type-options"),
-        HeaderValue::from_static("nosniff"),
     );
     response
 }
@@ -519,6 +521,10 @@ pub(in crate::server) async fn audit_page(
         Ok(entries) => entries,
         Err(_) => return degraded("audit history unavailable"),
     };
+    let security_events = match crate::identity::security_event_audit(&state.database, 200).await {
+        Ok(entries) => entries,
+        Err(_) => return degraded("security event history unavailable"),
+    };
     let rows = entries
         .iter()
         .map(|entry| {
@@ -529,6 +535,24 @@ pub(in crate::server) async fn audit_page(
                 html_escape(&entry.action),
                 html_escape(&entry.target_kind),
                 html_escape(&entry.target_id),
+            )
+        })
+        .collect::<String>();
+    let security_rows = security_events
+        .iter()
+        .map(|entry| {
+            let username = entry
+                .username
+                .as_deref()
+                .map(html_escape)
+                .unwrap_or_else(|| "-".to_owned());
+            format!(
+                "<tr><td>{}</td><td>{}</td><td>{}</td><td>{}</td><td>{}</td><td>{username}</td></tr>",
+                html_escape(&entry.window_start),
+                html_escape(entry.event_code.as_str()),
+                html_escape(entry.outcome.as_str()),
+                html_escape(entry.principal_kind.as_str()),
+                entry.event_count,
             )
         })
         .collect::<String>();
@@ -543,7 +567,7 @@ pub(in crate::server) async fn audit_page(
         "usage",
         theme,
         &format!(
-            "<section class=\"panel\"><h1>Administrative audit</h1><div class=\"table-scroll\" tabindex=\"0\" role=\"region\" aria-label=\"Administrative audit\">{DASHBOARD_TABLE_OPEN}<thead><tr><th>UTC time</th><th>Actor ID</th><th>Action</th><th>Target type</th><th>Target ID</th></tr></thead><tbody>{rows}</tbody></table></div><p><a href=\"/api/admin/audit/export\">Export gateway audit</a></p><p><a href=\"/users\">Users</a></p></section>"
+            "<section class=\"panel\"><h1>Administrative audit</h1><div class=\"table-scroll\" tabindex=\"0\" role=\"region\" aria-label=\"Administrative audit\">{DASHBOARD_TABLE_OPEN}<thead><tr><th>UTC time</th><th>Actor ID</th><th>Action</th><th>Target type</th><th>Target ID</th></tr></thead><tbody>{rows}</tbody></table></div><p><a href=\"/api/admin/audit/export\">Export gateway audit</a></p><p><a href=\"/users\">Users</a></p></section><section class=\"panel\"><h2>Security events</h2><div class=\"table-scroll\" tabindex=\"0\" role=\"region\" aria-label=\"Security events\">{DASHBOARD_TABLE_OPEN}<thead><tr><th>UTC minute</th><th>Event</th><th>Outcome</th><th>Principal</th><th>Count</th><th>User</th></tr></thead><tbody>{security_rows}</tbody></table></div></section>"
         ),
     ))
 }
@@ -672,7 +696,7 @@ pub(in crate::server) async fn create_user(
     headers: HeaderMap,
     Form(form): Form<CreateUserForm>,
 ) -> Response {
-    if !csrf_valid(&session, &headers, &form.csrf) {
+    if !csrf_valid(&state, &session, &headers, &form.csrf) {
         return (StatusCode::FORBIDDEN, "Invalid request token.").into_response();
     }
     if !admin_only(&session) {
@@ -718,7 +742,7 @@ pub(in crate::server) async fn set_default_member_profile(
     headers: HeaderMap,
     Form(form): Form<DefaultMemberProfileForm>,
 ) -> Response {
-    if !csrf_valid(&session, &headers, &form.csrf) {
+    if !csrf_valid(&state, &session, &headers, &form.csrf) {
         return (StatusCode::FORBIDDEN, "Invalid request token.").into_response();
     }
     if !admin_only(&session) {
@@ -743,7 +767,7 @@ pub(in crate::server) async fn set_user_state(
     headers: HeaderMap,
     Form(form): Form<UserStateForm>,
 ) -> Response {
-    if !csrf_valid(&session, &headers, &form.csrf) {
+    if !csrf_valid(&state, &session, &headers, &form.csrf) {
         return (StatusCode::FORBIDDEN, "Invalid request token.").into_response();
     }
     if !admin_only(&session) {
@@ -768,7 +792,7 @@ pub(in crate::server) async fn reset_user_password(
     headers: HeaderMap,
     Form(form): Form<AdminPasswordForm>,
 ) -> Response {
-    if !csrf_valid(&session, &headers, &form.csrf) {
+    if !csrf_valid(&state, &session, &headers, &form.csrf) {
         return (StatusCode::FORBIDDEN, "Invalid request token.").into_response();
     }
     if !admin_only(&session) {
@@ -793,7 +817,7 @@ pub(in crate::server) async fn assign_user_profile(
     headers: HeaderMap,
     Form(form): Form<UserProfileForm>,
 ) -> Response {
-    if !csrf_valid(&session, &headers, &form.csrf) {
+    if !csrf_valid(&state, &session, &headers, &form.csrf) {
         return (StatusCode::FORBIDDEN, "Invalid request token.").into_response();
     }
     if !admin_only(&session) {
@@ -815,7 +839,7 @@ pub(in crate::server) async fn create_profile(
     headers: HeaderMap,
     Form(form): Form<ProfileCreateForm>,
 ) -> Response {
-    if !csrf_valid(&session, &headers, &form.csrf) {
+    if !csrf_valid(&state, &session, &headers, &form.csrf) {
         return (StatusCode::FORBIDDEN, "Invalid request token.").into_response();
     }
     if !admin_only(&session) {
@@ -842,7 +866,7 @@ pub(in crate::server) async fn update_profile(
     headers: HeaderMap,
     Form(form): Form<ProfileUpdateForm>,
 ) -> Response {
-    if !csrf_valid(&session, &headers, &form.csrf) {
+    if !csrf_valid(&state, &session, &headers, &form.csrf) {
         return (StatusCode::FORBIDDEN, "Invalid request token.").into_response();
     }
     if !admin_only(&session) {
@@ -875,7 +899,7 @@ pub(in crate::server) async fn delete_profile(
     headers: HeaderMap,
     Form(form): Form<ProfileDeleteForm>,
 ) -> Response {
-    if !csrf_valid(&session, &headers, &form.csrf) {
+    if !csrf_valid(&state, &session, &headers, &form.csrf) {
         return (StatusCode::FORBIDDEN, "Invalid request token.").into_response();
     }
     if !admin_only(&session) {
@@ -902,7 +926,7 @@ pub(in crate::server) async fn set_profile_rule(
     headers: HeaderMap,
     Form(form): Form<ProfileRuleForm>,
 ) -> Response {
-    if !csrf_valid(&session, &headers, &form.csrf) {
+    if !csrf_valid(&state, &session, &headers, &form.csrf) {
         return (StatusCode::FORBIDDEN, "Invalid request token.").into_response();
     }
     if !admin_only(&session) {
@@ -929,7 +953,7 @@ pub(in crate::server) async fn remove_profile_rule(
     headers: HeaderMap,
     Form(form): Form<ProfileRuleDeleteForm>,
 ) -> Response {
-    if !csrf_valid(&session, &headers, &form.csrf) {
+    if !csrf_valid(&state, &session, &headers, &form.csrf) {
         return (StatusCode::FORBIDDEN, "Invalid request token.").into_response();
     }
     if !admin_only(&session) {
@@ -951,7 +975,7 @@ pub(in crate::server) async fn set_profile_preference(
     headers: HeaderMap,
     Form(form): Form<ProfilePreferForm>,
 ) -> Response {
-    if !csrf_valid(&session, &headers, &form.csrf) {
+    if !csrf_valid(&state, &session, &headers, &form.csrf) {
         return (StatusCode::FORBIDDEN, "Invalid request token.").into_response();
     }
     if !admin_only(&session) {
@@ -974,7 +998,7 @@ pub(in crate::server) async fn set_user_override(
     headers: HeaderMap,
     Form(form): Form<UserOverrideForm>,
 ) -> Response {
-    if !csrf_valid(&session, &headers, &form.csrf) {
+    if !csrf_valid(&state, &session, &headers, &form.csrf) {
         return (StatusCode::FORBIDDEN, "Invalid request token.").into_response();
     }
     if !admin_only(&session) {
@@ -1001,7 +1025,7 @@ pub(in crate::server) async fn remove_user_override(
     headers: HeaderMap,
     Form(form): Form<UserOverrideRemoveForm>,
 ) -> Response {
-    if !csrf_valid(&session, &headers, &form.csrf) {
+    if !csrf_valid(&state, &session, &headers, &form.csrf) {
         return (StatusCode::FORBIDDEN, "Invalid request token.").into_response();
     }
     if !admin_only(&session) {
@@ -1031,7 +1055,7 @@ pub(in crate::server) async fn set_user_budget(
     headers: HeaderMap,
     Form(form): Form<UserBudgetForm>,
 ) -> Response {
-    if !csrf_valid(&session, &headers, &form.csrf) {
+    if !csrf_valid(&state, &session, &headers, &form.csrf) {
         return (StatusCode::FORBIDDEN, "Invalid request token.").into_response();
     }
     if !admin_only(&session) {
@@ -1124,7 +1148,7 @@ pub(in crate::server) async fn set_instance_budget(
     headers: HeaderMap,
     Form(form): Form<InstanceBudgetForm>,
 ) -> Response {
-    if !csrf_valid(&session, &headers, &form.csrf) {
+    if !csrf_valid(&state, &session, &headers, &form.csrf) {
         return (StatusCode::FORBIDDEN, "Invalid request token.").into_response();
     }
     if !admin_only(&session) {
@@ -1155,7 +1179,7 @@ pub(in crate::server) async fn remove_instance_budget(
     headers: HeaderMap,
     Form(form): Form<InstanceBudgetForm>,
 ) -> Response {
-    if !csrf_valid(&session, &headers, &form.csrf) {
+    if !csrf_valid(&state, &session, &headers, &form.csrf) {
         return (StatusCode::FORBIDDEN, "Invalid request token.").into_response();
     }
     if !admin_only(&session) {
@@ -1182,7 +1206,7 @@ pub(in crate::server) async fn create_personal_token(
     headers: HeaderMap,
     Form(form): Form<TokenCreateForm>,
 ) -> Response {
-    if !csrf_valid(&session, &headers, &form.csrf) {
+    if !csrf_valid(&state, &session, &headers, &form.csrf) {
         return (StatusCode::FORBIDDEN, "Invalid request token.").into_response();
     }
     match crate::identity::issue_personal_api_token_from_browser(
@@ -1209,7 +1233,7 @@ pub(in crate::server) async fn revoke_personal_token(
     headers: HeaderMap,
     Form(form): Form<TokenRevokeForm>,
 ) -> Response {
-    if !csrf_valid(&session, &headers, &form.csrf) {
+    if !csrf_valid(&state, &session, &headers, &form.csrf) {
         return (StatusCode::FORBIDDEN, "Invalid request token.").into_response();
     }
     match crate::identity::revoke_user_credential_from_browser(
@@ -1231,7 +1255,7 @@ pub(in crate::server) async fn issue_admin_token(
     headers: HeaderMap,
     Form(form): Form<AdminTokenForm>,
 ) -> Response {
-    if !csrf_valid(&session, &headers, &form.csrf) {
+    if !csrf_valid(&state, &session, &headers, &form.csrf) {
         return (StatusCode::FORBIDDEN, "Invalid request token.").into_response();
     }
     if !admin_only(&session) {
@@ -1261,7 +1285,7 @@ pub(in crate::server) async fn revoke_user_tokens(
     headers: HeaderMap,
     Form(form): Form<AdminRevokeTokensForm>,
 ) -> Response {
-    if !csrf_valid(&session, &headers, &form.csrf) {
+    if !csrf_valid(&state, &session, &headers, &form.csrf) {
         return (StatusCode::FORBIDDEN, "Invalid request token.").into_response();
     }
     if !admin_only(&session) {
@@ -1285,7 +1309,7 @@ pub(in crate::server) async fn set_upstream_default(
     headers: HeaderMap,
     Form(form): Form<UpstreamDefaultForm>,
 ) -> Response {
-    if !csrf_valid(&session, &headers, &form.csrf) {
+    if !csrf_valid(&state, &session, &headers, &form.csrf) {
         return (StatusCode::FORBIDDEN, "Invalid request token.").into_response();
     }
     if !admin_only(&session) {
@@ -1308,7 +1332,7 @@ pub(in crate::server) async fn set_upstream_grant(
     headers: HeaderMap,
     Form(form): Form<UpstreamGrantForm>,
 ) -> Response {
-    if !csrf_valid(&session, &headers, &form.csrf) {
+    if !csrf_valid(&state, &session, &headers, &form.csrf) {
         return (StatusCode::FORBIDDEN, "Invalid request token.").into_response();
     }
     if !admin_only(&session) {
@@ -1336,7 +1360,7 @@ pub(in crate::server) async fn remove_upstream_account(
     headers: HeaderMap,
     Form(form): Form<UpstreamRemoveForm>,
 ) -> Response {
-    if !csrf_valid(&session, &headers, &form.csrf) {
+    if !csrf_valid(&state, &session, &headers, &form.csrf) {
         return (StatusCode::FORBIDDEN, "Invalid request token.").into_response();
     }
     if !admin_only(&session) {
@@ -1375,7 +1399,7 @@ pub(in crate::server) async fn add_member_upstream(
     headers: HeaderMap,
     Form(form): Form<MemberUpstreamForm>,
 ) -> Response {
-    if !csrf_valid(&session, &headers, &form.csrf) {
+    if !csrf_valid(&state, &session, &headers, &form.csrf) {
         return (StatusCode::FORBIDDEN, "Invalid request token.").into_response();
     }
     let Ok((config_path, env_path)) = upstream_paths(&state) else {
@@ -1411,7 +1435,7 @@ pub(in crate::server) async fn remove_member_upstream(
     headers: HeaderMap,
     Form(form): Form<MemberUpstreamRemoveForm>,
 ) -> Response {
-    if !csrf_valid(&session, &headers, &form.csrf) {
+    if !csrf_valid(&state, &session, &headers, &form.csrf) {
         return (StatusCode::FORBIDDEN, "Invalid request token.").into_response();
     }
     let Ok((config_path, env_path)) = upstream_paths(&state) else {

@@ -194,7 +194,7 @@ Migrations are idempotent and safe to run multiple times.
 
 Migrations 55 to 63 added local user identity, browser sessions, policy
 profiles, user and instance budgets, the future-member default profile, and
-audit tables. The embedded migration inventory now reaches schema 66.
+audit tables, and migration 67 adds security events. The embedded migration inventory now reaches schema 67.
 Backups include usernames, password hashes, personal-token digests,
 session and CSRF digests, policy and budget state, bounded usage records,
 and secret-free audit facts. They do not contain plaintext passwords, API
@@ -205,14 +205,14 @@ without adding their usage, as they are after a crash.
 
 Migrations run with `eggpool migrate` or during normal server startup. Existing
 provider accounts and keys remain in TOML and the environment. A schema-54
-backup migrates forward through current schema 66, preserving legacy requests,
+backup migrates forward through current schema 67, preserving legacy requests,
 usage history, quarantine, and catalog state. Requests made with the historical
 shared key remain unattributed as `legacy_shared_key`; they are not assigned
 to a fabricated user. Until an administrator bootstraps local access, the
 database reports `legacy_unmigrated`.
 
 Migrations are forward-only. An older executable may reject a database at
-schema 66. For rollback, restore a protected backup made before the upgrade
+schema 67. For rollback, restore a protected backup made before the upgrade
 and use the matching older binary. Do not point an older executable at the
 upgraded database. Capture the protected backup before running `migrate`.
 

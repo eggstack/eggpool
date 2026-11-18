@@ -296,6 +296,15 @@ uv run pyright scripts/
 uv run pytest tests/tooling/ -q --tb=short --maxfail=1
 ```
 
+Every `.github/workflows/*.yml` action reference must use an immutable 40-hex
+commit SHA (with a trailing upstream version comment) or a local `./` path.
+Each workflow declares top-level permissions; non-release workflows are limited
+to `contents: read` and must not grant job-level write scopes. Since this guard
+is text-based, permission-affecting YAML aliases, anchors, merge keys, and
+inline job mappings are rejected when they could obscure a grant. Validate this
+contract with `uv run python scripts/validate_workflow_hygiene.py`; the separate
+release workflow validator retains authority over release-job permissions.
+
 For dashboard rendering, API, asset, or qualification changes, use the focused
 Rust renderer suite and the frozen Python oracle runner. The stable command
 facade is `scripts/qualification_dashboard_parity.py`; its internal tooling

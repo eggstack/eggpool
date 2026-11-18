@@ -67,19 +67,30 @@ fn inventory_projection(spec: &RuntimeTaskSpec) -> Value {
 #[test]
 fn inventory_and_resolved_defaults_match_r001() {
     let oracle: Value = serde_json::from_str(ORACLE).expect("fixture JSON");
+    // The process-owned security_events task was added after R001 and has its
+    // own registration contract in runtime_lifecycle_r008. Keep this test's
+    // comparison against the frozen R001 inventory.
     let inventory = runtime_task_inventory();
+    let r001_inventory: Vec<_> = inventory
+        .iter()
+        .filter(|spec| spec.name != "security_events")
+        .collect();
     let expected = oracle["tasks"]["inventory"].as_array().expect("inventory");
-    assert_eq!(inventory.len(), expected.len());
-    for (actual, expected) in inventory.iter().zip(expected) {
+    assert_eq!(r001_inventory.len(), expected.len());
+    for (actual, expected) in r001_inventory.into_iter().zip(expected) {
         assert_eq!(inventory_projection(actual), *expected);
     }
 
     let resolved = runtime_task_specs_for_config(&Config::default(), false);
-    let expected_default = &oracle["tasks"]["config_variants"]["default"];
-    for (actual, expected) in resolved
+    let r001_resolved: Vec<_> = resolved
         .iter()
-        .zip(expected_default.as_array().expect("default"))
-    {
+        .filter(|spec| spec.name != "security_events")
+        .collect();
+    let expected_default = oracle["tasks"]["config_variants"]["default"]
+        .as_array()
+        .expect("default");
+    assert_eq!(r001_resolved.len(), expected_default.len());
+    for (actual, expected) in r001_resolved.into_iter().zip(expected_default) {
         assert_eq!(actual.name, expected["name"]);
         assert_eq!(actual.enabled, expected["enabled"]);
         assert_eq!(actual.interval_s, expected["interval_s"]);

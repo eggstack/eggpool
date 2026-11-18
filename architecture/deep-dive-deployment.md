@@ -168,13 +168,13 @@ Native tests live in `rust/tests/` (57 targets, serial
 The deployed unit lives at `deploy/eggpool.service`. CLI-rendered snippets
 are owned by `rust/src/operations/deploy.rs` (`render_production_systemd` and
 related renderers for personal/production layouts, logrotate, and cron). The
-checked-in unit and the renderer output are related but not byte-identical
-artifacts: the deployed file carries the production hardening set
-(`EnvironmentFile` plus `HOME`/`PATH`/`PIPX_HOME`/`PIPX_BIN_DIR`/
-`EGGPOOL_LOG_FILE`, `ProtectHome`, `ReadWritePaths`,
-`StartLimitIntervalSec`/`StartLimitBurst`, and the SIGHUP-is-not-reload
-comment), while renderers cover personal and production
-variants with their own `ExecStart`/`ReadWritePaths` shapes. Do not copy a unit
+production unit and renderer share a directive-level hardening contract guarded
+by `rust/tests/operations_o009.rs`; the guard permits only the documented
+`ExecStart` and `ReadWritePaths` differences. The rendered `ExecStart` adds
+`--verbose`, and its writable paths additionally include `/var/backups/eggpool`
+for the production backup-cron layout. The tracked unit retains its narrower
+writable-path set. The tracked artifact also carries environment settings,
+start-limit directives, and the SIGHUP-is-not-reload comment. Do not copy a unit
 from this document; read `deploy/eggpool.service` or regenerate via the CLI.
 
 ## Configuration

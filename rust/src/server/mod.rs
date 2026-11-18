@@ -63,6 +63,84 @@ fn warn_if_insecure_web_auth(config: &Config) {
     }
 }
 
+fn reserved_setting_warning_text(setting: &str) -> String {
+    let guidance = match setting {
+        "security.allowed_hosts" | "security.cors_origins" => {
+            "Configure host/origin filtering in an operator-managed proxy, or remove the setting."
+        }
+        "security.redact_headers" => {
+            "EggPool redaction is fixed; use an external log pipeline for configurable redaction."
+        }
+        "security.persist_redacted_error_detail" => {
+            "This persistence option is not supported; remove the setting."
+        }
+        "server.access_log" => {
+            "Access logging is not implemented; use an external log pipeline or remove the setting."
+        }
+        _ => "This setting is not implemented; remove it.",
+    };
+    format!("{setting} is reserved and has no runtime effect. {guidance}")
+}
+
+fn warn_if_reserved_security_settings(config: &Config) {
+    for setting in config.reserved_security_settings() {
+        tracing::warn!(
+            setting,
+            warning = %reserved_setting_warning_text(setting),
+            "reserved configuration setting has no runtime effect"
+        );
+    }
+}
+
+#[cfg(unix)]
+fn secret_file_permission_warning(path: &Path, label: &str) -> Option<String> {
+    use std::os::unix::fs::PermissionsExt;
+
+    let metadata = std::fs::symlink_metadata(path).ok()?;
+    (metadata.permissions().mode() & 0o077 != 0).then(|| {
+        format!(
+            "{label} file has group/other permissions; run chmod 600 to restrict access: {}",
+            path.display()
+        )
+    })
+}
+
+#[cfg(not(unix))]
+fn secret_file_permission_warning(_path: &Path, _label: &str) -> Option<String> {
+    None
+}
+
+fn secret_file_permission_warnings(
+    inline_secrets: bool,
+    config_path: Option<&Path>,
+    env_path: Option<&Path>,
+) -> Vec<String> {
+    let mut warnings = Vec::new();
+    if inline_secrets
+        && let Some(path) = config_path
+        && let Some(warning) = secret_file_permission_warning(path, "configuration")
+    {
+        warnings.push(warning);
+    }
+    if let Some(path) = env_path
+        && let Some(warning) = secret_file_permission_warning(path, "environment")
+    {
+        warnings.push(warning);
+    }
+    warnings
+}
+
+fn warn_if_secret_file_permissions(config: &Config, config_path: Option<&Path>) {
+    let env_path = crate::config::resolve_env_path(config_path);
+    for warning in secret_file_permission_warnings(
+        config.has_inline_secret_values(),
+        config_path,
+        env_path.as_deref(),
+    ) {
+        tracing::warn!(warning = %warning, "secret-bearing file permissions are not owner-only");
+    }
+}
+
 use axum::{
     Router,
     body::{Body, Bytes},
@@ -563,6 +641,30 @@ async fn close_runtime_resources_until(
         inner.process.flush_metrics(),
     )
     .await;
+    let security_flush_timed_out = match tokio::time::timeout(
+        deadline.saturating_duration_since(tokio::time::Instant::now()),
+        inner.process.flush_security_events(),
+    )
+    .await
+    {
+        Ok(Ok(_)) => false,
+        Ok(Err(_)) => {
+            tracing::warn!(
+                event_code = "security_event_flush",
+                outcome = "failed",
+                "security event shutdown flush did not complete"
+            );
+            false
+        }
+        Err(_) => {
+            tracing::warn!(
+                event_code = "security_event_flush",
+                outcome = "timed_out",
+                "security event shutdown flush did not complete"
+            );
+            true
+        }
+    };
     let body_empty = if initially_forced {
         false
     } else {
@@ -571,7 +673,8 @@ async fn close_runtime_resources_until(
             .wait_empty(deadline.saturating_duration_since(tokio::time::Instant::now()))
             .await
     };
-    let mut forced = initially_forced || task_report.timed_out || !body_empty;
+    let mut forced =
+        initially_forced || task_report.timed_out || security_flush_timed_out || !body_empty;
     handle.set_phase(if forced {
         ShutdownPhase::ForcedClosing
     } else {
@@ -722,6 +825,20 @@ impl AppState {
             .and_then(|process| process.config_path())
     }
 
+    pub(crate) fn record_security_event(
+        &self,
+        code: crate::security_events::SecurityEventCode,
+        outcome: crate::security_events::SecurityEventOutcome,
+        principal_kind: crate::security_events::SecurityPrincipalKind,
+        user_id: Option<&str>,
+    ) {
+        if let Some(process) = &self.process {
+            process
+                .security_event_sink()
+                .record(code, outcome, principal_kind, user_id);
+        }
+    }
+
     /// Construct router state around an already published manager. This is
     /// intended for embedded/test callers; production startup constructs the
     /// manager in `run_with_digest` before creating `ServerRuntime`.
@@ -849,6 +966,8 @@ pub async fn run_with_digest(
     validate_server_access(&config, &access_state)?;
     warn_if_unauthenticated_loopback(&config, &access_state);
     warn_if_insecure_web_auth(&config);
+    warn_if_reserved_security_settings(&config);
+    warn_if_secret_file_permissions(&config, config_path.as_deref());
     if let Err(error) = sync_accounts(&config, &database).await {
         let _ = database.close().await;
         return Err(error);
@@ -1084,6 +1203,8 @@ pub async fn serve_listener(
     validate_server_access(&config, &access_state)?;
     warn_if_unauthenticated_loopback(&config, &access_state);
     warn_if_insecure_web_auth(&config);
+    warn_if_reserved_security_settings(&config);
+    warn_if_secret_file_permissions(&config, None);
     if let Err(error) = sync_accounts(&config, &database).await {
         let _ = database.close().await;
         return Err(error);
@@ -1144,6 +1265,8 @@ pub async fn serve_listener_with_inference(
     validate_server_access(&config, &access_state)?;
     warn_if_unauthenticated_loopback(&config, &access_state);
     warn_if_insecure_web_auth(&config);
+    warn_if_reserved_security_settings(&config);
+    warn_if_secret_file_permissions(&config, None);
     let process = match ProcessRuntime::new_with_config(database.clone(), &config) {
         Ok(process) => process,
         Err(error) => {
@@ -1454,5 +1577,57 @@ mod tests {
                 "{path} must not take body admission"
             );
         }
+    }
+
+    #[test]
+    fn reserved_setting_warning_names_the_key_without_values() {
+        let warning = reserved_setting_warning_text("security.allowed_hosts");
+        assert!(warning.contains("security.allowed_hosts"));
+        assert!(warning.contains("no runtime effect"));
+        assert!(warning.contains("operator-managed proxy"));
+        assert!(!warning.contains("example.test"));
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn secret_file_permission_warnings_use_symlink_metadata_and_owner_modes() {
+        use std::os::unix::fs::{PermissionsExt, symlink};
+
+        let directory = tempfile::tempdir().expect("tempdir");
+        let config_path = directory.path().join("config.toml");
+        std::fs::write(&config_path, "not read by permission check").expect("write config");
+
+        for (mode, expected) in [(0o600, false), (0o640, true), (0o644, true)] {
+            std::fs::set_permissions(&config_path, std::fs::Permissions::from_mode(mode))
+                .expect("set mode");
+            assert_eq!(
+                secret_file_permission_warning(&config_path, "configuration").is_some(),
+                expected,
+                "mode {mode:o}"
+            );
+        }
+        assert!(
+            secret_file_permission_warning(&directory.path().join("missing"), "config").is_none()
+        );
+
+        let target = directory.path().join("private-env");
+        std::fs::write(&target, "SENTINEL_DO_NOT_READ=secret").expect("write env");
+        std::fs::set_permissions(&target, std::fs::Permissions::from_mode(0o600))
+            .expect("secure target");
+        let link = directory.path().join("env-link");
+        symlink(&target, &link).expect("create symlink");
+        assert!(secret_file_permission_warning(&link, "environment").is_some());
+
+        std::fs::set_permissions(&config_path, std::fs::Permissions::from_mode(0o644))
+            .expect("make config broadly accessible");
+        let config_warnings = secret_file_permission_warnings(true, Some(&config_path), None);
+        assert_eq!(config_warnings.len(), 1);
+        assert!(config_warnings[0].contains("chmod 600"));
+        assert!(!config_warnings[0].contains("SENTINEL_DO_NOT_READ"));
+        assert!(secret_file_permission_warnings(false, Some(&config_path), None).is_empty());
+
+        let env_warnings = secret_file_permission_warnings(false, None, Some(&config_path));
+        assert_eq!(env_warnings.len(), 1);
+        assert!(env_warnings[0].contains("environment file"));
     }
 }

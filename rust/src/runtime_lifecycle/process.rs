@@ -40,6 +40,8 @@ pub struct ProcessRuntime {
     config_path: Option<PathBuf>,
     task_supervisor: RuntimeTaskSupervisor,
     metrics_coalescer: Arc<crate::operations::metrics::MetricsWriteCoalescer>,
+    security_event_sink: crate::security_events::SecurityEventSink,
+    security_event_writer: Arc<AsyncMutex<crate::security_events::SecurityEventWriter>>,
     update_checker: Arc<crate::operations::update::UpdateCheckerState>,
     reload_lock: Arc<AsyncMutex<()>>,
     next_reload_owner: Arc<AtomicU64>,
@@ -56,6 +58,8 @@ impl Clone for ProcessRuntime {
             config_path: self.config_path.clone(),
             task_supervisor: self.task_supervisor.clone(),
             metrics_coalescer: Arc::clone(&self.metrics_coalescer),
+            security_event_sink: self.security_event_sink.clone(),
+            security_event_writer: Arc::clone(&self.security_event_writer),
             update_checker: Arc::clone(&self.update_checker),
             reload_lock: Arc::clone(&self.reload_lock),
             next_reload_owner: Arc::clone(&self.next_reload_owner),
@@ -96,10 +100,13 @@ impl ProcessRuntime {
         let update_checker = Arc::new(crate::operations::update::UpdateCheckerState::new(
             crate::operations::update::UpdateService::new()?,
         ));
+        let (security_event_sink, security_event_writer) =
+            crate::security_events::pipeline(database.clone());
         let mut callbacks =
             crate::task_supervisor::TaskCallbackRegistry::with_generation_maintenance(
                 checkpoint_database,
             );
+        callbacks.register_security_events(Arc::clone(&security_event_writer));
         callbacks.register_update_checker(Arc::clone(&update_checker));
         Ok(Self {
             database,
@@ -108,6 +115,8 @@ impl ProcessRuntime {
             config_path: None,
             task_supervisor: RuntimeTaskSupervisor::with_callbacks(callbacks),
             metrics_coalescer,
+            security_event_sink,
+            security_event_writer,
             update_checker,
             reload_lock: Arc::new(AsyncMutex::new(())),
             next_reload_owner: Arc::new(AtomicU64::new(1)),
@@ -195,6 +204,10 @@ impl ProcessRuntime {
         Arc::clone(&self.metrics_coalescer)
     }
 
+    pub(crate) fn security_event_sink(&self) -> &crate::security_events::SecurityEventSink {
+        &self.security_event_sink
+    }
+
     pub fn update_checker(&self) -> Arc<crate::operations::update::UpdateCheckerState> {
         Arc::clone(&self.update_checker)
     }
@@ -203,6 +216,16 @@ impl ProcessRuntime {
         &self,
     ) -> Result<usize, crate::operations::metrics::MetricsFlushError> {
         self.metrics_coalescer.flush().await
+    }
+
+    pub(crate) async fn flush_security_events(
+        &self,
+    ) -> Result<usize, crate::security_events::SecurityEventError> {
+        self.security_event_writer
+            .lock()
+            .await
+            .flush_available()
+            .await
     }
 
     pub fn task_capability_inventory(&self) -> Vec<RuntimeTaskCapability> {

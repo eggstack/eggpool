@@ -54,7 +54,7 @@ async fn runtime_fixture_with_short_window_limit(
         .expect("migrations run");
     let process = ProcessRuntime::new(database.clone()).expect("process runtime builds");
     let mut config = Config::default();
-    config.server.api_key = Some("test-key-transport".to_owned());
+    config.server.api_key = Some("test-key-transport".into());
     config.admission_fairness.requests_per_minute_per_principal = requests_per_minute_per_principal;
     config.admission_fairness.global_requests_per_minute = global_requests_per_minute;
     let candidate = RuntimeGenerationFactory::prepare(
@@ -103,7 +103,7 @@ async fn runtime_fixture_with_generation_components(
         .expect("migrations run");
     let process = ProcessRuntime::new(database.clone()).expect("process runtime builds");
     let mut config = Config::default();
-    config.server.api_key = Some("test-key-transport".to_owned());
+    config.server.api_key = Some("test-key-transport".into());
     config.server.max_request_body_bytes = max_request_body_bytes;
     config.dashboard.enabled = true;
     config.dashboard.public = false;
@@ -948,7 +948,7 @@ async fn stalled_stream_reader_is_forced_closed_before_shared_resources() {
         .await
         .expect("migrations run");
     let mut config = Config::default();
-    config.server.api_key = Some("test-key-transport".to_owned());
+    config.server.api_key = Some("test-key-transport".into());
     config.models.startup_refresh = false;
     let mut provider_config = ProviderConfig {
         id: "fixture".to_owned(),
@@ -956,7 +956,7 @@ async fn stalled_stream_reader_is_forced_closed_before_shared_resources() {
         protocols: vec!["openai".to_owned()],
         accounts: vec![AccountConfig {
             name: "fixture-account".to_owned(),
-            api_key: Some("fixture-provider-key".to_owned()),
+            api_key: Some("fixture-provider-key".into()),
             ..AccountConfig::default()
         }],
         ..ProviderConfig::default()
@@ -1206,7 +1206,7 @@ async fn compact_capable_runtime(
         .await
         .expect("migrations run");
     let mut config = Config::default();
-    config.server.api_key = Some("test-key-transport".to_owned());
+    config.server.api_key = Some("test-key-transport".into());
     config.models.startup_refresh = false;
     let mut provider_config = ProviderConfig {
         id: "fixture".to_owned(),
@@ -1214,7 +1214,7 @@ async fn compact_capable_runtime(
         protocols: vec!["openai".to_owned()],
         accounts: vec![AccountConfig {
             name: "fixture-account".to_owned(),
-            api_key: Some("fixture-provider-key".to_owned()),
+            api_key: Some("fixture-provider-key".into()),
             ..AccountConfig::default()
         }],
         ..ProviderConfig::default()
@@ -1426,7 +1426,7 @@ async fn eggserve_040_streaming_stays_incremental_without_trailers() {
         .await
         .expect("migrations run");
     let mut config = Config::default();
-    config.server.api_key = Some("test-key-transport".to_owned());
+    config.server.api_key = Some("test-key-transport".into());
     config.models.startup_refresh = false;
     let mut provider_config = ProviderConfig {
         id: "fixture".to_owned(),
@@ -1434,7 +1434,7 @@ async fn eggserve_040_streaming_stays_incremental_without_trailers() {
         protocols: vec!["openai".to_owned()],
         accounts: vec![AccountConfig {
             name: "fixture-account".to_owned(),
-            api_key: Some("fixture-provider-key".to_owned()),
+            api_key: Some("fixture-provider-key".into()),
             ..AccountConfig::default()
         }],
         ..ProviderConfig::default()
@@ -1614,7 +1614,7 @@ async fn unknown_body_reservation_releases_at_stream_handoff() {
         .await
         .expect("migrations run");
     let mut config = Config::default();
-    config.server.api_key = Some("test-key-transport".to_owned());
+    config.server.api_key = Some("test-key-transport".into());
     config.server.max_request_body_bytes = BODY_LIMIT;
     config.models.startup_refresh = false;
     let mut provider_config = ProviderConfig {
@@ -1625,7 +1625,7 @@ async fn unknown_body_reservation_releases_at_stream_handoff() {
             .into_iter()
             .map(|name| AccountConfig {
                 name: name.to_owned(),
-                api_key: Some("fixture-provider-key".to_owned()),
+                api_key: Some("fixture-provider-key".into()),
                 ..AccountConfig::default()
             })
             .collect(),

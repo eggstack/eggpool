@@ -625,6 +625,8 @@ const LOCAL_HEADERS: &[&str] = &[
     "x-api-key",
     "host",
     "content-length",
+    "cookie",
+    "cookie2",
     // Content coding is request-local negotiation, not a forwarded client
     // preference. The pinned transport has no compiled-in decoder and only
     // advertises codings it can decode, so a forwarded `Accept-Encoding` is
@@ -736,7 +738,10 @@ fn add_static_headers(
     values: &[ProviderStaticHeaderConfig],
 ) -> Result<(), AttemptError> {
     for value in values {
-        let raw = match (value.value.as_deref(), value.value_env.as_deref()) {
+        let raw = match (
+            value.value.as_ref().map(|secret| secret.expose_secret()),
+            value.value_env.as_deref(),
+        ) {
             (Some(value), _) => Some(value.to_owned()),
             (None, Some(environment)) => std::env::var(environment).ok(),
             (None, None) => None,
@@ -909,5 +914,66 @@ mod tests {
             "short"
         );
         assert!(headers.get("x-correlation-id").is_none());
+    }
+
+    #[test]
+    fn forwarded_headers_drop_browser_credentials_and_preserve_existing_exclusions() {
+        let mut incoming = HeaderMap::new();
+        incoming.append("cookie", HeaderValue::from_static("first=fixture"));
+        incoming.append("cookie", HeaderValue::from_static("second=fixture"));
+        incoming.append("cookie2", HeaderValue::from_static("first=fixture"));
+        incoming.append("cookie2", HeaderValue::from_static("second=fixture"));
+        for name in [
+            "authorization",
+            "proxy-authorization",
+            "x-api-key",
+            "host",
+            "content-length",
+            "accept-encoding",
+            "x-eggpool-route-session",
+            "connection",
+            "keep-alive",
+            "proxy-connection",
+            "proxy-authenticate",
+            "te",
+            "trailer",
+            "transfer-encoding",
+            "upgrade",
+            "x-connection-token",
+        ] {
+            incoming.insert(name, HeaderValue::from_static("blocked"));
+        }
+        incoming.insert("connection", HeaderValue::from_static("x-connection-token"));
+        incoming.insert("x-allowed", HeaderValue::from_static("forwarded"));
+
+        let mut outgoing = HeaderMap::new();
+        add_forwarded_headers(&mut outgoing, &incoming).expect("forwarded headers");
+
+        for name in [
+            "cookie",
+            "cookie2",
+            "authorization",
+            "proxy-authorization",
+            "x-api-key",
+            "host",
+            "content-length",
+            "accept-encoding",
+            "x-eggpool-route-session",
+            "connection",
+            "keep-alive",
+            "proxy-connection",
+            "proxy-authenticate",
+            "te",
+            "trailer",
+            "transfer-encoding",
+            "upgrade",
+            "x-connection-token",
+        ] {
+            assert!(outgoing.get(name).is_none(), "{name} reached the provider");
+        }
+        assert_eq!(
+            outgoing.get("x-allowed").expect("allowed header"),
+            "forwarded"
+        );
     }
 }

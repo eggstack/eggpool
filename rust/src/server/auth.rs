@@ -39,6 +39,14 @@ pub(super) async fn login_page(
 ) -> Response {
     let connection = peer.as_ref().map(|extension| &extension.0.0);
     let (status, html) = login_page_for_transport(connection, &headers, &state.server);
+    if status == StatusCode::FORBIDDEN {
+        state.record_security_event(
+            crate::security_events::SecurityEventCode::TransportRejected,
+            crate::security_events::SecurityEventOutcome::Refused,
+            crate::security_events::SecurityPrincipalKind::Anonymous,
+            None,
+        );
+    }
     sign_in_response(status, html)
 }
 
@@ -82,9 +90,21 @@ pub(super) async fn login_submit(
     let connection = peer.as_ref().map(|extension| &extension.0.0);
     let secure = request_is_secure(connection, &headers, &state.server);
     if !web_auth_transport_allowed(connection, &headers, &state.server) {
+        state.record_security_event(
+            crate::security_events::SecurityEventCode::TransportRejected,
+            crate::security_events::SecurityEventOutcome::Refused,
+            crate::security_events::SecurityPrincipalKind::Anonymous,
+            None,
+        );
         return sign_in_response(StatusCode::FORBIDDEN, unsafe_login_transport_html());
     }
     if !same_origin(&headers, secure) {
+        state.record_security_event(
+            crate::security_events::SecurityEventCode::OriginRejected,
+            crate::security_events::SecurityEventOutcome::Denied,
+            crate::security_events::SecurityPrincipalKind::Anonymous,
+            None,
+        );
         return sign_in_failure(
             StatusCode::FORBIDDEN,
             "Cross-origin sign-in is not allowed.",
@@ -95,6 +115,12 @@ pub(super) async fn login_submit(
     // check, so an exhausted account budget is not broken by a correct
     // password.
     if !crate::web_session::login_allowed(&form.username, peer_ip) {
+        state.record_security_event(
+            crate::security_events::SecurityEventCode::SignInThrottled,
+            crate::security_events::SecurityEventOutcome::Throttled,
+            crate::security_events::SecurityPrincipalKind::Anonymous,
+            None,
+        );
         return sign_in_failure(
             StatusCode::TOO_MANY_REQUESTS,
             "Sign-in failed. Try again later.",
@@ -116,6 +142,12 @@ pub(super) async fn login_submit(
         .flatten();
     let Some(user) = user else {
         crate::web_session::record_login_failure(&form.username, peer_ip);
+        state.record_security_event(
+            crate::security_events::SecurityEventCode::SignInFailed,
+            crate::security_events::SecurityEventOutcome::Refused,
+            crate::security_events::SecurityPrincipalKind::Anonymous,
+            None,
+        );
         return sign_in_failure(StatusCode::UNAUTHORIZED, "Invalid username or password.");
     };
     // A successful credential check clears the account's failure bucket, so a
@@ -129,6 +161,12 @@ pub(super) async fn login_submit(
         Ok(session) => session,
         Err(_) => return sign_in_unavailable(),
     };
+    state.record_security_event(
+        crate::security_events::SecurityEventCode::SignInSucceeded,
+        crate::security_events::SecurityEventOutcome::Success,
+        crate::security_events::SecurityPrincipalKind::BrowserSession,
+        Some(&user.id),
+    );
     let mut response = no_store(
         Redirect::to(if user.must_change_password {
             "/account?password=required"
@@ -156,8 +194,8 @@ pub(super) async fn login_submit(
 /// and no administrative datum.
 pub(super) async fn member_landing_page(
     Extension(principal): Extension<crate::web_session::Principal>,
-) -> Html<String> {
-    Html(member_landing_html(&principal.username))
+) -> Response {
+    session_html_response(StatusCode::OK, member_landing_html(&principal.username))
 }
 
 pub(super) fn member_landing_html(username: &str) -> String {
@@ -194,16 +232,19 @@ pub(super) fn member_refusal_html() -> String {
 pub(super) async fn account_page(
     Extension(principal): Extension<crate::web_session::Principal>,
     headers: HeaderMap,
-) -> Html<String> {
+) -> Response {
     let csrf = crate::web_session::csrf_cookie_value(&headers)
         .filter(|token| crate::web_session::verify_csrf(&principal, token));
     let csrf = csrf.unwrap_or_default();
-    Html(account_html(
-        &principal.username,
-        principal.must_change_password,
-        &csrf,
-        principal.role == "admin",
-    ))
+    session_html_response(
+        StatusCode::OK,
+        account_html(
+            &principal.username,
+            principal.must_change_password,
+            &csrf,
+            principal.role == "admin",
+        ),
+    )
 }
 
 /// The account page.
@@ -250,6 +291,12 @@ pub(super) async fn password_change(
         || !crate::web_session::csrf_cookie_value(&headers)
             .is_some_and(|cookie| crate::web_session::verify_csrf(&principal, &cookie))
     {
+        state.record_security_event(
+            crate::security_events::SecurityEventCode::CsrfRejected,
+            crate::security_events::SecurityEventOutcome::Denied,
+            crate::security_events::SecurityPrincipalKind::BrowserSession,
+            Some(&principal.user_id),
+        );
         return (StatusCode::FORBIDDEN, "Invalid request token.").into_response();
     }
     let authenticated = crate::identity::verify_password(
@@ -262,11 +309,10 @@ pub(super) async fn password_change(
     .flatten()
     .is_some_and(|user| user.id == principal.user_id);
     if !authenticated {
-        return (
+        return session_html_response(
             StatusCode::BAD_REQUEST,
-            Html(account_error_html("Current password is incorrect.")),
-        )
-            .into_response();
+            account_error_html("Current password is incorrect."),
+        );
     }
     match crate::identity::reset_password_from_browser(
         &state.database,
@@ -287,11 +333,10 @@ pub(super) async fn password_change(
             );
             response
         }
-        Err(crate::identity::IdentityError::InvalidPassword) => (
+        Err(crate::identity::IdentityError::InvalidPassword) => session_html_response(
             StatusCode::BAD_REQUEST,
-            Html(account_error_html("New password must be 12 to 1024 bytes.")),
-        )
-            .into_response(),
+            account_error_html("New password must be 12 to 1024 bytes."),
+        ),
         Err(_) => unavailable(),
     }
 }
@@ -307,6 +352,12 @@ pub(super) async fn logout_submit(
         || !crate::web_session::csrf_cookie_value(&headers)
             .is_some_and(|cookie| crate::web_session::verify_csrf(&principal, &cookie))
     {
+        state.record_security_event(
+            crate::security_events::SecurityEventCode::CsrfRejected,
+            crate::security_events::SecurityEventOutcome::Denied,
+            crate::security_events::SecurityPrincipalKind::BrowserSession,
+            Some(&principal.user_id),
+        );
         return (StatusCode::FORBIDDEN, "Invalid request token.").into_response();
     }
     if let Some(token) = crate::web_session::session_cookie_value(&headers)
@@ -577,7 +628,13 @@ fn sign_in_failure_html(message: &str) -> String {
 /// session-authenticated response carries. The sign-in surface must set the
 /// header itself.
 fn sign_in_response(status: StatusCode, html: String) -> Response {
-    no_store((status, Html(html)).into_response())
+    session_html_response(status, html)
+}
+
+pub(super) fn session_html_response(status: StatusCode, html: String) -> Response {
+    let mut response = (status, Html(html)).into_response();
+    super::dashboard::apply_html_security_headers(&mut response);
+    no_store(response)
 }
 
 /// Send an unauthenticated browser to the existing sign-in page.
@@ -789,6 +846,48 @@ mod tests {
                     .get(header::CACHE_CONTROL)
                     .and_then(|value| value.to_str().ok()),
                 Some("no-store, max-age=0")
+            );
+            assert_html_security_headers(&response);
+        }
+    }
+
+    #[test]
+    fn every_session_html_variant_uses_shared_security_headers_and_no_store() {
+        for html in [
+            member_landing_html("member"),
+            account_html("member", false, "csrf", false),
+            account_error_html("Password update refused."),
+            member_refusal_html(),
+        ] {
+            let response = session_html_response(StatusCode::OK, html);
+            assert_html_security_headers(&response);
+            assert_eq!(
+                response
+                    .headers()
+                    .get(header::CACHE_CONTROL)
+                    .and_then(|value| value.to_str().ok()),
+                Some("no-store, max-age=0")
+            );
+        }
+    }
+
+    fn assert_html_security_headers(response: &Response) {
+        for (name, expected) in [
+            ("x-content-type-options", "nosniff"),
+            ("referrer-policy", "no-referrer"),
+            ("x-frame-options", "DENY"),
+            (
+                "content-security-policy",
+                "frame-ancestors 'none'; base-uri 'none'; form-action 'self'",
+            ),
+        ] {
+            assert_eq!(
+                response
+                    .headers()
+                    .get(name)
+                    .and_then(|value| value.to_str().ok()),
+                Some(expected),
+                "{name}"
             );
         }
     }

@@ -1670,7 +1670,7 @@ async fn axum_endpoints_preserve_auth_body_limits_and_surfaces() {
     )
     .await;
     let mut config = Config::default();
-    config.server.api_key = Some("test-key-123".to_owned());
+    config.server.api_key = Some("test-key-123".into());
     config.server.max_request_body_bytes = 10 * 1024 * 1024;
     let app = eggpool::server::build_router(eggpool::server::AppState::from_inference(
         config,

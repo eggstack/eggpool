@@ -90,7 +90,6 @@ recommended profile:
 ```toml
 [server]
 threads = 1          # supported single-loop default
-access_log = false   # optional: reduce I/O noise after initial setup
 
 [database]
 worker_threads = 1   # lean default; use 2 for a separate stats connection
@@ -110,7 +109,6 @@ For minimum-footprint mode on very constrained devices:
 ```toml
 [server]
 threads = 1
-access_log = false
 
 [database]
 worker_threads = 1

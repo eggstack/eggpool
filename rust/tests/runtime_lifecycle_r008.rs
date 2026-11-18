@@ -87,7 +87,12 @@ async fn maintenance_capabilities_are_registered_or_explicitly_deferred() {
         .map(|capability| (capability.name.clone(), capability))
         .collect::<BTreeMap<_, _>>();
 
-    for name in ["catalog_refresh", "retention_cleanup", "checkpoint"] {
+    for name in [
+        "catalog_refresh",
+        "retention_cleanup",
+        "checkpoint",
+        "security_events",
+    ] {
         assert!(by_name[name].registered, "{name} should be implemented");
     }
     for name in ["metrics_flush", "automatic_backup"] {
@@ -119,7 +124,12 @@ async fn maintenance_capabilities_are_registered_or_explicitly_deferred() {
         .collect::<Vec<_>>();
     assert_eq!(
         names,
-        vec!["catalog_refresh", "checkpoint", "retention_cleanup"]
+        vec![
+            "catalog_refresh",
+            "checkpoint",
+            "retention_cleanup",
+            "security_events",
+        ]
     );
 
     manager.shutdown();

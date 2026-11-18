@@ -1138,7 +1138,12 @@ pub fn connect_with_transition(
                     .providers
                     .values()
                     .flat_map(|provider| provider.accounts.iter())
-                    .any(|account| account.api_key.as_deref() == Some(key.as_str()))
+                    .any(|account| {
+                        account
+                            .api_key
+                            .as_ref()
+                            .is_some_and(|secret| secret.expose_secret() == key.as_str())
+                    })
             })
     });
     if duplicate {
@@ -1199,7 +1204,8 @@ pub fn list_accounts(path: &Path) -> Result<Vec<AccountMatch>, MutationError> {
                 api_key_env: account.api_key_env.clone(),
                 api_key: account
                     .api_key
-                    .clone()
+                    .as_ref()
+                    .map(|secret| secret.expose_secret().to_owned())
                     .or_else(|| env::var(&account.api_key_env).ok()),
             })
         })
@@ -1226,7 +1232,10 @@ pub fn matching_accounts(
     Ok(accounts
         .into_iter()
         .filter(|account| {
-            account.api_key.as_deref() == Some(target)
+            account
+                .api_key
+                .as_ref()
+                .is_some_and(|secret| secret.as_str() == target)
                 || account.api_key_env == target
                 || account.name == target
                 || account.provider_id == target

@@ -1,6 +1,6 @@
 //! O009 deployment renderers, command boundaries, and uninstall safety.
 
-use std::{fs, os::unix::fs::symlink, path::PathBuf};
+use std::{collections::BTreeMap, fs, os::unix::fs::symlink, path::PathBuf};
 
 use eggpool::operations::deploy::{
     CommandResult, KeepFlags, PersonalSystemdSpec, ProductionSystemdSpec, RecordedCommand,
@@ -301,4 +301,119 @@ fn repeated_uninstall_treats_an_absent_service_as_a_noop() {
         true,
     )
     .expect("absent service is an uninstall no-op");
+}
+
+fn unit_directives(unit: &str) -> BTreeMap<String, Vec<String>> {
+    let mut directives = BTreeMap::<String, Vec<String>>::new();
+    let mut section: Option<String> = None;
+    for line in unit.lines() {
+        let line = line.trim();
+        if line.starts_with('[') {
+            section = line
+                .strip_prefix('[')
+                .and_then(|value| value.strip_suffix(']'))
+                .map(str::to_owned);
+            continue;
+        }
+        if line.is_empty() || line.starts_with('#') {
+            continue;
+        }
+        let Some(section) = section.as_deref() else {
+            continue;
+        };
+        if !matches!(section, "Unit" | "Service" | "Install") {
+            continue;
+        }
+        if let Some((name, value)) = line.split_once('=') {
+            directives
+                .entry(format!("{section}.{name}"))
+                .or_default()
+                .push(value.split_whitespace().collect::<Vec<_>>().join(" "));
+        }
+    }
+    directives
+}
+
+fn compare_production_unit_directives(tracked: &str, rendered: &str) -> Result<(), String> {
+    let mut tracked = unit_directives(tracked);
+    let mut rendered = unit_directives(rendered);
+
+    let tracked_exec = tracked
+        .remove("Service.ExecStart")
+        .ok_or_else(|| "tracked unit is missing ExecStart".to_owned())?;
+    let rendered_exec = rendered
+        .remove("Service.ExecStart")
+        .ok_or_else(|| "rendered unit is missing ExecStart".to_owned())?;
+    if tracked_exec
+        != vec!["/usr/local/bin/eggpool --config /etc/eggpool/config.toml serve".to_owned()]
+    {
+        return Err(format!("unexpected tracked ExecStart: {tracked_exec:?}"));
+    }
+    if rendered_exec
+        != vec![
+            "/usr/local/bin/eggpool --config /etc/eggpool/config.toml serve --verbose".to_owned(),
+        ]
+    {
+        return Err(format!("unexpected rendered ExecStart: {rendered_exec:?}"));
+    }
+
+    let tracked_write_paths = tracked
+        .remove("Service.ReadWritePaths")
+        .ok_or_else(|| "tracked unit is missing ReadWritePaths".to_owned())?;
+    let rendered_write_paths = rendered
+        .remove("Service.ReadWritePaths")
+        .ok_or_else(|| "rendered unit is missing ReadWritePaths".to_owned())?;
+    if tracked_write_paths
+        != vec!["/var/lib/eggpool /var/lib/eggpool/backups /var/log/eggpool".to_owned()]
+    {
+        return Err(format!(
+            "unexpected tracked ReadWritePaths: {tracked_write_paths:?}"
+        ));
+    }
+    if rendered_write_paths
+        != vec![
+            "/var/lib/eggpool /var/lib/eggpool/backups /var/log/eggpool /var/backups/eggpool"
+                .to_owned(),
+        ]
+    {
+        return Err(format!(
+            "unexpected rendered ReadWritePaths: {rendered_write_paths:?}"
+        ));
+    }
+
+    if tracked != rendered {
+        return Err(format!(
+            "production unit directives differ: tracked={tracked:?}, rendered={rendered:?}"
+        ));
+    }
+    Ok(())
+}
+
+#[test]
+fn tracked_and_rendered_production_units_match_except_documented_differences() {
+    const TRACKED_UNIT: &str = include_str!("../../deploy/eggpool.service");
+    let rendered_unit = render_production_systemd(&ProductionSystemdSpec {
+        binary: PathBuf::from("/usr/local/bin/eggpool"),
+    });
+
+    compare_production_unit_directives(TRACKED_UNIT, &rendered_unit)
+        .expect("production service directives should match");
+
+    let weakened_unit = TRACKED_UNIT.replacen("ProtectProc=invisible\n", "", 1);
+    assert_ne!(
+        weakened_unit, TRACKED_UNIT,
+        "fixture must remove a directive"
+    );
+    let error = compare_production_unit_directives(&weakened_unit, &rendered_unit)
+        .expect_err("the drift guard must reject a directive removed from the tracked unit");
+    assert!(error.contains("ProtectProc"), "unexpected error: {error}");
+
+    let weakened_renderer = rendered_unit.replacen("ProtectProc=invisible\n", "", 1);
+    assert_ne!(
+        weakened_renderer, rendered_unit,
+        "fixture must remove a directive"
+    );
+    let error = compare_production_unit_directives(TRACKED_UNIT, &weakened_renderer)
+        .expect_err("the drift guard must reject a directive removed from the renderer");
+    assert!(error.contains("ProtectProc"), "unexpected error: {error}");
 }

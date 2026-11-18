@@ -1847,7 +1847,7 @@ async fn failed_pool_build_after_bind_closes_database_and_releases_listener() {
             // the canonical LAN bind default (which requires a server key).
             host: "127.0.0.1".to_owned(),
             port,
-            api_key: Some("fixture-server-key".to_owned()),
+            api_key: Some("fixture-server-key".into()),
             ..Default::default()
         },
         database: eggpool::config::DatabaseConfig {

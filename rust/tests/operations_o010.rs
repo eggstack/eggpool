@@ -39,7 +39,7 @@ async fn all_three_m9_callbacks_are_registered_once_in_a_configured_runtime() {
             .expect("configured process runtime");
 
     let inventory = process.task_capability_inventory();
-    assert_eq!(inventory.len(), 6);
+    assert_eq!(inventory.len(), 7);
     assert!(inventory.iter().all(|capability| capability.registered));
     assert!(
         inventory
@@ -51,26 +51,32 @@ async fn all_three_m9_callbacks_are_registered_once_in_a_configured_runtime() {
         .available_callback_kinds()
         .into_iter()
         .collect::<BTreeSet<_>>();
-    assert_eq!(registered.len(), 6);
+    assert_eq!(registered.len(), 7);
     assert!(registered.contains("metrics_flush"));
+    assert!(registered.contains("security_events"));
     assert!(registered.contains("update_checker"));
     assert!(registered.contains("automatic_backup"));
 
     let specs = runtime_task_specs_for_config(&config, true);
-    assert_eq!(specs.len(), 6);
+    assert_eq!(specs.len(), 7);
     assert_eq!(
         specs
             .iter()
             .map(|spec| spec.name.as_str())
             .collect::<BTreeSet<_>>()
             .len(),
-        6
+        7
     );
-    for name in ["metrics_flush", "update_checker", "automatic_backup"] {
+    for name in [
+        "metrics_flush",
+        "security_events",
+        "update_checker",
+        "automatic_backup",
+    ] {
         let spec = specs
             .iter()
             .find(|spec| spec.name == name)
-            .expect("M9 task spec");
+            .expect("process task spec");
         assert_eq!(spec.ownership, TaskOwnership::Process);
         assert!(spec.enabled);
     }

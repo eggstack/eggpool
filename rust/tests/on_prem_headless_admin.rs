@@ -55,7 +55,7 @@ async fn headless_member_lifecycle_is_atomic_audited_and_works_with_stale_config
     let config_path = directory.path().join("config.toml");
     let mut config = Config::default();
     config.database.path = database_path.display().to_string();
-    config.server.api_key = Some("legacy-shared-key-for-test-only".to_owned());
+    config.server.api_key = Some("legacy-shared-key-for-test-only".into());
     config.dashboard.public = true;
     fs::write(
         &config_path,
@@ -285,7 +285,7 @@ async fn enable_managed_uses_the_same_cutover_with_stale_config_settings() {
     let config_path = directory.path().join("config.toml");
     let mut config = Config::default();
     config.database.path = database_path.display().to_string();
-    config.server.api_key = Some("legacy-shared-key-for-test-only".to_owned());
+    config.server.api_key = Some("legacy-shared-key-for-test-only".into());
     config.dashboard.public = true;
     fs::write(
         &config_path,

@@ -421,10 +421,12 @@ pub(super) fn surface_for_path(path: &str) -> ClientSurface {
 /// Incoming headers forwarded toward provider selection, minus credentials
 /// and hop-by-hop framing. The session header is hashed, never forwarded.
 pub(crate) fn filtered_incoming_headers(headers: &HeaderMap) -> HeaderMap {
-    const BLOCKED: [&str; 10] = [
+    const BLOCKED: [&str; 12] = [
         "authorization",
         "proxy-authorization",
         "x-api-key",
+        "cookie",
+        "cookie2",
         "host",
         "content-length",
         "x-eggpool-route-session",
@@ -441,4 +443,56 @@ pub(crate) fn filtered_incoming_headers(headers: &HeaderMap) -> HeaderMap {
         outgoing.insert(name.clone(), value.clone());
     }
     outgoing
+}
+
+#[cfg(test)]
+mod tests {
+    use super::filtered_incoming_headers;
+
+    #[test]
+    fn prefilter_drops_browser_credentials_and_preserves_existing_exclusions() {
+        let mut incoming = http::HeaderMap::new();
+        incoming.append("cookie", http::HeaderValue::from_static("first=fixture"));
+        incoming.append("cookie", http::HeaderValue::from_static("second=fixture"));
+        incoming.append("cookie2", http::HeaderValue::from_static("first=fixture"));
+        incoming.append("cookie2", http::HeaderValue::from_static("second=fixture"));
+        for name in [
+            "authorization",
+            "proxy-authorization",
+            "x-api-key",
+            "host",
+            "content-length",
+            "x-eggpool-route-session",
+            "connection",
+            "transfer-encoding",
+            "upgrade",
+            "keep-alive",
+        ] {
+            incoming.insert(name, http::HeaderValue::from_static("blocked"));
+        }
+        incoming.insert("x-allowed", http::HeaderValue::from_static("forwarded"));
+
+        let outgoing = filtered_incoming_headers(&incoming);
+
+        for name in [
+            "cookie",
+            "cookie2",
+            "authorization",
+            "proxy-authorization",
+            "x-api-key",
+            "host",
+            "content-length",
+            "x-eggpool-route-session",
+            "connection",
+            "transfer-encoding",
+            "upgrade",
+            "keep-alive",
+        ] {
+            assert!(outgoing.get_all(name).iter().next().is_none());
+        }
+        assert_eq!(
+            outgoing.get("x-allowed").expect("allowed header"),
+            "forwarded"
+        );
+    }
 }

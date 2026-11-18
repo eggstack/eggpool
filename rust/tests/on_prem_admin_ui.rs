@@ -139,6 +139,22 @@ fn session_pair(response: &str) -> (String, String, String) {
     (session, csrf, header)
 }
 
+fn assert_html_security_headers(response: &str) {
+    let headers = response
+        .split_once("\r\n\r\n")
+        .expect("HTTP response includes headers and body")
+        .0
+        .to_ascii_lowercase();
+    for expected in [
+        "x-content-type-options: nosniff",
+        "referrer-policy: no-referrer",
+        "x-frame-options: deny",
+        "content-security-policy: frame-ancestors 'none'; base-uri 'none'; form-action 'self'",
+    ] {
+        assert!(headers.contains(expected), "missing {expected}: {response}");
+    }
+}
+
 #[tokio::test]
 async fn profile_edits_use_compare_and_swap_and_are_audited() {
     let (_directory, database) = database().await;
@@ -656,6 +672,7 @@ async fn two_user_browser_journey_fences_admin_data_and_personal_credentials() {
     )
     .await;
     assert!(token_created.starts_with("HTTP/1.1 200"), "{token_created}");
+    assert_html_security_headers(&token_created);
     assert!(
         token_created
             .to_ascii_lowercase()
@@ -717,6 +734,28 @@ async fn two_user_browser_journey_fences_admin_data_and_personal_credentials() {
     .await;
     assert!(!refreshed_account.contains(&token), "{refreshed_account}");
 
+    let known_user_id = admin.id.clone();
+    database
+        .call(move |connection| {
+            let window_start: i64 = connection.query_row(
+                "SELECT (CAST(strftime('%s', 'now') AS INTEGER) / 60) * 60",
+                [],
+                |row| row.get(0),
+            )?;
+            connection.execute(
+                "INSERT INTO security_events(window_start, event_code, outcome, principal_kind, user_id, event_count) \
+                 VALUES (?1, 'scope_denied', 'denied', 'agent_token', ?2, 3)",
+                (window_start, known_user_id),
+            )?;
+            connection.execute(
+                "INSERT INTO security_events(window_start, event_code, outcome, principal_kind, user_id, event_count) \
+                 VALUES (?1, 'session_rejected', 'refused', 'browser_session', 'removed-user-id', 2)",
+                [window_start],
+            )?;
+            Ok(())
+        })
+        .await
+        .unwrap();
     let audit = http_request(
         address,
         "GET",
@@ -728,9 +767,38 @@ async fn two_user_browser_journey_fences_admin_data_and_personal_credentials() {
     )
     .await;
     assert!(audit.starts_with("HTTP/1.1 200"), "{audit}");
+    assert_html_security_headers(&audit);
     assert!(audit.contains("create_user"), "{audit}");
     assert!(audit.contains("assign_profile"), "{audit}");
     assert!(audit.contains("issue_token"), "{audit}");
+    assert!(audit.contains("Security events"), "{audit}");
+    assert!(
+        audit.contains(
+            "<td>scope_denied</td><td>denied</td><td>agent_token</td><td>3</td><td>admin</td>"
+        ),
+        "security events resolve an existing user for display: {audit}"
+    );
+    assert!(
+        audit.contains(
+            "<td>session_rejected</td><td>refused</td><td>browser_session</td><td>2</td><td>-</td>"
+        ),
+        "a deleted user's event renders without an identity: {audit}"
+    );
+    let member_audit = http_request(
+        address,
+        "GET",
+        "/admin/audit",
+        "",
+        Some(&member_cookies),
+        None,
+        None,
+    )
+    .await;
+    assert!(member_audit.starts_with("HTTP/1.1 403"), "{member_audit}");
+    assert!(
+        !member_audit.contains("Security events"),
+        "members cannot read the administrator audit section: {member_audit}"
+    );
 
     assert!(matches!(
         identity::set_user_enabled(&database, &admin.id, &admin.id, false).await,
