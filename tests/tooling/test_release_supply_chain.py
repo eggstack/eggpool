@@ -153,6 +153,28 @@ def test_publication_verifier_accepts_exact_manifest_bytes() -> None:
     }
 
 
+def test_publication_verifier_accepts_additive_eggpack_manifest_asset() -> None:
+    manifest = _manifest()
+    pypi, github = _public_metadata()
+    assets = github["assets"]
+    assert isinstance(assets, list)
+    assets.append({"name": "eggpack-release-manifest.v1.json"})
+
+    result = verify_publication(manifest, pypi, github)
+    assert result["status"] == "pass"
+
+
+def test_publication_verifier_still_rejects_unrelated_release_assets() -> None:
+    manifest = _manifest()
+    pypi, github = _public_metadata()
+    assets = github["assets"]
+    assert isinstance(assets, list)
+    assets.append({"name": "unrelated-release-asset.txt"})
+
+    with pytest.raises(PublicationVerificationError, match="unsupported asset"):
+        verify_publication(manifest, pypi, github)
+
+
 def test_publication_verifier_rejects_missing_github_digest() -> None:
     pypi, github = _public_metadata()
     changed = copy.deepcopy(github)

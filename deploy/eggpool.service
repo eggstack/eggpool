@@ -50,8 +50,8 @@ LockPersonality=yes
 # Network
 RestrictAddressFamilies=AF_INET AF_INET6 AF_UNIX
 
-# Exclude privileged, mount, and debug syscalls from the service allowlist.
-SystemCallFilter=@system-service ~@privileged ~@mount ~@debug
+# Use systemd's service allowlist; do not mix allow/deny filters.
+SystemCallFilter=@system-service
 SystemCallErrorNumber=EPERM
 SystemCallArchitectures=native
 

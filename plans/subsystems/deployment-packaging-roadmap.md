@@ -11,7 +11,10 @@ Long-term references:
 
 Related ADRs:
 
-- `plans/adrs/ADR-0001-binary-first-quick-install-authority.md`
+- plans/adrs/ADR-0001-binary-first-quick-install-authority.md
+- A new ADR is required before M011 chooses durable Eggup crates, acquisition
+  transport, or update transaction ownership; it has not been drafted or
+  accepted.
 
 ## 1. Purpose and ownership boundary
 
@@ -181,6 +184,48 @@ surface. The latest path can select the unique supported raw asset entry and
 derive the version without jq or Python. Exact Rust versions use the same
 contract under their explicit release tag.
 
+### Proposed Eggpack / Eggup release-update boundary (draft)
+
+The existing release catalog and install provenance remain EggPool policy. Eggpack is a producer-side contract/build/qualification/manifest tool; Eggup is a consumer-side staged file transaction. Neither selects a release, target, origin, destination, install owner, or authenticity policy for EggPool.
+
+Proposed mapping (candidate product IDs; confirm against the selected Eggpack contract):
+
+| Candidate product/channel | EggPool target class | Canonical Rust triple | Existing asset shape | Consumer |
+|---|---|---|---|---|
+| eggpool raw | linux-x86_64 | x86_64-unknown-linux-gnu | eggpool-{version}-linux-x86_64 | Eggup direct, one member |
+| eggpool raw | linux-aarch64 | aarch64-unknown-linux-gnu | eggpool-{version}-linux-aarch64 | Eggup direct, one member |
+| eggpool raw | macos-arm64 | aarch64-apple-darwin | eggpool-{version}-macos-aarch64 | Eggup direct, one member |
+| eggpool-wheel | linux-x86_64 | x86_64-unknown-linux-gnu | eggpool-{version}-<python>-<abi>-<manylinux platform>.whl | package managers only |
+| eggpool-wheel | linux-aarch64 | aarch64-unknown-linux-gnu | eggpool-{version}-<python>-<abi>-<manylinux platform>.whl | package managers only |
+| eggpool-wheel | macos-arm64 | aarch64-apple-darwin | eggpool-{version}-<python>-<abi>-macosx_11_0_arm64.whl | package managers only |
+| eggpool-connect | connect-linux-x86_64 | x86_64-unknown-linux-gnu | eggpool-connect-{version}-linux-x86_64 | Separate helper product |
+| eggpool-connect | connect-linux-aarch64 | aarch64-unknown-linux-gnu | eggpool-connect-{version}-linux-aarch64 | Separate helper product |
+| eggpool-connect | connect-macos-arm64 | aarch64-apple-darwin | eggpool-connect-{version}-macos-aarch64 | Separate helper product |
+| eggpool-connect | connect-windows-x86_64 | x86_64-pc-windows-msvc | eggpool-connect-{version}-windows-x86_64.exe | Separate helper; not a proxy target |
+| connect-bootstrap | no target | — | eggpool-connect.sh and eggpool-connect.ps1 | Static assets; no proxy updater |
+
+The raw/runtime triples and names come from scripts/inspect_release_raw.py;
+the wheel platform tags come from scripts/inspect_release_wheel.py; helper
+triples and filenames come from scripts/inspect_connect_artifact.py. Eggup
+consumes only the three raw EggPool rows in this milestone. Wheels are
+alternate installation forms, not additional members of the same transaction.
+The helper and bootstrap identities stay separate from the proxy identity.
+
+All product manifests share the release_id and source revision resolved from
+EggPool's existing version authority/tag. Map aliases only for display;
+consumer selection requires one exact canonical target triple, with no
+nearest-target fallback. Eggpack ReleaseManifest is a distinct wire contract
+from EggPool's current aggregate release-manifest.v1. Keep SHA256SUMS and the
+current aggregate manifest during a parallel-parity period. Preserve build and
+qualification evidence as Eggpack evidence or separate release evidence; do
+not add unrecognized fields to the closed manifest schema.
+
+Consumer flow for a standalone Rust update:
+
+EggPool owner/provenance and ReleaseCatalog select one exact release and target; fetch that release manifest from the trusted HTTPS origin; the Eggup Eggpack adapter validates the selected product/release/target mapping; Eggup acquisition fetches the exact caller-bound asset under byte/time bounds; Eggup core stages, checks exact size and SHA-256, and validates the candidate; EggPool proves current executable ownership and commits one file under lock; EggPool verifies the live version and completes the existing service restart; finalize on success, otherwise restore and verify the prior executable.
+
+EggPool retains restart/service-manager ownership. The eggup-service crate is not part of this integration unless a separate decision transfers that boundary.
+
 ## 6. Dependency graph
 
 - Release raw-artifact publication -> installer M001: **interface**. The v0.8.1
@@ -198,9 +243,11 @@ contract under their explicit release tag.
 - Repository version authority -> M006: **interface**. The qualification
   workflows derive the release version from the same authority `release.yml`
   uses; a reintroduced literal fails validation in ordinary CI.
-- M006 closed. No further milestone is registered in this subsystem.
-- M007 closed. No further milestone is registered in this subsystem.
-- M008 closed. No further milestone is registered in this subsystem.
+- M006–M008 are closed; M009 dependency advisory remediation is closed (plans/closure/deployment-packaging/009-status.md).
+- Eggpack CLI/manifest contract -> M010: interface. Pin an immutable reviewed tool revision and prove it can represent the current release without a second, conflicting build/publish authority.
+- M010 Eggpack manifest mapping -> M011 Eggup consumer: hard. The consumer must not be implemented against a guessed or unstable product/target map.
+- Accepted ADR for Eggup's exact published crate graph, acquisition adapter, and update-transaction ownership -> M011: hard. The ADR must resolve the synchronous commit versus EggPool's asynchronous restart/rollback seam.
+- EggPool install provenance, release catalog, service lifecycle, and SHA256SUMS installer contract -> M010/M011: interface; remain the application-owned authorities unless an accepted ADR says otherwise.
 
 ## 7. Milestones
 
@@ -582,6 +629,85 @@ Deferred work:
   front of them already guarantees the lockfile is current, so each of them
   installs the committed resolution.
 
+### Milestone 10 — Eggpack release contract and manifest producer
+
+Class: infrastructure
+
+Objective:
+
+Add a reproducible Eggpack producer contract for EggPool releases and prove a manifest mapping for raw executable targets without changing the installed updater or publication authority.
+
+Dependencies:
+
+- M009 is closed.
+- Review the Eggpack ReleaseManifest v1 contract and pin an immutable CLI revision.
+- Map the existing Maturin wheel/raw derivation, eggpool-connect Cargo artifacts, and static bootstraps. If Eggpack cannot consume the already-qualified outputs, stop rather than silently rebuilding or replacing the current build-once release path.
+
+Deliverable boundary:
+
+A producer-side contract, policy/bindings, local scratch qualification, and parallel manifest output. The existing release workflow remains the production publication authority; the existing updater, SHA256SUMS, wheel distribution, helper artifacts, and current aggregate manifest continue to work unchanged. No runtime Eggup dependency is added in this milestone.
+
+User or operator value:
+
+Release bytes gain a schema-checked, target-specific manifest and reproducible qualification evidence without interrupting current installation/update paths.
+
+Exit conditions:
+
+- Raw runtime targets map exactly to supported canonical triples; product/release/source identities derive from current version authority and the tag commit.
+- Per-target filename, size, and SHA-256 agree with finalized raw bytes; no alias/target ambiguity or unsupported extra asset is accepted.
+- Wheels remain alternative distributions, not members of the raw update set; eggpool-connect and its bootstraps remain distinct from proxy artifacts.
+- Eggpack output and qualification evidence match the existing release inventory and release validators; aggregation/publication never rebuilds artifact bytes.
+- Generated workflow checks preserve immutable action pins, least privilege, publication separation, and existing release rollback gates.
+- Existing SHA256SUMS consumers and the current aggregate manifest pass unchanged during the parallel period.
+- Every published pre-Eggpack native updater (currently tags v0.8.0–v0.8.3) resolves a newer Eggpack-enabled release through the unchanged GitHub Release API contract: `tag_name`, exact raw filename, `browser_download_url`, `digest`, and `size`. Additional Eggpack manifest assets do not shadow raw-asset selection. Prove this with tagged-version fixtures and a complete disposable standalone update; never use an operator installation or production data.
+- The published-release verifier recognizes the explicitly named Eggpack manifest asset while remaining fail-closed for unrelated assets; retain existing raw/helper names and GitHub digest metadata.
+
+Deferred work:
+
+- Eggup runtime integration (M011).
+- Signature or provenance authentication. M006 remains a separate decision; SHA-256 remains integrity evidence only.
+- Windows proxy support, root/system deployment changes, and manager-owner migration.
+
+### Milestone 11 — Eggup staged standalone update and rollback
+
+Class: capability
+
+Objective:
+
+Use Eggpack manifest inputs and Eggup's staged transaction for the existing standalone Rust self-update path while preserving EggPool release selection, owner detection, package-manager routes, service control, and recovery behavior.
+
+Dependencies:
+
+- M010 is closed and its product/release/canonical-target mapping is stable.
+- A separate ADR is accepted for exact Eggup crate versions, the acquisition/manifest adapters, and the update-transaction ownership boundary.
+- A bounded technical proof demonstrates that Eggup can retain rollback evidence through EggPool's asynchronous post-replacement validation/restart without blocking or nesting the current-thread Tokio runtime. If not, use an approved upstream async-compatible seam or retain EggPool's replacement owner.
+- Published crate archives, exact-pin compatibility, advisories, feature/license/source policy, and default/no-default resolution are audited before selection. Do not rely on a moving branch or assume newer transitive fixes are picked up.
+
+Deliverable boundary:
+
+One direct raw executable member for StandaloneRust only. EggPool continues to select latest/exact versions through its catalog/release policy and continues to dispatch uv/pipx/pip owners to their existing managers. EggPool keeps restart/service-manager ownership; no Eggup service crate is added. Archive extraction and helper self-update are out of scope.
+
+User or operator value:
+
+Standalone updates use a reusable, auditable staged transaction while retaining the current promise that failed validation or restart restores the previous working binary or reports concrete recovery evidence.
+
+Exit conditions:
+
+- The caller selects one catalogued release and exact supported target before acquisition; manifest parsing cannot select an origin, version, destination, or fallback target.
+- Only HTTPS release origins and exact caller-bound asset URLs are used; redirects cannot escape the approved origin policy.
+- Staging enforces exact artifact size and SHA-256, then validates executable version and target before any live mutation.
+- Eggup re-proves exact current executable identity/ownership under its mutation lock. Unknown/foreign state, malformed lock state, or changed identity fails closed.
+- Restart/validation success finalizes the transaction; every failure before finalization restores and verifies the old executable. RecoveryRequired retains real backup/lock evidence and is never reported as success.
+- Lock contention, stale-lock recovery, cancellation, process restart, and concurrent update attempts have deterministic tests; no timeout/sleep guess is used as a synchronization proof.
+- Existing StandaloneRust, uv, pipx, pip/venv, historical exact-version, ambiguous-owner, and source-checkout behavior remains regression-covered.
+- Disposable supported-host qualification proves successful update and failure/rollback without touching production paths or data.
+
+Deferred work:
+
+- Updating eggpool-connect, changing package-manager owners, or changing the supported proxy target matrix.
+- M006 signing authority, key custody, and signature verification.
+- Any change to managed service deployment authority.
+
 ## 8. Cross-cutting requirements
 
 Storage/migration: no schema or data migration. Installer state/lock/temp files
@@ -612,6 +738,22 @@ native installs.
 Docs/ops: deployment docs must distinguish personal quick-install ownership
 from explicit system-owned production deployment.
 
+Release compatibility: eggpack-manifest is one-product release evidence; the
+current EggPool manifest is an aggregate inventory. Maintain a tested
+projection/aggregate boundary, preserve additional evidence outside the closed
+Eggpack schema, and keep legacy consumers working until an explicit cutover.
+Never model alternative wheel/raw install channels as one transactional bundle.
+
+Transaction/restart: Eggup's local commit API is synchronous while EggPool's
+restart callback is asynchronous. Do not use nested block_on, block the
+current-thread runtime, or discard the backup before restart acceptance. If a
+supported composition cannot preserve rollback through restart, stop and keep
+the current EggPool updater as authority pending an upstream/API decision.
+
+Trust: Eggpack/Eggup SHA-256 values prove byte integrity only. This integration
+must not claim publisher authenticity, signed provenance, or solve security
+hardening M006.
+
 ## 9. Verification strategy
 
 Deterministic tests use fake curl/release fixtures and temporary home/bin/state
@@ -633,6 +775,21 @@ Any Rust operations change additionally runs the focused provenance/update
 tests and full serial workspace/no-default verification required by the
 development skill.
 
+For M010, exercise Eggpack in a disposable release checkout and compare its
+manifest/qualification output with current version, target, asset and checksum
+validators. Run the generated-workflow drift check; native target qualification
+must run on a matching supported host. Keep artifact creation separate from
+aggregation so publication cannot rebuild.
+
+For M011, add offline manifest/acquisition fixtures for valid and malformed
+identities, wrong target, wrong size/digest, origin/redirect violation, owner
+change, lock contention, candidate validation failure, restart failure,
+rollback failure, cancellation, and retained-recovery evidence. Run the focused
+operations::update tests, release-artifact tooling tests, default and
+no-default dependency checks, the serial workspace suite, strict Clippy,
+cargo deny, and the locked release build. Live smoke qualification is limited
+to disposable supported hosts and isolated install/data/service paths.
+
 A physical Le Potato or comparable Linux/aarch64 host is valuable operational
 evidence for closure but is not required to make deterministic host tests pass.
 
@@ -652,6 +809,24 @@ evidence for closure but is not required to make deterministic host tests pass.
   verification design is established.
 - A production/root binary authority change crosses a separate operational
   ownership boundary and must not hitchhike on M001.
+- Eggpack's producer pipeline may not reproduce the existing Maturin-derived
+  wheel/raw pair or qualification evidence. A second build can break byte
+  identity and the release build-once invariant; prove an ingest/handoff path
+  before changing release publication.
+- The custom EggPool aggregate manifest and Eggpack's one-product manifest are
+  not wire-compatible. Define product identities for raw runtime, wheel
+  distribution, helper binaries, and bootstraps without claiming the helper is
+  a proxy target.
+- Eggup's manifest adapter does not choose latest/exact releases or authorize
+  URLs/roots. Keep those policies in EggPool and bind them explicitly.
+- Eggup's synchronous transaction/post-commit API may not safely encompass
+  EggPool's async service restart. This is a hard stop, not an invitation to
+  block the runtime or weaken rollback.
+- Eggup adapters use exact crate pins and source/registry states can diverge.
+  Audit the exact published crate graph and available fixes before choosing
+  versions; never patch around advisories with deny exceptions.
+- Neither tool adds authenticity. M006's signature-authority work remains
+  separate and is not implied by manifest adoption.
 
 ## 11. Completion definition
 
@@ -663,6 +838,13 @@ security findings; and when every release-related workflow derives the release
 version from the repository authority, the release workflow contract is checked
 in ordinary CI, the repository's ignore rules and tracked state agree, and the
 CI environment is built from the committed lockfile or the job fails.
+
+If M010/M011 are approved, closure additionally requires Eggpack manifests to
+match finalized supported release bytes and existing distribution channels,
+and the Eggup consumer to preserve owner-aware selection, staged validation,
+rollback-through-restart, recovery receipts, and legacy install/update
+compatibility. The roadmap remains open if the Eggup async/restart seam or any
+medium-or-higher integrity/ownership finding is unresolved.
 
 
 ## 12. Milestone status
@@ -678,3 +860,5 @@ CI environment is built from the committed lockfile or the job fails.
 | 7 | closed | `plans/implementation/deployment-packaging/007-release-action-pin-enforcement-and-guard-correction.md` | `plans/closure/deployment-packaging/007-status.md` | none |
 | 8 | closed | `plans/implementation/deployment-packaging/008-ci-dependency-lock-discipline.md` | `plans/closure/deployment-packaging/008-status.md` | none |
 | 9 | closed | `plans/implementation/deployment-packaging/009-dependency-advisory-remediation.md` | `plans/closure/deployment-packaging/009-status.md` | RustSec audit, default/no-default serial suites and locked release build passed |
+| 10 | proposed | — | — | Eggpack contract/tool revision and artifact-ingest compatibility proof; no release authority change before review |
+| 11 | blocked | — | — | M010 closed; accepted ADR for Eggup crate/API/ownership choice; sync commit must preserve async restart rollback |

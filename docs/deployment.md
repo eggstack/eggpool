@@ -691,9 +691,12 @@ The production unit runs with an empty capability/ambient-capability set,
 `PrivateTmp`, `PrivateDevices`, `ProtectClock`, `ProtectHostname`,
 `ProtectProc=invisible`, `ProcSubset=pid`, `ProtectKernelLogs`,
 kernel-tunable/module/control-group protection, `RemoveIPC`, and restrictions
-on namespaces, realtime scheduling, SUID/SGID, and personality. Its syscall
-filter excludes privileged, mount, and debug syscall groups and returns `EPERM`.
-`ReadWritePaths` is limited to EggPool data, backup, and log directories.
+on namespaces, realtime scheduling, SUID/SGID, and personality. The syscall
+policy uses systemd's `@system-service` allowlist and returns `EPERM` for
+blocked calls. `SystemCallFilter` has one mode (allow-list or deny-list); do
+not append `~@...` deny-list groups to an allow-list. The empty capability set
+and `NoNewPrivileges=yes` remain the privilege boundary. `ReadWritePaths` is
+limited to EggPool data, backup, and log directories.
 
 The deployed unit and `render_production_systemd` are checked by the
 `operations_o009` directive-drift test. The renderer intentionally includes

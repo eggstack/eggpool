@@ -86,6 +86,47 @@ async fn loopback_release_metadata_selects_platform_and_verifies_sha256() {
 }
 
 #[tokio::test]
+async fn eggpack_manifest_and_legacy_sidecars_preserve_standalone_update() {
+    let artifact = fake_executable("0.8.4");
+    let raw_digest = hex_digest(&artifact);
+    let eggpack_digest = hex_digest(b"eggpack manifest bytes");
+    let checksums_digest = hex_digest(b"legacy SHA256SUMS bytes");
+    let metadata = format!(
+        r#"{{"tag_name":"v0.8.4","prerelease":false,"draft":false,"assets":[{{"name":"eggpack-release-manifest.v1.json","browser_download_url":"https://assets.invalid/eggpack-manifest","digest":"sha256:{eggpack_digest}","size":22}},{{"name":"SHA256SUMS","browser_download_url":"https://assets.invalid/SHA256SUMS","digest":"sha256:{checksums_digest}","size":23}},{{"name":"eggpool-0.8.4-linux-aarch64","browser_download_url":"http://127.0.0.1/artifact","digest":"sha256:{raw_digest}","size":{}}}]}}"#,
+        artifact.len()
+    );
+    let (api, stop) = fake_release_server(metadata, artifact.clone()).await;
+    let root = tempfile::tempdir().expect("temporary install");
+    let executable = root.path().join("eggpool");
+    fs::write(&executable, b"previous release executable").expect("old executable");
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        fs::set_permissions(&executable, fs::Permissions::from_mode(0o600))
+            .expect("private old executable mode");
+    }
+    let client = ReleaseClient::with_release_api(&api)
+        .expect("client")
+        .with_platform(Platform {
+            os: "linux".into(),
+            architecture: "aarch64".into(),
+        });
+    let service = UpdateService::with_client(client);
+    let report = service
+        .apply_current_executable(
+            &ReleaseTarget::Latest,
+            &executable,
+            false,
+            None::<fn() -> std::future::Ready<Result<(), UpdateError>>>,
+        )
+        .await
+        .expect("legacy raw update succeeds with additive Eggpack assets");
+    assert_eq!(report.target_version, "0.8.4");
+    assert_eq!(fs::read(&executable).expect("updated executable"), artifact);
+    let _ = stop.send(());
+}
+
+#[tokio::test]
 async fn latest_raw_resolution_rejects_historical_python_era() {
     let (api, stop) = fake_release_server(
         r#"{"tag_name":"v0.7.4","prerelease":false,"draft":false,"assets":[]}"#.to_owned(),

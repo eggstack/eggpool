@@ -159,6 +159,7 @@ def verify_publication(
         | {
             "SHA256SUMS",
             f"eggpool-{version}-release-manifest.json",
+            "eggpack-release-manifest.v1.json",
         }
     )
     if not expected_raw.issubset(assets):

@@ -110,8 +110,10 @@ existing inline scripts.
   `AmbientCapabilities=`, `UMask=0077`, `PrivateDevices=yes`,
   `ProtectClock=yes`, `ProtectHostname=yes`, `ProtectProc=invisible`,
   `ProcSubset=pid`, `ProtectKernelLogs=yes`, `RemoveIPC=yes`, and
-  `SystemCallFilter=@system-service ~@privileged ~@mount ~@debug` with
-  `SystemCallErrorNumber=EPERM`. Keep the existing directives.
+  `SystemCallFilter=@system-service` with `SystemCallErrorNumber=EPERM`. A
+  systemd filter value uses one mode (allow-list or deny-list); do not mix
+  `~@...` deny-list groups into the allow-list. The empty capability set and
+  `NoNewPrivileges=yes` remain the privilege boundary. Keep the existing directives.
 - `rust/src/operations/deploy.rs::render_production_systemd`: render the same
   set, preserving its `ExecStart` and `--verbose` differences.
 - `rust/src/server/dashboard/response.rs` and `rust/src/server/auth.rs`: a
@@ -220,8 +222,8 @@ cargo test --manifest-path rust/Cargo.toml --workspace --all-targets -- --test-t
 Stop and report if:
 
 - a hardening directive prevents startup on the supported systemd floor;
-- `SystemCallFilter=~@privileged` breaks a required operation (record the
-  exact syscall and drop only that addition);
+- the `@system-service` allow-list blocks a required operation (record the
+  exact syscall and systemd version; adjust only after qualification);
 - a header requires a nonce or breaks the dashboard's inline scripts;
 - the drift guard needs to parse systemd include files or unit drop-ins that
   the repository does not own.

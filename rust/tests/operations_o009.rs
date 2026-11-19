@@ -399,6 +399,21 @@ fn tracked_and_rendered_production_units_match_except_documented_differences() {
     compare_production_unit_directives(TRACKED_UNIT, &rendered_unit)
         .expect("production service directives should match");
 
+    for unit in [TRACKED_UNIT, rendered_unit.as_str()] {
+        let directives = unit_directives(unit);
+        let filter = directives
+            .get("Service.SystemCallFilter")
+            .expect("production unit has a system-call allowlist");
+        assert_eq!(
+            filter.iter().map(String::as_str).collect::<Vec<_>>(),
+            vec!["@system-service"]
+        );
+        let error_number = directives
+            .get("Service.SystemCallErrorNumber")
+            .expect("production unit specifies a denied-syscall error");
+        assert_eq!(error_number, &["EPERM"]);
+    }
+
     let weakened_unit = TRACKED_UNIT.replacen("ProtectProc=invisible\n", "", 1);
     assert_ne!(
         weakened_unit, TRACKED_UNIT,
