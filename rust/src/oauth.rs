@@ -1403,28 +1403,46 @@ mod tests {
                 )
                 .await
         });
-        let request = request_receiver.await.expect("refresh reached stub");
+        let request = tokio::time::timeout(Duration::from_secs(10), request_receiver)
+            .await
+            .expect("refresh request observation timed out")
+            .expect("refresh reached stub");
         assert!(request.contains("refresh_token=old-refresh-secret"));
         caller.abort();
         let _ = caller.await;
         resume_sender.send(()).expect("release OAuth response");
-        server.await.expect("OAuth cancellation fixture");
+        tokio::time::timeout(Duration::from_secs(10), server)
+            .await
+            .expect("OAuth cancellation fixture timed out")
+            .expect("OAuth cancellation fixture");
 
         // Taking the same OS lock is the observable commit boundary: the
         // detached refresh transaction releases it only after atomic save.
+        // Try-lock polling keeps the synchronization bounded without leaving a
+        // blocking worker stuck if the detached refresh fails to release it.
         let lock_path = directory
             .path()
             .join(owner.file_name().replace(".json", ".lock"));
-        tokio::task::spawn_blocking(move || {
-            let lock = OpenOptions::new()
-                .read(true)
-                .write(true)
-                .open(lock_path)
-                .expect("OAuth lock file");
-            lock.lock().expect("wait for detached refresh commit");
+        let lock = OpenOptions::new()
+            .read(true)
+            .write(true)
+            .open(lock_path)
+            .expect("OAuth lock file");
+        tokio::time::timeout(Duration::from_secs(10), async {
+            loop {
+                match lock.try_lock() {
+                    Ok(()) => break,
+                    Err(std::fs::TryLockError::WouldBlock) => {
+                        tokio::task::yield_now().await;
+                    }
+                    Err(std::fs::TryLockError::Error(error)) => {
+                        panic!("OAuth refresh lock wait failed: {error}");
+                    }
+                }
+            }
         })
         .await
-        .expect("lock waiter");
+        .expect("timed out waiting for detached refresh commit");
         let committed = store.load_sync().unwrap().expect("detached refresh saved");
         assert_eq!(committed.access_token(), "canceled-caller-rotated-access");
         assert_eq!(
