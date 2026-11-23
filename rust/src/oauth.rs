@@ -927,7 +927,10 @@ mod tests {
         net::TcpListener,
     };
 
-    struct TestDirectory(PathBuf);
+    struct TestDirectory {
+        parent: PathBuf,
+        path: PathBuf,
+    }
 
     impl TestDirectory {
         fn new() -> Self {
@@ -935,20 +938,30 @@ mod tests {
                 .duration_since(UNIX_EPOCH)
                 .unwrap_or_default()
                 .as_nanos();
-            let path =
+            let parent =
                 std::env::temp_dir().join(format!("eggpool-oauth-{}-{suffix}", std::process::id()));
+            fs::create_dir(&parent).unwrap();
+            #[cfg(unix)]
+            {
+                use std::os::unix::fs::PermissionsExt;
+                fs::set_permissions(&parent, fs::Permissions::from_mode(0o700)).unwrap();
+            }
+            // Credential roots share this unique, private parent for their stable
+            // restore lock. In particular, do not put that lock directly in Linux
+            // /tmp, which production correctly rejects as world-writable.
+            let path = parent.join("test-data");
             fs::create_dir(&path).unwrap();
-            Self(path)
+            Self { parent, path }
         }
 
         fn path(&self) -> &Path {
-            &self.0
+            &self.path
         }
     }
 
     impl Drop for TestDirectory {
         fn drop(&mut self) {
-            let _ = fs::remove_dir_all(&self.0);
+            let _ = fs::remove_dir_all(&self.parent);
         }
     }
 
