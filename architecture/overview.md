@@ -160,7 +160,10 @@ operation, not a Responses alias); discovery and health at `/v1/models`,
 managed-user at `/login`, `/logout`, `/account`, `/account/landing`,
 `/account/password`, `/my-account`, `/my-account/models`,
 `/my-account/upstreams`, `/my-account/upstreams/remove`, `/account/tokens`,
-`/account/tokens/revoke`, `/usage`, `/api/user-budget`; dashboard pages at
+`/account/tokens/revoke`, `/account/tokens/oauth`, `/usage`, `/api/user-budget`,
+`/api/user/oauth-credentials`, `/api/user/oauth-credentials/hint`,
+`/api/user/oauth/xai/start`, `/api/user/oauth/xai/poll`, `/api/user/oauth/xai/cancel`,
+`/api/user/oauth/xai/commit`, `/api/user/oauth/xai/status`; dashboard pages at
 `/`, `/accounts`, `/models`, `/models/{*model_id}`, `/latency`, `/events`,
 `/timeseries`, `/bandwidth`, `/pings`, `/reliability`, `/routing`,
 `/traces`, `/runtime`, `/cache`, `/users`, `/profiles`, `/admin/audit`,
@@ -496,7 +499,9 @@ transaction as the request reservation, and settlement of one daily and one
 monthly bucket at terminalization. `rust/src/server/dashboard/admin.rs` owns
 the admin and member HTML surfaces as thin CSRF-validated adapters.
 `rust/src/personal_upstream.rs` owns personal upstream grants and bindings.
-The plaintext secret stays in the config-adjacent environment file, and
+`rust/src/oauth.rs` owns owner-bound provider OAuth credential custody and
+resolution outside SQLite; its storage operations serialize with backup/restore,
+and tokens stay out of diagnostics and public projections. The plaintext secret stays in the config-adjacent environment file, and
 routing eligibility excludes a bound account from every principal except its
 owner. The subsystem owns no router, no upstream dispatch, and no second database
 writer; `server/middleware.rs` keeps the route-role gate, `coordinator/`

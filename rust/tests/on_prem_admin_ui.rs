@@ -696,6 +696,56 @@ async fn two_user_browser_journey_fences_admin_data_and_personal_credentials() {
         token_to_admin.starts_with("HTTP/1.1 401"),
         "{token_to_admin}"
     );
+    let oauth_token_form = format!("label=OpenAI+OAuth+upload&csrf={member_csrf}");
+    let oauth_token_page = http_request(
+        address,
+        "POST",
+        "/account/tokens/oauth",
+        &oauth_token_form,
+        Some(&member_cookies),
+        Some(&origin),
+        None,
+    )
+    .await;
+    assert!(oauth_token_page.starts_with("HTTP/1.1 200"));
+    let oauth_token_start = oauth_token_page
+        .find("epk1_")
+        .expect("one-time OAuth upload credential appears");
+    let oauth_token = oauth_token_page[oauth_token_start..]
+        .split('<')
+        .next()
+        .expect("OAuth credential text is present")
+        .to_owned();
+    let oauth_principal = identity::verify_api_token_principal(&database, &oauth_token)
+        .await
+        .unwrap()
+        .expect("OAuth upload credential is active");
+    assert_eq!(
+        oauth_principal.scopes,
+        vec![identity::OAUTH_CREDENTIALS_WRITE_SCOPE.to_owned()]
+    );
+    let inference_denied = http_request(
+        address,
+        "GET",
+        "/v1/models",
+        "",
+        None,
+        None,
+        Some(&oauth_token),
+    )
+    .await;
+    assert!(inference_denied.starts_with("HTTP/1.1 403"));
+    let ordinary_token_denied = http_request(
+        address,
+        "POST",
+        "/api/user/oauth-credentials",
+        "",
+        None,
+        None,
+        Some(&token),
+    )
+    .await;
+    assert!(ordinary_token_denied.starts_with("HTTP/1.1 403"));
     let member_id = identity::list_users(&database)
         .await
         .unwrap()
@@ -706,7 +756,9 @@ async fn two_user_browser_journey_fences_admin_data_and_personal_credentials() {
     let member_credential = identity::list_user_credentials(&database, &member_id)
         .await
         .unwrap()
-        .remove(0);
+        .into_iter()
+        .find(|credential| credential.label == "member laptop")
+        .expect("ordinary member credential is listed");
     let revoke_form = format!("credential_id={}&csrf={member_csrf}", member_credential.id);
     let revoked = http_request(
         address,
@@ -809,6 +861,341 @@ async fn two_user_browser_journey_fences_admin_data_and_personal_credentials() {
         .await
         .expect("server shutdown completes")
         .unwrap()
+        .unwrap();
+    database.close().await.unwrap();
+}
+
+#[tokio::test]
+async fn oauth_upload_commits_only_for_verified_owner_with_active_binding() {
+    let (directory, database) = database().await;
+    identity::mark_fresh_uninitialized(&database).await.unwrap();
+    let (admin, _) =
+        identity::bootstrap_admin(&database, "admin", "M006 strong admin password passphrase")
+            .await
+            .unwrap();
+    identity::enable_managed(&database, &admin.id)
+        .await
+        .unwrap();
+    let member = identity::create_member(
+        &database,
+        &admin.id,
+        "oauth-owner",
+        "member-oauth-passphrase",
+    )
+    .await
+    .unwrap();
+    let unbound = identity::create_member(
+        &database,
+        &admin.id,
+        "oauth-unbound",
+        "other-oauth-passphrase",
+    )
+    .await
+    .unwrap();
+    let member_id = member.id.clone();
+    let unbound_id = unbound.id.clone();
+    database
+        .call(move |connection| {
+            connection.execute(
+                "UPDATE users SET must_change_password = 0 WHERE id IN (?1, ?2)",
+                (&member_id, &unbound_id),
+            )?;
+            Ok(())
+        })
+        .await
+        .unwrap();
+    eggpool::personal_upstream::set_instance_grant(
+        &database,
+        &admin.id,
+        eggpool::personal_upstream::GrantEffect::Allow,
+    )
+    .await
+    .expect("enable self-service grant for test users");
+    let binding_user = member.id.clone();
+    let binding_actor = admin.id.clone();
+    database
+        .call(move |connection| {
+            connection.execute(
+                "INSERT INTO personal_upstream_bindings(provider_id, account_name, user_id, state, actor_id) VALUES (?1, ?2, ?3, 'active', ?4)",
+                ("xai", "oauth-personal", &binding_user, &binding_actor),
+            )?;
+            Ok(())
+        })
+        .await
+        .expect("create owner-bound OAuth account fixture");
+
+    let config_path = directory.path().join("config.toml");
+    std::fs::write(&config_path, include_str!("../config.example.toml")).unwrap();
+    let process =
+        ProcessRuntime::with_config_path(database.clone(), &config_path).expect("process runtime");
+    let mut config = Config::default();
+    config.server.host = "127.0.0.1".to_owned();
+    config.server.api_key = None;
+    config.dashboard.enabled = true;
+    config.dashboard.public = true;
+    config.providers.insert(
+        "xai".to_owned(),
+        eggpool::config::ProviderConfig {
+            id: "xai".to_owned(),
+            base_url: "https://api.x.ai/v1".to_owned(),
+            protocols: vec!["openai".to_owned()],
+            accounts: vec![eggpool::config::AccountConfig {
+                name: "oauth-personal".to_owned(),
+                auth_mode: eggpool::config::AccountAuthMode::OAuth,
+                ..Default::default()
+            }],
+            ..Default::default()
+        },
+    );
+    eggpool::db::AccountRepository::new(&database)
+        .sync_from_config(vec![eggpool::db::AccountConfig {
+            name: "oauth-personal".to_owned(),
+            api_key_env: "UNUSED_OAUTH_KEY".to_owned(),
+            enabled: true,
+            weight: 1.0,
+            provider_id: "xai".to_owned(),
+        }])
+        .await
+        .expect("durable OAuth account row");
+    let candidate = RuntimeGenerationFactory::prepare(
+        &process,
+        config.clone(),
+        "oauth-upload-owner-test".into(),
+        1,
+    )
+    .await
+    .expect("runtime generation with owner-bound OAuth account");
+    let manager = Arc::new(RuntimeManager::new(
+        candidate.transfer().expect("generation transfer"),
+    ));
+    process
+        .install_initial_tasks((*manager).clone(), &config)
+        .await
+        .expect("tasks install");
+    let runtime = ServerRuntime::new(process, manager, config);
+    let handle = runtime.handle();
+    let listener = TcpListener::bind(("127.0.0.1", 0)).await.unwrap();
+    let address = listener.local_addr().unwrap();
+    let task = tokio::spawn(async move {
+        let _ = runtime.serve_listener(listener).await;
+    });
+    let origin = format!("http://{address}");
+
+    async fn oauth_write_token(
+        address: std::net::SocketAddr,
+        origin: &str,
+        username: &str,
+        password: &str,
+    ) -> String {
+        let login = http_request(
+            address,
+            "POST",
+            "/login",
+            &format!("username={username}&password={password}"),
+            None,
+            Some(origin),
+            None,
+        )
+        .await;
+        assert!(login.starts_with("HTTP/1.1 303"), "{login}");
+        let (_, csrf, cookies) = session_pair(&login);
+        let page = http_request(
+            address,
+            "POST",
+            "/account/tokens/oauth",
+            &format!("label=OAuth+upload&csrf={csrf}"),
+            Some(&cookies),
+            Some(origin),
+            None,
+        )
+        .await;
+        assert!(page.starts_with("HTTP/1.1 200"), "{page}");
+        let start = page.find("epk1_").expect("one-time OAuth upload token");
+        page[start..]
+            .split('<')
+            .next()
+            .expect("OAuth token text")
+            .to_owned()
+    }
+
+    async fn post_json(
+        address: std::net::SocketAddr,
+        token: &str,
+        payload: &serde_json::Value,
+    ) -> String {
+        let body = payload.to_string();
+        let request = format!(
+            "POST /api/user/oauth-credentials HTTP/1.1\r\nHost: {address}\r\nConnection: close\r\nAuthorization: Bearer {token}\r\nContent-Type: application/json\r\nContent-Length: {}\r\n\r\n{body}",
+            body.len()
+        );
+        let mut stream = TcpStream::connect(address)
+            .await
+            .expect("connect upload route");
+        stream
+            .write_all(request.as_bytes())
+            .await
+            .expect("send upload");
+        let mut response = String::new();
+        stream
+            .read_to_string(&mut response)
+            .await
+            .expect("read upload result");
+        response
+    }
+
+    let owner_token =
+        oauth_write_token(address, &origin, "oauth-owner", "member-oauth-passphrase").await;
+    let credentials = serde_json::json!({
+        "access_token": "owner-bound-fixture-access",
+        "refresh_token": "owner-bound-fixture-refresh",
+        "token_type": "Bearer",
+        "scope": "openid offline_access",
+        "client_id": "fixture-client",
+        "issuer": "https://auth.x.ai",
+        "expires_at": 1_900_000_000_i64,
+        "obtained_at": 1_800_000_000_i64
+    });
+    let payload = serde_json::json!({
+        "provider_id": "xai",
+        "account_name": "oauth-personal",
+        "credentials": credentials
+    });
+    let committed = post_json(address, &owner_token, &payload).await;
+    assert!(committed.starts_with("HTTP/1.1 204"), "{committed}");
+    let credential_root = directory.path().join(".eggpool-oauth");
+    let credential_files = std::fs::read_dir(&credential_root)
+        .expect("owner OAuth credential directory")
+        .filter_map(Result::ok)
+        .map(|entry| entry.path())
+        .filter(|path| {
+            path.extension()
+                .is_some_and(|extension| extension == "json")
+        })
+        .collect::<Vec<_>>();
+    assert_eq!(credential_files.len(), 1);
+    let stored = std::fs::read_to_string(&credential_files[0]).expect("stored credential file");
+    assert!(
+        stored.contains(&member.id),
+        "credential must bind to the verified principal"
+    );
+    assert!(stored.contains("owner-bound-fixture-access"));
+
+    let mut caller_selected_owner = payload.clone();
+    caller_selected_owner["user_id"] = serde_json::json!(unbound.id);
+    let rejected_owner_field = post_json(address, &owner_token, &caller_selected_owner).await;
+    assert!(
+        rejected_owner_field.starts_with("HTTP/1.1 422"),
+        "{rejected_owner_field}"
+    );
+    let unbound_token =
+        oauth_write_token(address, &origin, "oauth-unbound", "other-oauth-passphrase").await;
+    let unbound_upload = post_json(address, &unbound_token, &payload).await;
+    assert!(
+        unbound_upload.starts_with("HTTP/1.1 403"),
+        "{unbound_upload}"
+    );
+    assert_eq!(
+        std::fs::read_dir(&credential_root)
+            .unwrap()
+            .filter_map(Result::ok)
+            .filter(|entry| entry
+                .path()
+                .extension()
+                .is_some_and(|extension| extension == "json"))
+            .count(),
+        1,
+        "unbound user and caller-supplied owner must not alter the stored credential"
+    );
+
+    handle.request_shutdown(ShutdownReason::Requested);
+    tokio::time::timeout(Duration::from_secs(10), task)
+        .await
+        .expect("server shutdown completes")
+        .unwrap();
+    database.close().await.unwrap();
+}
+
+#[tokio::test]
+async fn openai_web_oauth_routes_are_absent_and_xai_device_routes_remain() {
+    let (_directory, database) = database().await;
+    identity::mark_fresh_uninitialized(&database).await.unwrap();
+    let (admin, _) =
+        identity::bootstrap_admin(&database, "admin", "M006 strong admin password passphrase")
+            .await
+            .unwrap();
+    identity::enable_managed(&database, &admin.id)
+        .await
+        .unwrap();
+    let admin_id = admin.id.clone();
+    database
+        .call(move |connection| {
+            connection.execute(
+                "UPDATE users SET must_change_password = 0 WHERE id = ?1",
+                [&admin_id],
+            )?;
+            Ok(())
+        })
+        .await
+        .unwrap();
+    let (address, handle, task) = managed_server(&database).await;
+    let origin = format!("http://{address}");
+    let login = http_request(
+        address,
+        "POST",
+        "/login",
+        "username=admin&password=M006+strong+admin+password+passphrase",
+        None,
+        Some(&origin),
+        None,
+    )
+    .await;
+    assert!(login.starts_with("HTTP/1.1 303"), "{login}");
+    let (_, _, cookies) = session_pair(&login);
+
+    for (method, path) in [
+        ("POST", "/api/user/oauth/openai/start"),
+        ("POST", "/api/user/oauth/openai/cancel"),
+        ("POST", "/api/user/oauth/openai/commit"),
+        ("GET", "/oauth/openai/callback"),
+    ] {
+        let response = if method == "POST" {
+            browser_form_post(
+                address,
+                path,
+                "",
+                Some(&cookies),
+                &origin,
+                &format!("{origin}/my-account"),
+            )
+            .await
+        } else {
+            http_request(address, method, path, "", Some(&cookies), None, None).await
+        };
+        assert!(
+            response.starts_with("HTTP/1.1 404"),
+            "{method} {path}: {response}"
+        );
+    }
+
+    let xai_status = http_request(
+        address,
+        "GET",
+        "/api/user/oauth/xai/status?account_name=xai-personal",
+        "",
+        Some(&cookies),
+        None,
+        None,
+    )
+    .await;
+    assert!(
+        !xai_status.starts_with("HTTP/1.1 404"),
+        "xAI device-code route remains registered: {xai_status}"
+    );
+
+    handle.request_shutdown(ShutdownReason::Requested);
+    tokio::time::timeout(Duration::from_secs(10), task)
+        .await
+        .expect("server shutdown completes")
         .unwrap();
     database.close().await.unwrap();
 }

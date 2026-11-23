@@ -411,6 +411,8 @@ fn unix_now() -> i64 {
         })
 }
 
+// Keep Rust 1.89 as the MSRV; `AtomicU64::try_update` stabilized in 1.95.
+#[allow(deprecated)]
 fn saturating_increment(counter: &AtomicU64, amount: u64) {
     let _ = counter.fetch_update(Ordering::Relaxed, Ordering::Relaxed, |value| {
         Some(value.saturating_add(amount))

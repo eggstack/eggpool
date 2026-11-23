@@ -253,11 +253,20 @@ pub fn build_eligible_candidates(
         &facts.capability_policy
     };
     for identity in registry.all() {
+        let principal_user_id = facts.principal_user_id.as_deref();
         if personal_bindings.excludes(
             &identity.provider_id,
             &identity.account_name,
-            facts.principal_user_id.as_deref(),
-        ) {
+            principal_user_id,
+        ) || (identity.auth_mode == crate::config::AccountAuthMode::OAuth
+            && !principal_user_id.is_some_and(|user_id| {
+                personal_bindings.is_active_owner(
+                    &identity.provider_id,
+                    &identity.account_name,
+                    user_id,
+                )
+            }))
+        {
             exclusions.push(RoutingExclusion {
                 account_name: identity.account_name.clone(),
                 reason_code: "personal_upstream".into(),

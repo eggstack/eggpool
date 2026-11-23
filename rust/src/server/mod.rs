@@ -11,24 +11,26 @@ mod dashboard;
 mod health;
 mod inference;
 mod middleware;
+mod oauth_credentials;
+pub(super) mod oauth_login;
 
 use auth::{
     account_page, login_page, login_submit, logout_submit, member_landing_page, password_change,
 };
 use dashboard::{
     accounts_page, add_member_upstream, assign_user_profile, audit_export, audit_page,
-    bandwidth_page, cache_page, create_personal_token, create_profile, create_user, delete_profile,
-    events_page, grouped_timeseries_api, issue_admin_token, latency_page, model_detail_page,
-    models_page, my_account_page, my_models_page, overview, pings_page, profiles_page,
-    reliability_page, remove_instance_budget, remove_member_upstream, remove_profile_rule,
-    remove_upstream_account, remove_user_override, reset_user_password, revoke_personal_token,
-    revoke_user_tokens, routing_page, runtime_page, set_default_member_profile,
-    set_instance_budget, set_profile_preference, set_profile_rule, set_upstream_default,
-    set_upstream_grant, set_user_budget, set_user_override, set_user_state, static_chart_js,
-    static_css, static_favicon, static_js, stats_cache_observability, stats_cache_stability,
-    stats_request_segmentation, stats_request_shaping, stats_transcoding, summary, sync_accounts,
-    theme_css, timeseries_api, timeseries_page, traces_page, update_profile, usage_page,
-    users_page,
+    bandwidth_page, cache_page, create_oauth_credentials_token, create_personal_token,
+    create_profile, create_user, delete_profile, events_page, grouped_timeseries_api,
+    issue_admin_token, latency_page, model_detail_page, models_page, my_account_page,
+    my_models_page, overview, pings_page, profiles_page, reliability_page, remove_instance_budget,
+    remove_member_upstream, remove_profile_rule, remove_upstream_account, remove_user_override,
+    reset_user_password, revoke_personal_token, revoke_user_tokens, routing_page, runtime_page,
+    set_default_member_profile, set_instance_budget, set_profile_preference, set_profile_rule,
+    set_upstream_default, set_upstream_grant, set_user_budget, set_user_override, set_user_state,
+    static_chart_js, static_css, static_favicon, static_js, stats_cache_observability,
+    stats_cache_stability, stats_request_segmentation, stats_request_shaping, stats_transcoding,
+    summary, sync_accounts, theme_css, timeseries_api, timeseries_page, traces_page,
+    update_profile, usage_page, users_page,
 };
 use health::{
     healthz, integration_profile, models_api, readyz, runtime_status, status_api, update_status,
@@ -487,6 +489,7 @@ impl ServerRuntime {
             database: self.inner.process.database(),
             runtime: Arc::clone(&self.inner.manager),
             process: Some(self.inner.process.clone()),
+            oauth_flows: oauth_login::FlowRegistry::default(),
             body_tasks: self.inner.body_tasks.clone(),
             admission_fairness: crate::request::AdmissionFairnessLimiter::default(),
         });
@@ -814,6 +817,7 @@ pub struct AppState {
     pub database: db::Database,
     pub runtime: Arc<RuntimeManager>,
     process: Option<ProcessRuntime>,
+    oauth_flows: oauth_login::FlowRegistry,
     body_tasks: BodyTaskTracker,
     admission_fairness: crate::request::AdmissionFairnessLimiter,
 }
@@ -852,6 +856,7 @@ impl AppState {
             database,
             runtime,
             process: None,
+            oauth_flows: oauth_login::FlowRegistry::default(),
             body_tasks: BodyTaskTracker::new(),
             admission_fairness: crate::request::AdmissionFairnessLimiter::default(),
         }
@@ -878,6 +883,7 @@ impl AppState {
             database,
             runtime: Arc::new(RuntimeManager::new(generation)),
             process: None,
+            oauth_flows: oauth_login::FlowRegistry::default(),
             body_tasks: BodyTaskTracker::new(),
             admission_fairness: crate::request::AdmissionFairnessLimiter::default(),
         }
@@ -1038,6 +1044,7 @@ pub async fn run_with_digest(
         database: database.clone(),
         runtime: Arc::clone(&manager),
         process: Some(process.clone()),
+        oauth_flows: oauth_login::FlowRegistry::default(),
         body_tasks: BodyTaskTracker::new(),
         admission_fairness: crate::request::AdmissionFairnessLimiter::default(),
     };
@@ -1309,6 +1316,43 @@ pub fn build_router(state: AppState) -> Router {
         .route("/api/stats/update", get(update_status))
         .route("/api/status", get(status_api))
         .route("/api/user-budget", get(user_budget_api))
+        .route(
+            "/api/user/oauth-credentials",
+            post(oauth_credentials::upload).layer(axum::extract::DefaultBodyLimit::max(
+                oauth_credentials::MAX_REQUEST_BYTES,
+            )),
+        )
+        .route(
+            "/api/user/oauth-credentials/hint",
+            post(oauth_credentials::authorization_hint).layer(
+                axum::extract::DefaultBodyLimit::max(oauth_credentials::MAX_REQUEST_BYTES),
+            ),
+        )
+        .route(
+            "/api/user/oauth/xai/start",
+            post(oauth_login::start).layer(axum::extract::DefaultBodyLimit::max(
+                oauth_login::MAX_FORM_BYTES,
+            )),
+        )
+        .route(
+            "/api/user/oauth/xai/poll",
+            post(oauth_login::poll).layer(axum::extract::DefaultBodyLimit::max(
+                oauth_login::MAX_FORM_BYTES,
+            )),
+        )
+        .route(
+            "/api/user/oauth/xai/cancel",
+            post(oauth_login::cancel).layer(axum::extract::DefaultBodyLimit::max(
+                oauth_login::MAX_FORM_BYTES,
+            )),
+        )
+        .route(
+            "/api/user/oauth/xai/commit",
+            post(oauth_login::commit).layer(axum::extract::DefaultBodyLimit::max(
+                oauth_login::MAX_FORM_BYTES,
+            )),
+        )
+        .route("/api/user/oauth/xai/status", get(oauth_login::status))
         .route("/api/admin/audit/export", get(audit_export))
         .route("/v1/chat/completions", post(chat_completions))
         .route(
@@ -1334,6 +1378,10 @@ pub fn build_router(state: AppState) -> Router {
         .route("/my-account", get(my_account_page))
         .route("/my-account/models", get(my_models_page))
         .route("/account/tokens", post(create_personal_token))
+        .route(
+            "/account/tokens/oauth",
+            post(create_oauth_credentials_token),
+        )
         .route("/account/tokens/revoke", post(revoke_personal_token))
         .route("/usage", get(usage_page))
         .route("/logout", post(logout_submit));

@@ -13,6 +13,7 @@ pub mod deploy;
 pub mod integrations;
 pub mod lifecycle;
 pub mod metrics;
+pub mod oauth_login;
 pub mod operator;
 pub mod paths;
 pub mod process;

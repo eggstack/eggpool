@@ -451,6 +451,16 @@ forward the browser locally with `ssh -L 11300:127.0.0.1:11300 operator@host`
 and open `http://127.0.0.1:11300/login`; remote teams should use the trusted
 HTTPS proxy path above.
 
+### Desktop OAuth loopback callback
+
+OpenAI authorization-code/PKCE is completed by the desktop CLI through a
+short-lived callback listener bound to `127.0.0.1`. The browser must run on
+the same machine as the CLI; the provider callback does not reach EggPool's
+listener. xAI remains available through the authenticated Web UI device-code
+flow as well as the desktop CLI flow. There is no server-side OpenAI callback
+origin setting to configure or register. Do not expose a loopback callback to
+a remote browser.
+
 Optional background features that remain explicit: set `[backup].enabled = true`
 for in-process archives or `[update_checker].enabled = true` for the periodic
 PyPI status probe. Set `[model_info].enabled = false` to disable the

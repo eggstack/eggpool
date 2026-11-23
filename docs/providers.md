@@ -538,16 +538,36 @@ discovery via `GET /v1/models`, so the bundled template uses
 `models_endpoint.method = "GET"` by default. Static model seeds are
 only a fallback if live discovery is unavailable.
 
-## OAuth / Consumer Subscription Exclusion
+## Per-user OAuth accounts
 
-This provider catalog intentionally excludes:
+EggPool implements owner-bound OAuth login for configured OpenAI and xAI
+accounts. The available flows are deliberately distinct:
 
-- OAuth-only integrations (ChatGPT web, Claude Pro/Max web, Gemini consumer web)
-- Browser login or device-code flows
-- Cloud APIs requiring request signing (AWS Bedrock native, Azure OpenAI deployment-specific, Vertex AI native)
-- Provider SDKs with hidden transport semantics
+- Web UI: xAI device-code only.
+- Desktop CLI: OpenAI and xAI authorization-code/PKCE through an ephemeral
+  loopback listener bound to `127.0.0.1`; the browser must run on the same
+  machine. The CLI receives its self-only OAuth-write credential from the
+  authenticated Web UI and accepts it through a hidden prompt or stdin. There
+  is no OpenAI Web UI callback on EggPool's listener.
 
-These require adapter support that EggPool does not currently implement.
+Each completed grant belongs to one managed user, provider, and configured
+account. The credential set is stored outside SQLite in the private
+`.eggpool-oauth/` directory. OAuth accounts are not pooled, do not fall back
+across users/accounts, and do not retry after a provider 401. Setting
+`[oauth].enabled = false` blocks login, routing, and refresh while retaining
+stored credential files.
+
+These are descriptions of EggPool's implemented flows, not a claim of live
+provider validation, provider approval, or legal/TOS compliance. Local stub
+tests do not establish current provider registration or policy; verify those
+requirements for the specific provider and deployment.
+
+## Consumer Subscription and Other Exclusions
+
+EggPool does not provide consumer-subscription integrations such as ChatGPT
+web, Claude Pro/Max web, or Gemini consumer web. It also excludes cloud APIs
+requiring request signing (AWS Bedrock native, Azure OpenAI deployment-specific,
+Vertex AI native) and provider SDKs with hidden transport semantics.
 
 ## High-Concurrency HTTP Client Profiles
 

@@ -471,6 +471,12 @@ trusted_proxies = []
 # browser authentication otherwise requires direct HTTPS or a trusted proxy.
 allow_insecure_web_auth = false
 
+# Infrastructure-only operator gate for per-user provider OAuth credentials.
+# Defaults to enabled. Disabling blocks OAuth login, routing, and token refresh
+# but retains stored files.
+[oauth]
+enabled = true
+
 # ─── Automatic Backups ────────────────────────────────────────────────
 # EggPool can create automatic daily backups. Archives are
 # restore-compatible .zip files stored under $XDG_BACKUP_HOME/eggpool

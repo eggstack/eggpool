@@ -19,7 +19,7 @@ const MAX_CLIENT_ERROR_BYTES: usize = 512;
 
 use crate::{
     accounts::CredentialStore,
-    config::ProviderConfig,
+    config::{AccountAuthMode, ProviderConfig, SecretString},
     routing::{RoutingRouter, SelectionClaim},
     wire::ir::{CanonicalUsage, ClientSurface},
     wire::{ConfiguredWireProfile, WireRuntime, WireRuntimeContext, WireSurface},
@@ -53,6 +53,7 @@ pub struct StreamingCoordinator {
     provider_profiles: BTreeMap<String, Vec<ConfiguredWireProfile>>,
     providers: BTreeMap<String, ProviderConfig>,
     credentials: CredentialStore,
+    oauth: Option<crate::oauth::OAuthAccountManager>,
     finalization: FinalizationSupervisor,
     retry_policy: RetryPolicy,
     failure_engine: Arc<Mutex<FailureDecisionEngine>>,
@@ -97,6 +98,7 @@ impl StreamingCoordinator {
             provider_profiles,
             providers,
             credentials,
+            oauth: None,
             finalization,
             retry_policy,
             failure_engine: Arc::new(Mutex::new(FailureDecisionEngine::new(retry_policy))),
@@ -105,6 +107,47 @@ impl StreamingCoordinator {
             forced_header_timeout: None,
             forced_first_byte_timeout: None,
             forced_idle_timeout: None,
+        }
+    }
+
+    pub fn with_oauth_account_manager(
+        mut self,
+        manager: crate::oauth::OAuthAccountManager,
+    ) -> Self {
+        self.oauth = Some(manager);
+        self
+    }
+
+    async fn resolve_account_api_key(
+        &self,
+        user_id: Option<&str>,
+        provider_id: &str,
+        account_name: &str,
+        provider: &ProviderConfig,
+    ) -> Result<Option<SecretString>, crate::oauth::OAuthAccountError> {
+        let Some(account) = provider
+            .accounts
+            .iter()
+            .find(|account| account.name == account_name)
+        else {
+            // Account-less legacy configurations retain static-key behavior.
+            return Ok(self.credentials.get(account_name).map(SecretString::from));
+        };
+        match account.auth_mode {
+            AccountAuthMode::StaticKey => {
+                Ok(self.credentials.get(account_name).map(SecretString::from))
+            }
+            AccountAuthMode::OAuth => {
+                let user_id = user_id.ok_or(crate::oauth::OAuthAccountError::InvalidOwner)?;
+                let manager = self
+                    .oauth
+                    .as_ref()
+                    .ok_or(crate::oauth::OAuthAccountError::Disabled)?;
+                manager
+                    .access_token_for_user(user_id, provider_id, account_name)
+                    .await
+                    .map(Some)
+            }
         }
     }
 
@@ -416,6 +459,24 @@ impl StreamingCoordinator {
                 .iter()
                 .any(|candidate| !attempted.contains(&candidate.surface()));
             let upstream_protocol = protocol_for_surface(candidate.surface());
+            let selected_account_name = claim.account_name().to_owned();
+            // Resolve before durable publication so refresh failures produce
+            // no attempt and cannot trigger fallback to another account.
+            let account_api_key = match self
+                .resolve_account_api_key(
+                    request.routing_facts.principal_user_id.as_deref(),
+                    &provider_id,
+                    &selected_account_name,
+                    provider,
+                )
+                .await
+            {
+                Ok(value) => value,
+                Err(error) => {
+                    claim.rollback_claim()?;
+                    return Err(StreamingCoordinatorError::OAuth(error));
+                }
+            };
             let mut publication_input = PublicationInput::new(
                 request.proxy_request_id.clone(),
                 request.client_surface.protocol(),
@@ -449,7 +510,7 @@ impl StreamingCoordinator {
             let attempt_input = AttemptPreparation {
                 identity: &identity,
                 provider,
-                account_api_key: self.credentials.get(&identity.account_name),
+                account_api_key: account_api_key.as_ref().map(SecretString::expose_secret),
                 incoming_headers: &request.incoming_headers,
                 request_id: request.request_id.as_deref(),
                 correlation_id: request.correlation_id.as_deref(),
@@ -1324,11 +1385,16 @@ impl StreamingCoordinator {
         &self,
         observation: &FailureObservation,
     ) -> Result<(FailureEffects, bool), StreamingCoordinatorError> {
-        self.failure_engine
+        let (mut effects, first) = self
+            .failure_engine
             .lock()
             .unwrap_or_else(|e| e.into_inner())
             .decide(observation)
-            .map_err(|error| StreamingCoordinatorError::Effects(error.to_string()))
+            .map_err(|error| StreamingCoordinatorError::Effects(error.to_string()))?;
+        if crate::coordinator::oauth_401_for_account(observation, &self.providers) {
+            crate::coordinator::terminalize_oauth_401(&mut effects);
+        }
+        Ok((effects, first))
     }
 
     async fn apply_effects(&self, claim: &SelectionClaim, effects: &FailureEffects) {

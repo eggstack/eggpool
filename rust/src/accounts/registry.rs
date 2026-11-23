@@ -10,6 +10,7 @@ use thiserror::Error;
 
 use crate::{
     Config, ConfigError,
+    config::AccountAuthMode,
     db::{Account, AccountRepository, DatabaseError},
 };
 
@@ -45,6 +46,7 @@ pub struct AccountIdentity {
     pub account_id: i64,
     pub account_name: String,
     pub provider_id: String,
+    pub auth_mode: AccountAuthMode,
     pub enabled: bool,
     pub has_usable_credentials: bool,
     pub routing_priority: u32,
@@ -61,6 +63,7 @@ impl fmt::Debug for AccountIdentity {
             .field("account_id", &self.account_id)
             .field("account_name", &self.account_name)
             .field("provider_id", &self.provider_id)
+            .field("auth_mode", &self.auth_mode)
             .field("enabled", &self.enabled)
             .field("has_usable_credentials", &self.has_usable_credentials)
             .field("routing_priority", &self.routing_priority)
@@ -242,12 +245,20 @@ impl AccountRegistry {
                         account_name: configured.name.clone(),
                     });
                 }
-                let has_usable_credentials = (provider.auth.mode == "none"
+                let no_auth_required = provider.auth.mode == "none"
                     && provider.wire_surfaces.values().all(|surface| {
                         surface.auth.as_ref().is_none_or(|auth| auth.mode == "none")
-                    }))
-                    || credentials.has_usable(&configured.name);
-                if configured.enabled && !has_usable_credentials {
+                    });
+                let has_usable_credentials = match configured.auth_mode {
+                    AccountAuthMode::StaticKey => {
+                        no_auth_required || credentials.has_usable(&configured.name)
+                    }
+                    AccountAuthMode::OAuth => config.oauth.enabled,
+                };
+                if configured.enabled
+                    && configured.auth_mode == AccountAuthMode::StaticKey
+                    && !has_usable_credentials
+                {
                     return Err(AccountRegistryError::MissingCredential {
                         account_name: configured.name.clone(),
                     });
@@ -256,7 +267,9 @@ impl AccountRegistry {
                     account_id: durable.id,
                     account_name: configured.name.clone(),
                     provider_id: provider_id.clone(),
-                    enabled: configured.enabled,
+                    auth_mode: configured.auth_mode,
+                    enabled: configured.enabled
+                        && (configured.auth_mode != AccountAuthMode::OAuth || config.oauth.enabled),
                     has_usable_credentials,
                     routing_priority: provider.routing_priority,
                     weight: configured.weight,

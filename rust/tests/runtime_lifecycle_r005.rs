@@ -85,28 +85,41 @@ fn exact_r001_field_dispositions_are_ported() {
         .iter()
         .map(|(path, disposition)| ((*path).to_owned(), disposition.to_string()))
         .collect::<Vec<_>>();
-    assert_eq!(actual, expected);
-    assert_eq!(actual.len(), 159);
+    let r001_actual = actual
+        .iter()
+        .filter(|(path, _)| !path.starts_with("oauth."))
+        .cloned()
+        .collect::<Vec<_>>();
+    assert_eq!(r001_actual, expected);
+    assert_eq!(r001_actual.len(), 159);
     assert_eq!(
-        actual
+        r001_actual
             .iter()
             .filter(|(_, disposition)| disposition == "live")
             .count(),
         64
     );
     assert_eq!(
-        actual
+        r001_actual
             .iter()
             .filter(|(_, disposition)| disposition == "restart_required")
             .count(),
         95
     );
     assert_eq!(
-        actual
+        r001_actual
             .iter()
             .filter(|(_, disposition)| disposition == "ignored")
             .count(),
         0
+    );
+    assert_eq!(
+        actual
+            .iter()
+            .filter(|(path, _)| path.starts_with("oauth."))
+            .cloned()
+            .collect::<Vec<_>>(),
+        vec![("oauth.enabled".to_owned(), "restart_required".to_owned()),]
     );
 }
 
@@ -116,6 +129,7 @@ fn serialized_schema_projection_is_the_coverage_guard() {
         .into_iter()
         .map(|(path, _)| path)
         .collect::<Vec<_>>();
+    expected.push("oauth.enabled".to_owned());
     expected.sort();
     assert_eq!(schema_paths().expect("schema projection"), expected);
 }
@@ -124,6 +138,10 @@ fn serialized_schema_projection_is_the_coverage_guard() {
 fn unknown_paths_and_dynamic_rules_fail_closed_or_match_oracle() {
     assert_eq!(
         disposition_for("unknown.future.field"),
+        ReloadDisposition::RestartRequired
+    );
+    assert_eq!(
+        disposition_for("oauth.enabled"),
         ReloadDisposition::RestartRequired
     );
     assert_eq!(

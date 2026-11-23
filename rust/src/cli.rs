@@ -503,6 +503,21 @@ pub enum AccountsCommand {
     List,
     Status,
     Explain(AccountsExplainArgs),
+    /// Sign in to one configured OpenAI or xAI OAuth account for the authenticated user.
+    #[command(name = "oauth-login")]
+    OAuthLogin(OAuthLoginArgs),
+}
+#[derive(Debug, clap::Args)]
+pub struct OAuthLoginArgs {
+    /// OAuth provider. Ownership comes from the EggPool credential, not this value.
+    #[arg(long, value_name = "PROVIDER", default_value = "openai", value_parser = ["openai", "xai"])]
+    pub provider: String,
+    /// Configured provider account name. Ownership comes from the EggPool credential, not this name.
+    #[arg(long, value_name = "ACCOUNT")]
+    pub account: String,
+    /// Read the self-only EggPool OAuth-write credential from stdin instead of a hidden TTY prompt.
+    #[arg(long)]
+    pub token_stdin: bool,
 }
 #[derive(Debug, clap::Args)]
 pub struct AccountsExplainArgs {

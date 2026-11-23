@@ -386,7 +386,11 @@ pub enum RequiredAgentScope {
     Inference,
     Discovery,
     Integrations,
+    OAuthCredentialsWrite,
 }
+
+pub const OAUTH_CREDENTIALS_WRITE_SCOPE: &str = "oauth_credentials_write";
+const PERSONAL_API_TOKEN_SCOPES: &str = "inference,discovery,integrations";
 
 impl RequiredAgentScope {
     pub const fn as_str(self) -> &'static str {
@@ -394,6 +398,7 @@ impl RequiredAgentScope {
             Self::Inference => "inference",
             Self::Discovery => "discovery",
             Self::Integrations => "integrations",
+            Self::OAuthCredentialsWrite => OAUTH_CREDENTIALS_WRITE_SCOPE,
         }
     }
 }
@@ -408,6 +413,9 @@ pub fn required_agent_scope(path: &str) -> Option<RequiredAgentScope> {
         | "/api/user-budget" => Some(RequiredAgentScope::Inference),
         "/v1/models" => Some(RequiredAgentScope::Discovery),
         "/api/integrations/v1/profile" => Some(RequiredAgentScope::Integrations),
+        "/api/user/oauth-credentials" | "/api/user/oauth-credentials/hint" => {
+            Some(RequiredAgentScope::OAuthCredentialsWrite)
+        }
         _ => None,
     }
 }
@@ -1270,6 +1278,7 @@ async fn issue_api_token_as(
     user_id: &str,
     label: &str,
     session_fence: Option<crate::web_session::SessionFence>,
+    scopes: &'static str,
 ) -> Result<IssuedCredential, IdentityError> {
     let label = label.trim().to_owned();
     if label.is_empty() || label.len() > 80 {
@@ -1307,8 +1316,8 @@ async fn issue_api_token_as(
             }
             connection.execute(
                 "INSERT INTO user_credentials(id, user_id, label, selector, digest, scopes) \
-                 VALUES (?1, ?2, ?3, ?4, ?5, 'inference,discovery,integrations')",
-                (&id, &user_id, &label, &selector, &digest),
+                 VALUES (?1, ?2, ?3, ?4, ?5, ?6)",
+                (&id, &user_id, &label, &selector, &digest, &scopes),
             )?;
             connection.execute(
                 "INSERT INTO user_admin_audit(actor_id, action, target_kind, target_id) \
@@ -1333,7 +1342,15 @@ pub async fn issue_personal_api_token(
     user_id: &str,
     label: &str,
 ) -> Result<IssuedCredential, IdentityError> {
-    issue_api_token_as(database, actor_id, user_id, label, None).await
+    issue_api_token_as(
+        database,
+        actor_id,
+        user_id,
+        label,
+        None,
+        PERSONAL_API_TOKEN_SCOPES,
+    )
+    .await
 }
 
 pub async fn issue_personal_api_token_from_browser(
@@ -1348,6 +1365,23 @@ pub async fn issue_personal_api_token_from_browser(
         user_id,
         label,
         Some(crate::web_session::SessionFence::from_principal(principal)),
+        PERSONAL_API_TOKEN_SCOPES,
+    )
+    .await
+}
+
+pub async fn issue_oauth_credentials_token_from_browser(
+    database: &Database,
+    principal: &crate::web_session::Principal,
+    label: &str,
+) -> Result<IssuedCredential, IdentityError> {
+    issue_api_token_as(
+        database,
+        &principal.user_id,
+        &principal.user_id,
+        label,
+        Some(crate::web_session::SessionFence::from_principal(principal)),
+        OAUTH_CREDENTIALS_WRITE_SCOPE,
     )
     .await
 }

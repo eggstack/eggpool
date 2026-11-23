@@ -164,10 +164,14 @@ for these paths only:
 | `inference` | `POST /v1/chat/completions`, `POST /v1/messages`, `POST /v1/responses`, `POST /v1/responses/compact`, `POST /v1/embeddings`, `GET /api/user-budget` |
 | `discovery` | `GET /v1/models` |
 | `integrations` | `GET /api/integrations/v1/profile` |
+| `oauth_credentials_write` | `POST /api/user/oauth-credentials`, `POST /api/user/oauth-credentials/hint` |
 
-Current issuance grants all three scopes. A missing required scope returns
-HTTP 403 with `detail.code = "required_scope_missing"`; the response does not
-echo scope values. Unknown `/v1/*` paths remain ordinary route-level 404s.
+Ordinary personal tokens receive the first three scopes. A separate OAuth
+upload credential, issued through the authenticated browser-session route
+`POST /account/tokens/oauth`, receives only `oauth_credentials_write`. It cannot
+call inference or discovery routes. A missing required scope returns HTTP 403
+with `detail.code = "required_scope_missing"`; the response does not echo scope
+values. Unknown `/v1/*` paths remain ordinary route-level 404s.
 Browser sessions and the legacy shared key are outside this agent-token scope
 gate; existing browser-session access to `/api/user-budget` is unchanged.
 Agent tokens do not grant dashboard or account access. Browser sessions
@@ -180,6 +184,26 @@ Managed users receive policy-filtered model discovery, and runtime dispatch
 enforces the same rules even when a client submits a hidden model manually.
 The integration profile's ETag includes the policy revision so client caches
 refresh after an administrator changes model access.
+
+### Provider OAuth login
+
+`POST /api/user/oauth-credentials` accepts a completed OpenAI or xAI credential
+set. Ownership is derived only from the verified OAuth-write token principal;
+the request does not accept a user ID or username. The matching `.../hint`
+route returns only the issued OpenAI client ID, never stored access, refresh,
+or ID tokens.
+
+The authenticated Web UI exposes CSRF-protected xAI `/api/user/oauth/xai/start`,
+`poll`, `cancel`, and `commit` mutations plus a same-session `status` read.
+OpenAI authorization remains in the desktop CLI's loopback PKCE flow; the
+EggPool listener has no OpenAI Web UI callback or OpenAI login mutations.
+Browser mutations recheck the operator gate and owner binding.
+
+Pending Web UI OAuth transactions are memory-only and are lost on restart or
+session loss. The desktop CLI callback is loopback-only and does not reach
+EggPool's listener. Disabling `[oauth].enabled` blocks new login, routing, and
+refresh but retains stored credentials. These routes describe implemented
+flows; they do not independently verify live provider behavior or terms.
 
 EggPool does not execute tools. Chat Completions, Responses, Messages, and
 compact return tool calls to the client. `POST /api/tools/v1/mcp` and

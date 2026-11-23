@@ -815,6 +815,7 @@ const FIELD_DISPOSITIONS: &[(&str, ReloadDisposition)] = &[
         "pricing.catalogs.openrouter.ttl_seconds",
         ReloadDisposition::RestartRequired,
     ),
+    ("oauth.enabled", ReloadDisposition::RestartRequired),
     ("pricing.fallback", ReloadDisposition::RestartRequired),
     ("providers", ReloadDisposition::Live),
     ("proxies", ReloadDisposition::RestartRequired),

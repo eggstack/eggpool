@@ -89,6 +89,26 @@ pub struct PersonalUpstreamSnapshot {
 }
 
 impl PersonalUpstreamSnapshot {
+    /// Whether the account has a live owner binding for exactly this user.
+    pub fn is_active_owner(&self, provider_id: &str, account_name: &str, user_id: &str) -> bool {
+        matches!(
+            self.bindings
+                .get(&(provider_id.to_owned(), account_name.to_owned())),
+            Some(BindingState::Active(owner)) if owner == user_id
+        )
+    }
+
+    /// Return the exact owner for an active account binding.
+    pub fn owner_user_id(&self, provider_id: &str, account_name: &str) -> Option<&str> {
+        match self
+            .bindings
+            .get(&(provider_id.to_owned(), account_name.to_owned()))
+        {
+            Some(BindingState::Active(owner)) => Some(owner),
+            Some(BindingState::Withdrawn | BindingState::Ambiguous) | None => None,
+        }
+    }
+
     pub fn excludes(
         &self,
         provider_id: &str,

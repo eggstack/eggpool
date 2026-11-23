@@ -220,6 +220,16 @@ pub struct FailureEffects {
     pub downstream_started: bool,
 }
 
+/// Make a classified OAuth 401 terminal without changing the classifier's
+/// static-key retry policy or its provider/account health evidence.
+pub(crate) fn terminalize_oauth_401(effects: &mut FailureEffects) {
+    effects.retry_scope = RetryScope::None;
+    effects.action = NextAction::Complete;
+    effects.retry = false;
+    effects.retry_action = "none".to_owned();
+    effects.retry_scope_label = "none".to_owned();
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct RetryPolicy {
     pub max_attempts: u32,

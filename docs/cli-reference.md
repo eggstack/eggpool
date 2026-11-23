@@ -28,6 +28,7 @@ Command list verified against `eggpool help` (0.8.3).
 | `eggpool migrate` | Run database migrations |
 | `eggpool models refresh` | Refresh the model catalog |
 | `eggpool accounts list` | List configured provider accounts |
+| `eggpool accounts oauth-login --provider {openai,xai} --account ACCOUNT [--token-stdin]` | Sign in to the selected account through desktop loopback PKCE; without `--token-stdin`, reads the self-only credential from a hidden TTY prompt |
 | `eggpool accounts status` | Show account status (provider, priority, weight, enabled) |
 | `eggpool accounts explain` | Show per-account routing eligibility for a model |
 | `eggpool modelinfo show` | Show enriched model metadata |
@@ -35,6 +36,8 @@ Command list verified against `eggpool help` (0.8.3).
 | `eggpool modelinfo refresh` | Trigger model-info source refresh |
 | `eggpool modelinfo aliases` | Show model aliases |
 | `eggpool modelinfo repair` | Repair legacy canonical model-info detail blocks |
+
+`accounts oauth-login` supports only configured OpenAI and xAI OAuth accounts. It binds an ephemeral callback listener to `127.0.0.1`, so the browser must run on the same machine; it never opens a public callback. The user's OAuth-write credential is issued through the authenticated Web UI and is not accepted in argv or environment variables. A failed, canceled, or timed-out login does not replace the previous credential. Local tests do not verify provider registration, live behavior, or provider terms.
 
 ## Stats & insight
 

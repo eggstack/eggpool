@@ -72,10 +72,11 @@ eggress-server = { version = "=1.0.12", default-features = false, optional = tru
     "extended",
 ] }
 eggress-uri = { version = "=1.0.12", optional = true }
-eggfetch-core = { version = "=0.2.2", default-features = false, features = [
+eggfetch-core = { version = "=0.4.0", default-features = false, features = [
     "native-http1",
     "tls-rustls",
 ] }
+eggpass-auth = "=0.1.1"
 eggserve-server = { version = "=0.4.0", default-features = false, features = ["tower"] }
 eggserve-primitives = "=0.2.2"
 getrandom = "0.3.4"

@@ -43,6 +43,8 @@ Inference handlers (`rust/src/server/inference.rs:119-154`) make exactly one `co
 - `recovery.rs` — `reconcile` plus `StartupRecoveryReport` / `StartupRecoveryError`.
 - `diagnostics.rs` — secret-free projections (`RuntimeDiagnosticsSnapshot`, `ActiveGenerationDiagnostics`, `PublicationDiagnostics`, `RetiringGenerationDiagnostics`, `ReloadDiagnostics`, `TaskDiagnostics`, `ShutdownDiagnostics`, `RuntimeDiagnosticCounters`).
 
+The generation's `InferenceState` owns one `OAuthAccountManager` shared by its finite, streaming, and catalog services. It snapshots the operator gate and active personal-upstream owner bindings alongside that generation's provider client pool; it is not a process-global credential service. Login surfaces obtain the manager from `InferenceState::oauth_account_manager` and must establish the matching owner binding before committing a credential set.
+
 State machine: `candidate built -> staged -> pointer committed -> accepted` (or `rolled back`); `old active -> retiring -> lease/finalization drain -> close -> retired`. Publishing a replacement never interrupts leases held on the retiring generation. Bounded constants in `rust/src/runtime_lifecycle/mod.rs:52-56`: `MAX_RETIRING_GENERATIONS` (4), `DEFAULT_GENERATION_CLOSE_TIMEOUT` (1s), `MAX_STARTUP_RECONCILIATION_PASSES` (1024). Slot states (`Active`/`Retiring`/`DrainingFinalization`/`Closing`/`Closed`/`FailedClose`) live at `rust/src/runtime_lifecycle/lease.rs:21-28`.
 
 ## Reload and publication

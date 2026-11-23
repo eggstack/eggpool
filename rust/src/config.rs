@@ -501,10 +501,19 @@ pub struct ProxyConfig {
     pub url: Option<String>,
     pub url_env: Option<String>,
 }
+#[derive(Debug, Clone, Copy, Default, Deserialize, Serialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum AccountAuthMode {
+    #[default]
+    StaticKey,
+    OAuth,
+}
+
 #[derive(Clone, Deserialize, Serialize)]
 #[serde(deny_unknown_fields, default)]
 pub struct AccountConfig {
     pub name: String,
+    pub auth_mode: AccountAuthMode,
     pub api_key: Option<SecretString>,
     pub api_key_env: String,
     pub enabled: bool,
@@ -521,6 +530,7 @@ impl std::fmt::Debug for AccountConfig {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.debug_struct("AccountConfig")
             .field("name", &self.name)
+            .field("auth_mode", &self.auth_mode)
             .field("api_key", &self.api_key.as_ref().map(|_| "[REDACTED]"))
             .field("api_key_env", &self.api_key_env)
             .field("enabled", &self.enabled)
@@ -547,6 +557,7 @@ impl Default for AccountConfig {
     fn default() -> Self {
         Self {
             name: String::new(),
+            auth_mode: AccountAuthMode::StaticKey,
             api_key: None,
             api_key_env: String::new(),
             enabled: true,
@@ -963,6 +974,20 @@ impl Default for BackupConfig {
 #[serde(deny_unknown_fields, default)]
 pub struct UpdateCheckerConfig {
     pub enabled: bool,
+}
+
+/// Operator controls for the infrastructure OAuth account service.
+/// OAuth is enabled by default; this setting does not add a login interface.
+#[derive(Debug, Clone, Deserialize, Serialize)]
+#[serde(deny_unknown_fields, default)]
+pub struct OAuthConfig {
+    pub enabled: bool,
+}
+
+impl Default for OAuthConfig {
+    fn default() -> Self {
+        Self { enabled: true }
+    }
 }
 
 /// Explicit advertised integration endpoint for remote clients.
@@ -1508,6 +1533,7 @@ pub struct Config {
     pub model_info: ModelInfoConfig,
     pub update_checker: UpdateCheckerConfig,
     pub integrations: IntegrationsConfig,
+    pub oauth: OAuthConfig,
     pub tools: ToolBackendConfig,
 }
 
@@ -1696,6 +1722,7 @@ impl Config {
                 )));
             }
             validate_provider(provider, &self.proxies, &mut account_names, &wire_registry)?;
+            validate_oauth_accounts(provider_id, provider)?;
         }
         validate_model_routers(&self.model_routers)?;
         for override_config in self.model_overrides.values() {
@@ -1979,7 +2006,7 @@ impl Config {
                 continue;
             }
             for account in &provider.accounts {
-                if !account.enabled {
+                if !account.enabled || account.auth_mode == AccountAuthMode::OAuth {
                     continue;
                 }
                 let value = account
@@ -2460,11 +2487,73 @@ fn validate_provider(
                 .wire_surfaces
                 .values()
                 .any(|s| s.auth.as_ref().is_some_and(|a| a.mode != "none"));
-        if needs_key && account.api_key.is_none() && account.api_key_env.trim().is_empty() {
+        if account.auth_mode == AccountAuthMode::StaticKey
+            && needs_key
+            && account.api_key.is_none()
+            && account.api_key_env.trim().is_empty()
+        {
             return Err(ConfigError::validation(format!(
                 "Account {:?} must set api_key or api_key_env",
                 account.name
             )));
+        }
+    }
+    Ok(())
+}
+
+fn validate_oauth_accounts(
+    provider_id: &str,
+    provider: &ProviderConfig,
+) -> Result<(), ConfigError> {
+    let expected_origin = match provider_id {
+        "openai" => Some("https://api.openai.com/v1"),
+        "xai" => Some("https://api.x.ai/v1"),
+        _ => None,
+    };
+    for account in provider
+        .accounts
+        .iter()
+        .filter(|account| account.auth_mode == AccountAuthMode::OAuth)
+    {
+        let Some(expected_origin) = expected_origin else {
+            return Err(ConfigError::validation(
+                "OAuth accounts are supported only for the reviewed OpenAI and xAI providers",
+            ));
+        };
+        if provider.base_url != expected_origin {
+            return Err(ConfigError::validation(
+                "OAuth account provider base_url must match its reviewed canonical origin",
+            ));
+        }
+        if account.api_key.is_some() || !account.api_key_env.is_empty() {
+            return Err(ConfigError::validation(
+                "OAuth accounts must not configure a static API key or key environment variable",
+            ));
+        }
+        let bearer_auth = |auth: &ProviderAuthConfig| {
+            auth.mode == "bearer"
+                && auth.header.eq_ignore_ascii_case("Authorization")
+                && auth.scheme.eq_ignore_ascii_case("Bearer")
+                && auth.additional.is_empty()
+        };
+        if !bearer_auth(&provider.auth)
+            || provider
+                .wire_surfaces
+                .values()
+                .any(|surface| surface.auth.as_ref().is_some_and(|auth| !bearer_auth(auth)))
+        {
+            return Err(ConfigError::validation(
+                "OAuth accounts require a single Bearer Authorization header",
+            ));
+        }
+        if provider
+            .protocols
+            .iter()
+            .any(|protocol| protocol != "openai")
+        {
+            return Err(ConfigError::validation(
+                "OAuth accounts may use only OpenAI-compatible provider protocols",
+            ));
         }
     }
     Ok(())

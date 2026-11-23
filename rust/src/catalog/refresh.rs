@@ -124,6 +124,8 @@ pub struct CatalogService {
     credentials: CredentialStore,
     database: Database,
     client_pool: ProviderClientPool,
+    oauth: Option<crate::oauth::OAuthAccountManager>,
+    personal_bindings: crate::personal_upstream::PersonalUpstreamSnapshot,
     catalog: Arc<std::sync::Mutex<ModelCatalogCache>>,
     state: Arc<Mutex<ServiceState>>,
     refresh_lock: Arc<Mutex<()>>,
@@ -167,6 +169,8 @@ impl CatalogService {
             credentials,
             database,
             client_pool,
+            oauth: None,
+            personal_bindings: crate::personal_upstream::PersonalUpstreamSnapshot::default(),
             catalog: Arc::new(std::sync::Mutex::new(cache)),
             state: Arc::new(Mutex::new(ServiceState {
                 ..ServiceState::default()
@@ -193,6 +197,8 @@ impl CatalogService {
             credentials,
             database,
             client_pool,
+            oauth: None,
+            personal_bindings: crate::personal_upstream::PersonalUpstreamSnapshot::default(),
             catalog,
             state: Arc::new(Mutex::new(ServiceState {
                 cache_loaded: true,
@@ -200,6 +206,16 @@ impl CatalogService {
             })),
             refresh_lock: Arc::new(Mutex::new(())),
         }
+    }
+
+    pub fn with_oauth_account_manager(
+        mut self,
+        manager: crate::oauth::OAuthAccountManager,
+        personal_bindings: crate::personal_upstream::PersonalUpstreamSnapshot,
+    ) -> Self {
+        self.oauth = Some(manager);
+        self.personal_bindings = personal_bindings;
+        self
     }
 
     pub fn shared_cache(&self) -> Arc<std::sync::Mutex<ModelCatalogCache>> {
@@ -261,16 +277,51 @@ impl CatalogService {
         let mut scheduled_accounts = BTreeSet::new();
         for identity in identities {
             let provider = self.config.providers.get(&identity.provider_id).cloned();
-            let api_key = self
-                .credentials
-                .get(&identity.account_name)
-                .map(str::to_owned)
-                .or_else(|| {
-                    provider
-                        .as_ref()
-                        .filter(|provider| auth_is_none(provider))
-                        .map(|_| String::new())
-                });
+            let api_key = match identity.auth_mode {
+                crate::config::AccountAuthMode::StaticKey => self
+                    .credentials
+                    .get(&identity.account_name)
+                    .map(crate::config::SecretString::from)
+                    .or_else(|| {
+                        provider
+                            .as_ref()
+                            .filter(|provider| auth_is_none(provider))
+                            .map(|_| crate::config::SecretString::from(""))
+                    }),
+                crate::config::AccountAuthMode::OAuth => {
+                    let Some(user_id) = self
+                        .personal_bindings
+                        .owner_user_id(&identity.provider_id, &identity.account_name)
+                    else {
+                        outcomes.insert(identity.account_name.clone(), RefreshOutcome::Skipped);
+                        continue;
+                    };
+                    let Some(manager) = &self.oauth else {
+                        outcomes.insert(identity.account_name.clone(), RefreshOutcome::Failed);
+                        continue;
+                    };
+                    match manager
+                        .access_token_for_user(
+                            user_id,
+                            &identity.provider_id,
+                            &identity.account_name,
+                        )
+                        .await
+                    {
+                        Ok(token) => Some(token),
+                        Err(error) => {
+                            tracing::warn!(
+                                provider = %identity.provider_id,
+                                account = %identity.account_name,
+                                error = ?error,
+                                "catalog OAuth token resolution failed"
+                            );
+                            outcomes.insert(identity.account_name.clone(), RefreshOutcome::Failed);
+                            continue;
+                        }
+                    }
+                }
+            };
             let Some(api_key) = api_key else {
                 outcomes.insert(identity.account_name.clone(), RefreshOutcome::Skipped);
                 continue;
@@ -549,7 +600,7 @@ impl CatalogService {
 async fn fetch_account(
     account_name: String,
     provider_id: String,
-    api_key: String,
+    api_key: crate::config::SecretString,
     client: ProviderHttpClient,
     provider: Option<crate::config::ProviderConfig>,
 ) -> AccountCatalogFetch {
@@ -606,7 +657,7 @@ async fn fetch_account(
         .as_ref()
         .map_or_else(String::new, |endpoint| query_string(&endpoint.query));
     let target = format!("{path}{query}");
-    let headers = match catalog_headers(&provider, &api_key) {
+    let headers = match catalog_headers(&provider, api_key.expose_secret()) {
         Ok(headers) => headers,
         Err(error) => {
             return failed_fetch(

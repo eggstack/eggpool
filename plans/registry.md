@@ -100,6 +100,7 @@ Security hardening (2026-11-17, baseline `dcbd820e9b978d47bd43d237eded1f488d3449
 | Embedding routing | closing | [embedding routing roadmap](subsystems/embedding-routing-roadmap.md) | E001 conditionally closed; corrective E002 closed | E002 compatibility and full Rust/dependency verification are complete. Retrieval R002 is closed: embeddings stay and document retrieval is out of scope. SBC footprint evidence gates only device-specific deployment claims. |
 | Retrieval interoperability | closed | [retrieval interoperability roadmap](subsystems/retrieval-interoperability-roadmap.md) | R002 closed; R001 superseded for execution | R001's blocked closure stays historical. R002 is documentation only. No successor registered. |
 | Provider transport | closed | `plans/subsystems/provider-transport-roadmap.md` | M006 closed — Eggress 1.0.12 dependency refresh and requalification | M001–M006 closed; no successor registered. |
+| Provider OAuth | active | [provider OAuth roadmap](subsystems/provider-oauth-roadmap.md) | M001–M003 active — credential lifecycle/dispatch; xAI Web UI device-code; xAI/OpenAI desktop loopback PKCE | ADR-0012/0013 remain historical accepted records; ADR-0014 supersedes only ADR-0012’s OpenAI M002 callback flow. M001 uses the approved single-version Eggfetch 0.4.0 move and provider-transport requalification. |
 | Provider profile metadata corrective | closed | `plans/subsystems/provider-profile-metadata-corrective-roadmap.md` | M001 closed — provider template endpoint/source reconciliation | M001 terminal; no successor registered. |
 | Provider profile metadata planning/documentation reconciliation | closed | `plans/subsystems/provider-profile-metadata-planning-reconciliation-corrective-roadmap.md` | C001 closed — closed-roadmap/source-truth reconciliation | No successor registered. |
 | Security hardening | active | [security hardening roadmap](subsystems/security-hardening-roadmap.md) | M001–M005, M007, M009 active; M006, M008 blocked | Review baseline `dcbd820e9b`; M006 needs a signature-authority ADR and key custody; M008 needs an Eggress release permitting `russh >=0.65` or an approved vendoring/no-SSH ADR. |
@@ -338,7 +339,9 @@ persistence roadmap.
 | Subsystem | Milestone | Status | Implementation plan | Handoff note |
 |---|---|---|---|---|
 
-None.
+| Provider OAuth | M001 — credential lifecycle and dispatch | active | [M001](implementation/provider-oauth/001-oauth-credential-lifecycle-and-dispatch.md) | First implementation slice; see branch baseline and dependency contract in the plan. |
+| Provider OAuth | M002 — authenticated Web UI provider login | active | [M002](implementation/provider-oauth/002-authenticated-web-ui-provider-login.md) | Active against M001’s account and credential-commit interface. |
+| Provider OAuth | M003 — desktop CLI loopback PKCE login | active | [M003](implementation/provider-oauth/003-desktop-loopback-browser-login.md) | Active against M001’s account and credential-commit interface. |
 
 Unblock audit (on-prem member access, 2026-11-10): M001–M005 are closed by their own records. ADR-0010 stays accepted. Searched the member-access roadmap, its implementation plans, and the ready, active, and blocked tables. No successor is registered. Nothing else was waiting on this roadmap, so nothing is promoted. On-prem user access M001–M024 stay closed.
 

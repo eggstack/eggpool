@@ -39,23 +39,28 @@ process is not running.
 | `/etc/eggpool/config.toml` | Configuration | On change |
 | `/etc/eggpool/env` | API keys | On change |
 | `/var/lib/eggpool/usage.sqlite3*` | Database | Daily |
+| Config-adjacent `.eggpool-oauth/` | Owner-bound OAuth credential files (when present) | Daily |
 
 ## Backup
 
 ### Using the CLI (recommended)
 
 `eggpool backup` creates a timestamped `.zip` archive containing `config.toml`,
-the SQLite database snapshot, and the config-adjacent `.env` when
-`include_env` is enabled. The archive stores a single `usage.sqlite3` database
-member, not separate WAL or SHM files. A non-adjacent file selected by
-`$EGGPOOL_ENV` and credentials supplied only through the process environment are
-not included; back them up separately.
+the SQLite database snapshot, config-adjacent OAuth credential files, and the
+config-adjacent `.env` when `include_env` is enabled. The archive stores a
+single `usage.sqlite3` database member, not separate WAL or SHM files. A
+non-adjacent file selected by `$EGGPOOL_ENV` and credentials supplied only
+through the process environment are not included; back them up separately.
 
 The database snapshot includes local users, budget rules and audit records,
 active budget holds, settled user/model usage, and secret-free personal
-upstream bindings. Credentials are not stored in the database. Restoring the
-snapshot preserves committed budget state. Pending requests and active holds
-follow the normal crash-recovery rules on the next server start.
+upstream bindings. OAuth credentials remain outside SQLite in the
+config-adjacent `.eggpool-oauth/` directory. Backup ZIPs contain those token
+files in plaintext; protect the archive like an API-key backup and use encrypted,
+access-controlled backup storage. The source directory and files are owner-only
+(mode 0700 and 0600), and each file is bound to its user/provider/account.
+Restoring the snapshot preserves committed budget state. Pending requests and
+active holds follow the normal crash-recovery rules on the next server start.
 
 ```bash
 # Default location: ~/backups/eggpool/
@@ -77,7 +82,8 @@ eggpool-backup-20260624-120000.zip
 ├── META           (format version, install method, member list)
 ├── config.toml
 ├── usage.sqlite3
-└── .env           (if present)
+├── .env           (if present)
+└── .eggpool-oauth/ (hashed JSON credential members, when present)
 ```
 
 ### Manual backup without the CLI
@@ -129,6 +135,12 @@ Stop any foreground `eggpool serve --verbose` process before recovery. The CLI
 stops a daemon when its PID file is present, but does not detect a foreground
 server without one. After a successful restore, it leaves the server stopped
 and prints a reminder to restart it so the restored configuration is loaded.
+OAuth files are restored by private directory replacement. Older archives with
+no OAuth members clear any current config-adjacent OAuth files, so credentials
+newer than the selected backup are not silently reused. The bound user will need
+to sign in again through the applicable supported OAuth flow. Pending browser and device-code transactions are memory-only and are not included in backups; restart or session loss requires starting a new login. Malformed
+or owner-mismatched credential members are rejected, never assigned to another
+user or account.
 If a restore step fails, EggPool attempts to restore the original files
 atomically. If that rollback also fails, the CLI reports a rollback error.
 Keep the server stopped until the database and configuration are consistent.
@@ -149,6 +161,14 @@ sudo cp backup/.env /etc/eggpool/env
 sudo chown root:eggpool /etc/eggpool/config.toml /etc/eggpool/env
 sudo chmod 640 /etc/eggpool/config.toml /etc/eggpool/env
 ```
+
+#### Restore OAuth credentials
+
+When restoring manually, include the full config-adjacent `.eggpool-oauth/`
+directory together with the matching config and database. Preserve its 0700
+directory and 0600 file permissions and ownership by the EggPool runtime user.
+If the selected backup has no OAuth files, do not copy the current directory
+over the restored state; missing credentials require re-authentication.
 
 #### Restore database
 
