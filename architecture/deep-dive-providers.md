@@ -169,8 +169,11 @@ older archive has no OAuth members.
 Finite and streaming coordinators resolve an owned `SecretString` before
 publication and synchronous attempt preparation. A resolution failure rolls back
 the selected claim and produces no provider attempt or account fallback. A
-subsequent OAuth HTTP 401 is terminal: it triggers no refresh/replay, no account
-fallback, and no reselection; static-key failure policy is unchanged. Catalog
+subsequent OAuth HTTP 401 refreshes that owner's credential for that same account
+and retries the same request against the same account exactly once, as ADR-0015
+and M004 record; a failed refresh or a second rejection terminalizes the request
+and disables the account, with no account fallback and no reselection. Static-key
+failure policy is unchanged. Catalog
 OAuth requests use the same owner-scoped service; public discovery never proves
 credential validity. `[oauth].enabled` defaults on; disabling blocks OAuth
 login, routing, and refresh while retaining credential files. OpenAI login is

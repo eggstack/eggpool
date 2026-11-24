@@ -174,7 +174,7 @@ M001 closes with secure per-user storage, backup/restore, gate semantics, proact
 
 | Milestone | Status | Implementation plan | Closure record | Blockers |
 |---|---|---|---|---|
-| M001 | active | ../implementation/provider-oauth/001-oauth-credential-lifecycle-and-dispatch.md | — | None; dependency compatibility is the first implementation check in M001 |
+| M001 | closed | ../implementation/provider-oauth/001-oauth-credential-lifecycle-and-dispatch.md | ../closure/provider-oauth/001-status.md | Closed; ADR-0015 supersedes only the plan's no-401-replay clause (§17) |
 | M002 | active | ../implementation/provider-oauth/002-authenticated-web-ui-provider-login.md | — | Interface dependency on M001 account identity/commit contract; verify exact xAI/OpenAI provider registrations before closure |
 | M003 | active | ../implementation/provider-oauth/003-desktop-loopback-browser-login.md | — | M001 account identity/commit interface plus scoped `oauth_credentials_write` route; verify exact provider loopback registrations before closure |
 | M004 | closed | ../implementation/provider-oauth/004-oauth-401-credential-refresh-retry.md | ../closure/provider-oauth/004-status.md | ADR-0015 supersedes the no-replay clause; local-stub evidence only, exact provider registration remains an M001–M003 condition |
@@ -220,3 +220,14 @@ This note records the M004 closure. It does not rewrite the earlier text, and it
 - The published `RetryScope`/`NextAction` variant sets and the failure classifier's recorded output are unchanged, so the frozen compatibility observation fixture and the library's public API are unaffected.
 - A local stub proves the coordinator and credential-manager behavior only. Exact xAI and OpenAI provider registration and live provider support are not established by M004 and remain an M001–M003 condition.
 - M001, M002, and M003 stay `active` and are neither promoted nor reopened.
+
+## 16. Append-only closure note — M001
+
+This note records the M001 closure. It does not rewrite the earlier text, and it does not change the M002 and M003 boundaries.
+
+- M001 is closed through `plans/closure/provider-oauth/001-status.md`. One complete credential set per managed user, provider, and configured account lives outside SQLite under the config-adjacent `.eggpool-oauth/` directory, with owner-only permissions, a hashed filename bound to the owner tuple, per-identity OS locks, atomic rotation, interrupted-restore recovery, and supported backup/restore membership.
+- `[oauth].enabled` defaults on. Disabling blocks refresh and OAuth routing while retaining the stored bytes, and the key is classified restart-required through the existing classifier.
+- Tokens resolve into owned values before synchronous attempt preparation, so a resolution failure produces no provider attempt and no alternate account.
+- ADR-0015 supersedes only the plan's no-401-replay clause, as the plan's §17 amendment records; the same-account, same-owner recovery is M004's. No cross-account, cross-user, or cross-owner replay or fallback exists.
+- M001 adds no login surface and makes no provider-support or provider-registration claim. Exact xAI and OpenAI registration remains the M002 and M003 closure condition.
+- M002 and M003 stay `active` and are neither promoted nor reopened.

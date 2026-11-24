@@ -1,6 +1,6 @@
 # Provider OAuth Milestone 001 — Credential lifecycle and dispatch integration
 
-Status: active
+Status: implemented
 
 Repository baseline: 5b212d2d69137b99ed39f0dbeab10331c839e54e
 
@@ -188,3 +188,11 @@ The later closure record must include: exact accepted scope and dependency graph
 ## 16. Handoff notes
 
 Read accepted ADR-0012, ADR-0013, and ADR-0010 plus current config, personal-upstream, account, generation, eligibility, and attempt owners. eggpass-auth 0.1.1 is the exact runtime candidate; Eggpass 0.1.3 is reference only. The user approved the single Eggfetch 0.4.0 dependency move under ADR-0013; do not copy unrelated source changes from the separate checkout. Preserve native-http1 plus tls-rustls and requalify provider transport. Rust tests run serial. This plan records no completed milestone evidence.
+
+## 17. Append-only credential-refresh amendment — ADR-0015
+
+ADR-0015 is accepted and supersedes this plan's no-401-replay clause only. The earlier wording remains historical and is not rewritten: §4's "HTTP 401 never triggers automatic refresh-and-replay" invariant, §6.7's failure-semantics rule, §8's closing sentence, §13's acceptance bullet, and §15's "proof of no HTTP 401 replay" evidence requirement.
+
+The current rule is M004's owner-scoped credential-refresh retry: an upstream HTTP 401 on an owner-bound OAuth account refreshes that owner's credential for that same account and retries the same request against the same account exactly once. The owner, provider, and account stay constant; the retry never reselects and never falls back to another account or user. A refresh failure, a denied grant, or a second rejection of the refreshed credential terminalizes the request and disables the account under the existing authentication-failure semantics, and the operator gate blocks the refresh exactly as it blocks login and proactive refresh.
+
+Everything else above is unchanged: proactive refresh, atomic rotation, cross-process coordination, owner binding, secret exclusion, no pooling, and no cross-account fallback. M001's deliverable boundary is unchanged too — this milestone adds no login surface and makes no provider-support or provider-registration claim. Its closure record evaluates §15's replay requirement in the superseded sense: no cross-account, cross-user, or cross-owner replay or fallback exists. See `plans/adrs/ADR-0015-provider-oauth-owner-scoped-credential-refresh-retry.md` and `plans/implementation/provider-oauth/004-oauth-401-credential-refresh-retry.md`.
