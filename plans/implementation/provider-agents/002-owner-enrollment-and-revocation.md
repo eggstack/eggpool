@@ -1,6 +1,6 @@
 # Provider Agents Milestone 002 — One-Time Enrollment and Owner Attach
 
-Status: blocked
+Status: ready
 
 Repository baseline: `c4d774aeb883307f28ef94f6143dc688b3098946`
 
@@ -29,9 +29,14 @@ credential and no provider token ever reaching the server.
 
 ## 2. Why this milestone is ready
 
-Blocked.
+Ready.
 
-- Hard: M001 must be closed (agent account kind and tunnel manager).
+- Hard: satisfied. M001 is implemented and conditionally closed through
+  `plans/closure/provider-agents/001-status.md`; the agent account kind and the
+  tunnel manager exist and are verified. M001's outstanding condition is the
+  repository-wide dependency-audit gate on a pre-existing SSH advisory owned by
+  Security hardening M008, which is not an interface dependency of this
+  milestone, so it does not block implementation here.
 - Interface: the ticket format in `eggstack/eggpass#10` must be agreed. Tests can
   use an in-repository ticket producer, but the milestone cannot be closed as a
   user capability until the real producer exists.

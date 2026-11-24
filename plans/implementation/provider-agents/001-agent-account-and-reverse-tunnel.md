@@ -1,6 +1,6 @@
 # Provider Agents Milestone 001 — Agent Account and Reverse-Tunnel Foundation
 
-Status: ready
+Status: implemented
 
 Repository baseline: `c4d774aeb883307f28ef94f6143dc688b3098946`
 
