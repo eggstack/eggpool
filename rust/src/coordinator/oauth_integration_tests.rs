@@ -4,7 +4,7 @@ use std::{
 };
 
 use bytes::Bytes;
-use http::HeaderMap;
+use http::{HeaderMap, StatusCode};
 use tokio::{
     io::{AsyncReadExt, AsyncWriteExt},
     net::{TcpListener, TcpStream},
@@ -18,7 +18,7 @@ use crate::{
         ProviderModelsEndpointConfig,
     },
     coordinator::{
-        DownstreamResult, StreamRequest, WireResolver, WireResolverConfig,
+        DownstreamResult, FiniteRequest, StreamRequest, WireResolver, WireResolverConfig,
         build_inference_state_with_shared, compile_provider_profiles,
     },
     db::{
@@ -433,4 +433,493 @@ async fn catalog_and_streaming_dispatch_use_owner_oauth_token_without_persisting
         !log_text.contains(ACCESS_TOKEN),
         "OAuth access token never enters tracing logs"
     );
+}
+const STALE_ACCESS_TOKEN: &str = "oauth-stale-access-sentinel";
+const ROTATED_ACCESS_TOKEN: &str = "oauth-rotated-access-sentinel";
+
+/// A provider fixture that serves the OAuth token endpoint and can reject the
+/// first upstream chat requests with HTTP 401, so the owner-scoped credential
+/// refresh and its single same-account retry are observable.
+struct RejectingProviderFixture {
+    base_url: String,
+    requests: Arc<Mutex<Vec<String>>>,
+    task: Option<tokio::task::JoinHandle<()>>,
+}
+
+impl RejectingProviderFixture {
+    async fn start(rejected_requests: usize) -> Self {
+        let listener = TcpListener::bind((std::net::Ipv4Addr::LOCALHOST, 0))
+            .await
+            .expect("provider fixture listener");
+        let base_url = format!("http://{}", listener.local_addr().expect("fixture address"));
+        let requests = Arc::new(Mutex::new(Vec::new()));
+        let captured = Arc::clone(&requests);
+        let task = tokio::spawn(async move {
+            let mut rejections = 0_usize;
+            loop {
+                let (mut stream, _) = match listener.accept().await {
+                    Ok(connection) => connection,
+                    Err(_) => break,
+                };
+                let request = read_request(&mut stream).await;
+                captured
+                    .lock()
+                    .expect("request capture lock")
+                    .push(request.clone());
+                let (status, content_type, body) = if request.starts_with("GET ")
+                    && request.contains("/models")
+                {
+                    (
+                        "200 OK",
+                        "application/json",
+                        r#"{"data":[{"id":"gpt-oauth-fixture","object":"model"}]}"#,
+                    )
+                } else if request.starts_with("POST ") && request.contains("/token") {
+                    (
+                        "200 OK",
+                        "application/json",
+                        r#"{"access_token":"oauth-rotated-access-sentinel","refresh_token":"oauth-rotated-refresh-sentinel","id_token":"oauth-rotated-id-sentinel","token_type":"Bearer","expires_in":3600,"scope":"offline_access"}"#,
+                    )
+                } else if request.starts_with("POST ") && request.contains("chat/completions") {
+                    if rejections < rejected_requests {
+                        rejections += 1;
+                        (
+                            "401 Unauthorized",
+                            "application/json",
+                            r#"{"error":{"message":"token expired","type":"invalid_request_error"}}"#,
+                        )
+                    } else if request.contains("\"stream\":true") {
+                        (
+                            "200 OK",
+                            "text/event-stream",
+                            concat!(
+                                "data: {\"choices\":[{\"delta\":{\"content\":\"ok\"}}]}\n\n",
+                                "data: {\"choices\":[{\"delta\":{},\"finish_reason\":\"stop\"}]}\n\n",
+                                "data: [DONE]\n\n"
+                            ),
+                        )
+                    } else {
+                        (
+                            "200 OK",
+                            "application/json",
+                            r#"{"id":"chatcmpl-oauth-fixture","object":"chat.completion","created":1,"model":"gpt-oauth-fixture","choices":[{"index":0,"message":{"role":"assistant","content":"ok"},"finish_reason":"stop"}],"usage":{"prompt_tokens":1,"completion_tokens":1,"total_tokens":2}}"#,
+                        )
+                    }
+                } else {
+                    (
+                        "404 Not Found",
+                        "application/json",
+                        r#"{"error":"not found"}"#,
+                    )
+                };
+                let response = format!(
+                    "HTTP/1.1 {status}\r\nContent-Type: {content_type}\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}",
+                    body.len()
+                );
+                if stream.write_all(response.as_bytes()).await.is_err() {
+                    break;
+                }
+            }
+        });
+        Self {
+            base_url,
+            requests,
+            task: Some(task),
+        }
+    }
+
+    fn captured(&self) -> Vec<String> {
+        captured_requests(&self.requests)
+    }
+
+    async fn finish(mut self) -> Vec<String> {
+        if let Some(task) = self.task.take() {
+            task.abort();
+            let _ = task.await;
+        }
+        captured_requests(&self.requests)
+    }
+}
+
+impl Drop for RejectingProviderFixture {
+    fn drop(&mut self) {
+        if let Some(task) = &self.task {
+            task.abort();
+        }
+    }
+}
+
+/// An owner-bound generation whose OAuth provider profile points at the
+/// fixture, so a credential refresh reaches the stub instead of the
+/// production authorization server.
+struct OwnerBoundFixture {
+    state: crate::coordinator::InferenceState,
+    credential_root: std::path::PathBuf,
+}
+
+async fn owner_bound_fixture(
+    fixture: &RejectingProviderFixture,
+    directory: &std::path::Path,
+) -> OwnerBoundFixture {
+    let database = database(&directory.join("state.sqlite3")).await;
+    let mut config = Config::default();
+    config.providers.clear();
+    let account = AccountConfig {
+        name: ACCOUNT_NAME.into(),
+        auth_mode: AccountAuthMode::OAuth,
+        ..Default::default()
+    };
+    let mut provider = ProviderConfig {
+        id: "xai".into(),
+        base_url: fixture.base_url.clone(),
+        protocols: vec!["openai".into()],
+        openai_path: "/chat/completions".into(),
+        models_method: "GET".into(),
+        models_path: "/models".into(),
+        auth: ProviderAuthConfig::default(),
+        accounts: vec![account],
+        ..Default::default()
+    };
+    provider.models_endpoint = Some(ProviderModelsEndpointConfig {
+        method: "GET".into(),
+        path: "/models".into(),
+        ..Default::default()
+    });
+    config.providers.insert("xai".into(), provider);
+    config.oauth.enabled = true;
+    AccountRepository::new(&database)
+        .sync_from_config(vec![DbAccountConfig {
+            name: ACCOUNT_NAME.into(),
+            api_key_env: "UNUSED_OAUTH_KEY".into(),
+            enabled: true,
+            weight: 1.0,
+            provider_id: "xai".into(),
+        }])
+        .await
+        .expect("account row");
+    database
+        .call(|connection| {
+            connection.execute(
+                "INSERT INTO personal_upstream_bindings (provider_id, account_name, user_id, state, actor_id)
+                 VALUES ('xai', 'oauth-account', 'oauth-owner', 'active', 'fixture')",
+                [],
+            )?;
+            Ok(())
+        })
+        .await
+        .expect("active owner binding");
+
+    let clients = ProviderClientPool::from_config(&config).expect("provider client pool");
+    let provider_profiles = compile_provider_profiles(&config).expect("provider wire profiles");
+    let config_path = directory.join("config.toml");
+    let state = build_inference_state_with_shared(
+        &config,
+        &database,
+        clients,
+        WireResolver::new(WireResolverConfig::default()),
+        Arc::new(ModelRouterAffinity::new()),
+        config
+            .compile_model_router_registry()
+            .expect("model router registry"),
+        provider_profiles,
+        Some(&config_path),
+    )
+    .await
+    .expect("generation state builds");
+    let manager = state
+        .oauth_account_manager()
+        .expect("generation OAuth manager");
+    manager.set_provider_profile(
+        "xai",
+        eggpass_auth::OAuthProviderConfig::custom(
+            "Local OAuth fixture",
+            &fixture.base_url,
+            "test-client",
+        )
+        .authorization_endpoint(format!("{}/authorize", fixture.base_url))
+        .token_endpoint(format!("{}/token", fixture.base_url))
+        .scopes(["offline_access"])
+        .build()
+        .expect("local OAuth profile"),
+    );
+    let credential_root = crate::oauth::credential_root_for_config(Some(&config_path));
+    let now = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .expect("system clock")
+        .as_secs() as i64;
+    let credentials: crate::oauth::OAuthCredentials = serde_json::from_value(serde_json::json!({
+        "access_token": STALE_ACCESS_TOKEN,
+        "refresh_token": "oauth-stale-refresh-sentinel",
+        "id_token": "oauth-stale-id-sentinel",
+        "token_type": "Bearer",
+        "scope": "openid offline_access",
+        "client_id": "test-client",
+        "issuer": fixture.base_url,
+        "expires_at": now + 3600,
+        "obtained_at": now
+    }))
+    .expect("valid unexpired credentials");
+    manager
+        .commit_credentials_for_user(USER_ID, "xai", ACCOUNT_NAME, credentials)
+        .await
+        .expect("owner credential file committed");
+    OwnerBoundFixture {
+        state,
+        credential_root,
+    }
+}
+
+/// The observable outcome of one streaming dispatch. A request that
+/// cannot be routed at all is reported as a route error rather than a
+/// terminal response, so the test can tell "the account was disabled" apart
+/// from "the provider rejected the credential".
+struct StreamOutcome {
+    chunks: Vec<u8>,
+    completed: bool,
+    route_error: Option<String>,
+}
+
+async fn execute_stream(
+    state: &crate::coordinator::InferenceState,
+    proxy_id: &str,
+) -> StreamOutcome {
+    let body = Bytes::from(
+        serde_json::json!({
+            "model": MODEL_ID,
+            "stream": true,
+            "messages": [{"role": "user", "content": "hello"}]
+        })
+        .to_string(),
+    );
+    let mut request = StreamRequest::new(
+        proxy_id,
+        body,
+        HeaderMap::new(),
+        ClientSurface::ChatCompletions,
+        StaticRoutingFacts::default(),
+    )
+    .expect("stream request admission");
+    request.routing_facts.provider_id = Some("xai".into());
+    request.routing_facts.principal_user_id = Some(USER_ID.into());
+    let mut execution = match state.streaming_coordinator().execute(request).await {
+        Ok(execution) => execution,
+        Err(error) => {
+            return StreamOutcome {
+                chunks: Vec::new(),
+                completed: false,
+                route_error: Some(format!("{error:?}")),
+            };
+        }
+    };
+    execution.mark_started();
+    let mut chunks = Vec::new();
+    while let Some(chunk) = execution.next_chunk().await {
+        match chunk {
+            Ok(chunk) => chunks.extend_from_slice(&chunk),
+            Err(_) => break,
+        }
+    }
+    let finalization = execution
+        .complete(DownstreamResult::Delivered)
+        .await
+        .expect("stream finalization");
+    StreamOutcome {
+        chunks,
+        completed: finalization.progress.completed,
+        route_error: None,
+    }
+}
+
+fn chat_requests(requests: &[String]) -> Vec<&String> {
+    requests
+        .iter()
+        .filter(|request| request.contains("chat/completions"))
+        .collect()
+}
+
+fn token_requests(requests: &[String]) -> Vec<&String> {
+    requests
+        .iter()
+        .filter(|request| request.contains("/token"))
+        .collect()
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn oauth_401_refreshes_the_owner_credential_and_retries_the_same_account_once() {
+    let fixture = RejectingProviderFixture::start(1).await;
+    let directory = tempfile::tempdir().expect("test directory");
+    let owner = owner_bound_fixture(&fixture, directory.path()).await;
+    owner
+        .state
+        .catalog_service()
+        .expect("catalog service")
+        .refresh()
+        .await
+        .expect("catalog refresh");
+
+    let outcome = execute_stream(&owner.state, "oauth-401-heal").await;
+    assert!(
+        outcome.route_error.is_none(),
+        "the healed request is routed"
+    );
+    assert!(outcome.completed, "the healed request completes");
+    assert!(
+        String::from_utf8_lossy(&outcome.chunks).contains("ok"),
+        "the healed response body is forwarded"
+    );
+
+    let requests = fixture.captured();
+    let chat = chat_requests(&requests);
+    assert_eq!(chat.len(), 2, "the same account is retried exactly once");
+    assert!(
+        chat[0]
+            .to_ascii_lowercase()
+            .contains(&format!("authorization: bearer {STALE_ACCESS_TOKEN}")),
+        "the first attempt uses the rejected credential"
+    );
+    assert!(
+        chat[1]
+            .to_ascii_lowercase()
+            .contains(&format!("authorization: bearer {ROTATED_ACCESS_TOKEN}")),
+        "the retry uses the refreshed credential"
+    );
+    assert_eq!(
+        token_requests(&requests).len(),
+        1,
+        "the credential is refreshed exactly once"
+    );
+
+    // The refreshed credential is the one the owner keeps using, and the
+    // account is not disabled by a credential that was healed.
+    let credential_file = owner.credential_root.join(
+        crate::oauth::credential_filename(USER_ID, "xai", ACCOUNT_NAME)
+            .expect("credential file name"),
+    );
+    let stored = std::fs::read(&credential_file).expect("credential file");
+    assert!(String::from_utf8_lossy(&stored).contains(ROTATED_ACCESS_TOKEN));
+    assert!(!String::from_utf8_lossy(&stored).contains(STALE_ACCESS_TOKEN));
+
+    let outcome = execute_stream(&owner.state, "oauth-401-heal-follow-up").await;
+    assert!(
+        outcome.completed,
+        "the account stays eligible after a healed rejection"
+    );
+    assert!(outcome.route_error.is_none());
+    assert!(String::from_utf8_lossy(&outcome.chunks).contains("ok"));
+
+    let requests = fixture.finish().await;
+    assert_eq!(
+        chat_requests(&requests).len(),
+        3,
+        "the follow-up request reaches the same account"
+    );
+    assert_eq!(token_requests(&requests).len(), 1);
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn oauth_401_terminalizes_when_the_refreshed_credential_is_rejected_again() {
+    let fixture = RejectingProviderFixture::start(2).await;
+    let directory = tempfile::tempdir().expect("test directory");
+    let owner = owner_bound_fixture(&fixture, directory.path()).await;
+    owner
+        .state
+        .catalog_service()
+        .expect("catalog service")
+        .refresh()
+        .await
+        .expect("catalog refresh");
+
+    let outcome = execute_stream(&owner.state, "oauth-401-terminal").await;
+    assert!(
+        !String::from_utf8_lossy(&outcome.chunks).contains("\"content\":\"ok\""),
+        "the rejected request does not deliver a provider body"
+    );
+
+    let requests = fixture.captured();
+    assert_eq!(
+        chat_requests(&requests).len(),
+        2,
+        "the account is retried once and never again"
+    );
+    assert_eq!(
+        token_requests(&requests).len(),
+        1,
+        "the credential is refreshed once and never again"
+    );
+
+    // The credential is genuinely rejected, so the account is disabled and the
+    // next request never reaches the provider.
+    let outcome = execute_stream(&owner.state, "oauth-401-terminal-follow-up").await;
+    assert!(
+        !outcome.completed,
+        "a disabled OAuth account is not routed again"
+    );
+    assert!(
+        outcome
+            .route_error
+            .as_deref()
+            .is_some_and(|error| error.contains("NoEligibleRoute")),
+        "the disabled account leaves no eligible route: {:?}",
+        outcome.route_error
+    );
+    let requests = fixture.finish().await;
+    assert_eq!(
+        chat_requests(&requests).len(),
+        2,
+        "the disabled account is not dispatched again"
+    );
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn finite_oauth_401_refreshes_the_owner_credential_and_retries_the_same_account_once() {
+    let fixture = RejectingProviderFixture::start(1).await;
+    let directory = tempfile::tempdir().expect("test directory");
+    let owner = owner_bound_fixture(&fixture, directory.path()).await;
+    owner
+        .state
+        .catalog_service()
+        .expect("catalog service")
+        .refresh()
+        .await
+        .expect("catalog refresh");
+
+    let body = Bytes::from(
+        serde_json::json!({
+            "model": MODEL_ID,
+            "messages": [{"role": "user", "content": "hello"}]
+        })
+        .to_string(),
+    );
+    let mut request = FiniteRequest::new(
+        "oauth-401-finite",
+        body,
+        HeaderMap::new(),
+        ClientSurface::ChatCompletions,
+        StaticRoutingFacts::default(),
+    )
+    .expect("finite request admission");
+    request.routing_facts.provider_id = Some("xai".into());
+    request.routing_facts.principal_user_id = Some(USER_ID.into());
+    let execution = owner
+        .state
+        .finite_coordinator()
+        .execute(request)
+        .await
+        .expect("OAuth finite dispatch");
+    assert_eq!(execution.response.status, StatusCode::OK);
+    assert!(
+        String::from_utf8_lossy(&execution.response.body).contains("ok"),
+        "the healed finite body is forwarded"
+    );
+
+    let requests = fixture.finish().await;
+    let chat = chat_requests(&requests);
+    assert_eq!(chat.len(), 2, "the same account is retried exactly once");
+    assert!(
+        chat[1]
+            .to_ascii_lowercase()
+            .contains(&format!("authorization: bearer {ROTATED_ACCESS_TOKEN}")),
+        "the retry uses the refreshed credential"
+    );
+    assert_eq!(token_requests(&requests).len(), 1);
 }

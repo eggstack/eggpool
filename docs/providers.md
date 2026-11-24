@@ -552,10 +552,13 @@ accounts. The available flows are deliberately distinct:
 
 Each completed grant belongs to one managed user, provider, and configured
 account. The credential set is stored outside SQLite in the private
-`.eggpool-oauth/` directory. OAuth accounts are not pooled, do not fall back
-across users/accounts, and do not retry after a provider 401. Setting
-`[oauth].enabled = false` blocks login, routing, and refresh while retaining
-stored credential files.
+`.eggpool-oauth/` directory. OAuth accounts are not pooled and never fall
+back across users or accounts. When a provider rejects an owner-bound
+credential with HTTP 401, EggPool refreshes that owner's credential and
+retries the same request against the same account once; a credential that is
+still rejected fails the request and disables the account, and the owner must
+sign in again. Setting `[oauth].enabled = false` blocks login, routing, and
+refresh while retaining stored credential files.
 
 These are descriptions of EggPool's implemented flows, not a claim of live
 provider validation, provider approval, or legal/TOS compliance. Local stub

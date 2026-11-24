@@ -7,7 +7,7 @@
 //! refresh tokens cannot race across EggPool processes.
 
 use std::{
-    collections::BTreeSet,
+    collections::{BTreeMap, BTreeSet},
     fmt,
     fs::{self, File, OpenOptions},
     future::Future,
@@ -148,6 +148,12 @@ pub struct OAuthAccountManager {
     configured_accounts: BTreeSet<(String, String)>,
     personal_bindings: PersonalUpstreamSnapshot,
     clients: ProviderClientPool,
+    /// Provider profile overrides keyed by provider id. The built-in profiles
+    /// own the production authorization servers; an override exists so a
+    /// local stub can stand in for one during qualification. Clones share the
+    /// table, so every manager that belongs to one generation observes the
+    /// same override.
+    profiles: Arc<std::sync::RwLock<BTreeMap<String, OAuthProviderConfig>>>,
 }
 
 impl fmt::Debug for OAuthAccountManager {
@@ -184,6 +190,20 @@ impl OAuthAccountManager {
             configured_accounts,
             personal_bindings,
             clients,
+            profiles: Arc::new(std::sync::RwLock::new(BTreeMap::new())),
+        }
+    }
+
+    /// Override the OAuth provider profile for one provider id.
+    ///
+    /// The built-in profiles own the production authorization servers. An
+    /// override is a qualification seam: it points the token endpoint at a
+    /// local stub so the credential-refresh path is exercisable without a
+    /// live provider.
+    #[cfg(test)]
+    pub(crate) fn set_provider_profile(&self, provider_id: &str, profile: OAuthProviderConfig) {
+        if let Ok(mut profiles) = self.profiles.write() {
+            profiles.insert(provider_id.to_owned(), profile);
         }
     }
 
@@ -229,6 +249,58 @@ impl OAuthAccountManager {
                 .map_err(|error| {
                     map_access_error(error, error_store.invalid_load_requires_reauthentication())
                 })
+        })
+        .await
+        .map_err(|_| OAuthAccountError::RefreshFailed)?
+    }
+
+    /// Refresh the owner's credential after the provider rejected it.
+    ///
+    /// Compare-and-refresh: the stored access token is compared with the
+    /// token the provider rejected. When another process already rotated the
+    /// credential, that newer token is returned without spending a second
+    /// refresh, so a rotated refresh token is never used twice. The owner
+    /// binding, the configured-account check, and the operator gate are the
+    /// same checks the proactive path applies.
+    pub async fn refresh_rejected_credential_for_user(
+        &self,
+        user_id: &str,
+        provider_id: &str,
+        account_name: &str,
+        rejected_access_token: &str,
+    ) -> Result<SecretString, OAuthAccountError> {
+        if !self.enabled {
+            return Err(OAuthAccountError::Disabled);
+        }
+        let identity = self.identity(user_id, provider_id, account_name)?;
+        let client = self.client_for_account(provider_id, account_name)?;
+        self.refresh_rejected_credential_for_identity(identity, client, rejected_access_token)
+            .await
+    }
+
+    async fn refresh_rejected_credential_for_identity(
+        &self,
+        identity: CredentialIdentity,
+        client: OAuthClient,
+        rejected_access_token: &str,
+    ) -> Result<SecretString, OAuthAccountError> {
+        let lock = self.lock(&identity).await?;
+        let store = FileCredentialStore::new(
+            self.credential_root.clone(),
+            identity,
+            Some(client.provider().issuer().to_owned()),
+        );
+        let rejected = rejected_access_token.to_owned();
+        // Detach the refresh transaction from request cancellation. The OS lock
+        // stays owned by this task until Eggpass's atomic save has completed,
+        // so another process cannot spend the same rotated refresh token.
+        tokio::spawn(async move {
+            let _lock = lock;
+            TokenManager::new(client, store)
+                .force_refresh(&rejected)
+                .await
+                .map(SecretString::from)
+                .map_err(map_rejected_credential_error)
         })
         .await
         .map_err(|_| OAuthAccountError::RefreshFailed)?
@@ -371,7 +443,15 @@ impl OAuthAccountManager {
         provider_id: &str,
         account_name: &str,
     ) -> Result<OAuthClient, OAuthAccountError> {
-        let profile = oauth_provider_profile(provider_id)?;
+        let override_profile = self
+            .profiles
+            .read()
+            .ok()
+            .and_then(|profiles| profiles.get(provider_id).cloned());
+        let profile = match override_profile {
+            Some(profile) => profile,
+            None => oauth_provider_profile(provider_id)?,
+        };
         let client = self
             .clients
             .get_client(provider_id, Some(account_name))
@@ -450,6 +530,27 @@ fn map_eggpass_error(error: eggpass_auth::Error) -> OAuthAccountError {
             OAuthAccountError::NeedsReauthentication
         }
         eggpass_auth::Error::Storage(_) => OAuthAccountError::Storage,
+        _ => OAuthAccountError::RefreshFailed,
+    }
+}
+
+/// Map a refresh that followed an upstream credential rejection. A provider
+/// that refuses the refresh grant needs a new login, not another attempt, so
+/// the caller can tell "log in again" apart from a transient refresh failure.
+fn map_rejected_credential_error(error: eggpass_auth::Error) -> OAuthAccountError {
+    match error {
+        eggpass_auth::Error::NotLoggedIn | eggpass_auth::Error::NoRefreshToken => {
+            OAuthAccountError::NeedsReauthentication
+        }
+        eggpass_auth::Error::Storage(_) => OAuthAccountError::Storage,
+        eggpass_auth::Error::OAuth { ref code, .. }
+            if matches!(
+                code.as_str(),
+                "invalid_grant" | "invalid_token" | "invalid_client" | "unauthorized_client"
+            ) =>
+        {
+            OAuthAccountError::NeedsReauthentication
+        }
         _ => OAuthAccountError::RefreshFailed,
     }
 }
@@ -1634,5 +1735,181 @@ mod tests {
         let status = child.wait().unwrap();
         assert!(status.success(), "lock holder child exited unsuccessfully");
         assert!(exclusive, "another process acquired the same OAuth lock");
+    }
+
+    fn credentials_with_access_token(issuer: &str, access_token: &str) -> Credentials {
+        let now = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap_or_default()
+            .as_secs() as i64;
+        serde_json::from_value(serde_json::json!({
+            "access_token": access_token,
+            "refresh_token": "old-refresh-secret",
+            "id_token": "old-id-secret",
+            "token_type": "Bearer",
+            "scope": "openid offline_access",
+            "client_id": "test-client",
+            "issuer": issuer,
+            "expires_at": now + 3600,
+            "obtained_at": now
+        }))
+        .unwrap()
+    }
+
+    #[tokio::test]
+    async fn rejected_credential_refresh_rotates_the_owner_credential() {
+        let directory = TestDirectory::new();
+        let (base_url, server) = start_token_stub(
+            200,
+            r#"{"access_token":"rotated-access-secret","refresh_token":"rotated-refresh-secret","id_token":"rotated-id-secret","token_type":"Bearer","expires_in":3600,"scope":"offline_access"}"#,
+        )
+        .await;
+        let manager = manager_for_test(directory.path().to_owned(), &base_url, true);
+        let owner = identity("user-a");
+        let store = FileCredentialStore::new(
+            directory.path().to_owned(),
+            owner.clone(),
+            Some(base_url.clone()),
+        );
+        store.save_sync(expired_credentials(&base_url)).unwrap();
+        let client = manager
+            .clients
+            .get_client("xai", Some("user-account"))
+            .unwrap();
+        let refreshed = manager
+            .refresh_rejected_credential_for_identity(
+                owner,
+                OAuthClient::new(client.oauth_eggfetch_client(), local_profile(&base_url)),
+                "expired-access-secret",
+            )
+            .await
+            .expect("rejected credential refresh");
+        assert_eq!(refreshed.expose_secret(), "rotated-access-secret");
+        assert!(!format!("{refreshed:?}").contains("rotated-access-secret"));
+        let request = server.await.expect("OAuth stub task");
+        assert!(request.starts_with("POST /token "));
+        assert!(request.contains("refresh_token=old-refresh-secret"));
+        let stored = store.load_sync().unwrap().expect("rotated credentials");
+        assert_eq!(stored.access_token(), "rotated-access-secret");
+        assert_eq!(stored.refresh_token(), Some("rotated-refresh-secret"));
+    }
+
+    #[tokio::test]
+    async fn rejected_credential_refresh_reuses_a_rotated_credential_without_refreshing() {
+        let directory = TestDirectory::new();
+        // A closed endpoint proves that no second refresh is attempted: the
+        // stored credential was already rotated by another writer.
+        let listener = TcpListener::bind("127.0.0.1:0")
+            .await
+            .expect("closed OAuth endpoint");
+        let base_url = format!("http://{}", listener.local_addr().unwrap());
+        drop(listener);
+        let manager = manager_for_test(directory.path().to_owned(), &base_url, true);
+        let owner = identity("user-a");
+        let store = FileCredentialStore::new(
+            directory.path().to_owned(),
+            owner.clone(),
+            Some(base_url.clone()),
+        );
+        store
+            .save_sync(credentials_with_access_token(
+                &base_url,
+                "current-access-secret",
+            ))
+            .unwrap();
+        let client = manager
+            .clients
+            .get_client("xai", Some("user-account"))
+            .unwrap();
+        let refreshed = manager
+            .refresh_rejected_credential_for_identity(
+                owner,
+                OAuthClient::new(client.oauth_eggfetch_client(), local_profile(&base_url)),
+                "expired-access-secret",
+            )
+            .await
+            .expect("an already rotated credential is reused");
+        assert_eq!(refreshed.expose_secret(), "current-access-secret");
+        let stored = store.load_sync().unwrap().expect("stored credentials");
+        assert_eq!(stored.access_token(), "current-access-secret");
+        assert_eq!(stored.refresh_token(), Some("old-refresh-secret"));
+    }
+
+    #[tokio::test]
+    async fn rejected_credential_refresh_denial_requires_reauthentication() {
+        let directory = TestDirectory::new();
+        let (base_url, server) = start_token_stub(
+            401,
+            r#"{"error":"invalid_grant","error_description":"provider-response-secret"}"#,
+        )
+        .await;
+        let manager = manager_for_test(directory.path().to_owned(), &base_url, true);
+        let owner = identity("user-a");
+        let store = FileCredentialStore::new(
+            directory.path().to_owned(),
+            owner.clone(),
+            Some(base_url.clone()),
+        );
+        store.save_sync(expired_credentials(&base_url)).unwrap();
+        let before = std::fs::read(store.file_path()).unwrap();
+        let client = manager
+            .clients
+            .get_client("xai", Some("user-account"))
+            .unwrap();
+        let error = manager
+            .refresh_rejected_credential_for_identity(
+                owner,
+                OAuthClient::new(client.oauth_eggfetch_client(), local_profile(&base_url)),
+                "expired-access-secret",
+            )
+            .await
+            .expect_err("a denied refresh grant must fail closed");
+        assert_eq!(error, OAuthAccountError::NeedsReauthentication);
+        assert!(!format!("{error:?}").contains("provider-response-secret"));
+        assert!(!format!("{error:?}").contains("invalid_grant"));
+        assert!(server.await.unwrap().contains("old-refresh-secret"));
+        assert_eq!(std::fs::read(store.file_path()).unwrap(), before);
+    }
+
+    #[tokio::test]
+    async fn rejected_credential_refresh_honours_the_operator_gate() {
+        let directory = TestDirectory::new();
+        let (base_url, _server) = start_token_stub(
+            200,
+            r#"{"access_token":"rotated-access-secret","token_type":"Bearer","expires_in":3600}"#,
+        )
+        .await;
+        let manager = manager_for_test(directory.path().to_owned(), &base_url, false);
+        let error = manager
+            .refresh_rejected_credential_for_user(
+                "user-a",
+                "xai",
+                "user-account",
+                "expired-access-secret",
+            )
+            .await
+            .expect_err("a disabled OAuth service refuses the refresh");
+        assert_eq!(error, OAuthAccountError::Disabled);
+    }
+
+    #[tokio::test]
+    async fn rejected_credential_refresh_rejects_a_non_owner() {
+        let directory = TestDirectory::new();
+        let (base_url, _server) = start_token_stub(
+            200,
+            r#"{"access_token":"rotated-access-secret","token_type":"Bearer","expires_in":3600}"#,
+        )
+        .await;
+        let manager = manager_for_test(directory.path().to_owned(), &base_url, true);
+        let error = manager
+            .refresh_rejected_credential_for_user(
+                "user-b",
+                "xai",
+                "user-account",
+                "expired-access-secret",
+            )
+            .await
+            .expect_err("a non-owner must not refresh the credential");
+        assert_eq!(error, OAuthAccountError::InvalidOwner);
     }
 }

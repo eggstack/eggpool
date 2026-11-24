@@ -25,9 +25,10 @@ their own backoff and quarantine path instead of hijacking wire handling.
 `FailureSource` covers transport, provider response, client, client validation, local
 preparation, database, and cancellation origins. `FailureCategory` covers bad request,
 authentication, quota, rate limit, temporary, transient transport, model unavailable,
-wire-rejected, cancelled, and fatal outcomes. `RetryScope` (`None`/`Account`/`Wire`/`Wait`) says
-where a retry may go; `NextAction` (`Complete`/`RetryAccount`/`RetryWire`/`WaitRateLimit`/`Exhaust`)
-says what the loop does next. The string labels (`retry_action`, `retry_scope_label`,
+wire-rejected, cancelled, and fatal outcomes. `RetryScope` (`None`/`Account`/`Wire`/`Wait`/
+`AccountCredentialRefresh`) says where a retry may go; `NextAction`
+(`Complete`/`RetryAccount`/`RetryWire`/`WaitRateLimit`/`RefreshCredential`/`Exhaust`) says what the
+loop does next. The string labels (`retry_action`, `retry_scope_label`,
 `evidence_class`, `client_outcome`, `account_effect`, `model_effect`, `circuit_effect`,
 `wire_effect`) are the stable contract consumed by later coordinator slices; the enums drive
 control flow.
@@ -57,8 +58,38 @@ same decision without applying account or model effects twice (`try_apply_once`/
 
 `prepare_next` is the only retry-state mutation: a wire-scoped decision pins `preferred_account` to the
 same account so the next iteration tries the next untried `WireSurface`, while an account-scoped decision
-excludes the failed account (`excluded_accounts`) and clears the pin. `should_retry` admits only
+excludes the failed account (`excluded_accounts`) and clears the pin. A credential-refresh-scoped
+decision also pins `preferred_account` to the same account, because the owner’s own credential is the
+only one that may answer the resubmitted request. `should_retry` admits only
 `RetryAccount` and `RetryWire`; any other action completes instead of redialing upstream.
+
+## Owner-scoped credential refresh after an upstream 401
+
+An upstream HTTP 401 on an account whose auth mode is OAuth is a stale-credential signal, not an
+account fault. Both coordinators handle it before any account-health effect is applied:
+`coordinator::oauth_401_for_account` recognizes the case from the observation and the configured
+account, `coordinator::refresh_rejected_oauth_credential` refreshes that owner’s credential through
+`OAuthAccountManager::refresh_rejected_credential_for_user`, and the retry is admitted only when the
+refresh actually succeeded.
+
+The refresh is compare-and-refresh. `eggpass_auth::TokenManager::force_refresh` rotates the credential
+only when the stored access token is still the one the provider rejected; otherwise the newer stored
+credential is returned without a second token request, so a rotated refresh token is never spent twice.
+The refresh runs under the same per-account OS lock as the proactive path, commits atomically before the
+lock is released, and is detached from request cancellation.
+
+The retry holds the account constant and the wire surface constant: `prepare_next` pins the account, and
+the coordinator clears that account’s attempted-surface entry so the resubmitted request uses the same
+surface, because the surface was not the fault. One refresh and one retry are allowed per request, inside
+the ordinary attempt budget. The account-health evidence is applied only when the refresh fails or the
+refreshed credential is rejected again, which keeps a healed stale credential from disabling the account
+while a genuinely rejected credential still does. The operator gate blocks the refresh exactly as it
+blocks login, routing, and proactive refresh, and a non-owner cannot reach the refresh at all.
+
+The failure classifier is unchanged: `classify` still produces the same 401 effects, the same evidence
+class, and the same recorded labels, so the frozen compatibility observation fixture is unaffected. The
+recovery is coordinator-owned and contributes its own scope and action labels
+(`same_account_refreshed_credential`, `refresh_credential_same_account`) for the healed attempt only.
 
 ## Finite retry loop
 

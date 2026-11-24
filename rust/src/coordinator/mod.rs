@@ -94,6 +94,61 @@ pub(crate) fn oauth_401_for_account(
             })
             .is_some_and(|account| account.auth_mode == crate::config::AccountAuthMode::OAuth)
 }
+
+/// The effects that describe an owner-scoped credential-refresh retry.
+///
+/// The account is held constant and no account health evidence is applied:
+/// the provider rejected a stale credential, not the account. The caller
+/// applies these effects only after the refresh actually succeeded.
+pub(crate) fn healed_credential_refresh_effects(effects: &FailureEffects) -> FailureEffects {
+    let mut healed = effects.clone();
+    healed.retry = true;
+    healed.retry_scope = RetryScope::AccountCredentialRefresh;
+    healed.action = NextAction::RefreshCredential;
+    healed.retry_action = "refresh_credential_same_account".into();
+    healed.retry_scope_label = "same_account_refreshed_credential".into();
+    healed
+}
+
+/// Refresh an owner-bound OAuth credential that an upstream provider rejected.
+///
+/// The refresh is owner-scoped and compare-and-refresh: Eggpass returns the
+/// newer stored token when another process already rotated the credential, so
+/// a rotated refresh token is never spent twice. `None` means the request
+/// terminalizes exactly as it would without a refresh, which keeps the
+/// operator gate, the owner binding, and the account health evidence
+/// unchanged.
+pub(crate) async fn refresh_rejected_oauth_credential(
+    manager: Option<&crate::oauth::OAuthAccountManager>,
+    user_id: Option<&str>,
+    provider_id: &str,
+    account_name: &str,
+    rejected_credential: Option<&crate::config::SecretString>,
+) -> Option<crate::config::SecretString> {
+    let manager = manager?;
+    let user_id = user_id?;
+    let rejected = rejected_credential?;
+    match manager
+        .refresh_rejected_credential_for_user(
+            user_id,
+            provider_id,
+            account_name,
+            rejected.expose_secret(),
+        )
+        .await
+    {
+        Ok(refreshed) => Some(refreshed),
+        Err(error) => {
+            tracing::warn!(
+                provider = %provider_id,
+                account = %account_name,
+                error = ?error,
+                "OAuth credential refresh after an upstream rejection failed"
+            );
+            None
+        }
+    }
+}
 pub use semantic::{
     ModelSelection, SELECTOR_MAX_RESPONSE_BYTES, SelectionSource, SelectorDiagnostics,
     SelectorFallback, SelectorPrompt, SemanticSelector, build_semantic_view, compile_repair_prompt,

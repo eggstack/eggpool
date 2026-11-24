@@ -280,6 +280,10 @@ impl StreamingCoordinator {
             request.routing_facts.principal_user_id = Some(user_id);
         }
         let mut attempt_number = 1_u32;
+        // One credential refresh per request: a second upstream rejection on
+        // the same account terminalizes instead of rotating the credential
+        // again.
+        let mut oauth_credential_refreshed = false;
         let mut excluded_accounts = BTreeSet::new();
         let mut preferred_account = None;
         let mut attempted_wires: BTreeMap<String, BTreeSet<WireSurface>> = BTreeMap::new();
@@ -754,6 +758,76 @@ impl StreamingCoordinator {
                                     retry_after_from_headers(&upstream.headers, self.retry_policy),
                                 );
                             let (effects, first) = self.decide(&observation)?;
+                            // An upstream 401 on an owner-bound OAuth account is
+                            // a stale-credential signal, not an account fault:
+                            // refresh this owner's credential and retry the same
+                            // account exactly once. The account is penalized
+                            // only when the refresh fails or the refreshed
+                            // credential is rejected again, and no other
+                            // account is ever substituted.
+                            if !oauth_credential_refreshed
+                                && attempt_number < self.retry_policy.max_attempts.max(1)
+                                && crate::coordinator::oauth_401_for_account(
+                                    &observation,
+                                    &self.providers,
+                                )
+                            {
+                                let refreshed =
+                                    crate::coordinator::refresh_rejected_oauth_credential(
+                                        self.oauth.as_ref(),
+                                        request.routing_facts.principal_user_id.as_deref(),
+                                        &identity.provider_id,
+                                        &identity.account_name,
+                                        account_api_key.as_ref(),
+                                    )
+                                    .await;
+                                if refreshed.is_some() {
+                                    oauth_credential_refreshed = true;
+                                    // The wire surface was not the fault: the
+                                    // credential was. Clearing the account's
+                                    // attempted surfaces lets the retry reuse
+                                    // the same surface.
+                                    attempted_wires.remove(&identity.account_name);
+                                    let healed =
+                                        crate::coordinator::healed_credential_refresh_effects(
+                                            &effects,
+                                        );
+                                    last_upstream = Some(LastUpstream {
+                                        status: upstream.status,
+                                        headers: upstream.headers.clone(),
+                                        body: body.clone(),
+                                        effects: healed.clone(),
+                                        upstream_request_id: upstream.upstream_request_id.clone(),
+                                        headers_elapsed: upstream.headers_elapsed,
+                                    });
+                                    self.cleanup_failed_attempt(
+                                        &published,
+                                        self.retry_cleanup_data(
+                                            &identity,
+                                            upstream_protocol,
+                                            &healed,
+                                            Some(upstream.status),
+                                            upstream.upstream_request_id.clone(),
+                                            upstream.headers_elapsed,
+                                            request_bytes,
+                                            body.len(),
+                                        ),
+                                    )
+                                    .await?;
+                                    // The next attempt resolves the credential
+                                    // again through the ordinary owner-scoped
+                                    // path, which reads the credential the
+                                    // refresh committed under the account lock.
+                                    self.prepare_next(
+                                        &mut attempt_number,
+                                        &mut preferred_account,
+                                        &mut excluded_accounts,
+                                        &identity,
+                                        &healed,
+                                    );
+                                    continue;
+                                }
+                            }
                             if first {
                                 self.apply_effects(&published.claim, &effects).await;
                             }
@@ -1428,11 +1502,18 @@ impl StreamingCoordinator {
         effects: &FailureEffects,
     ) {
         *attempt_number = (*attempt_number).saturating_add(1);
-        if effects.retry_scope == RetryScope::Wire {
-            *preferred_account = Some(identity.account_name.clone());
-        } else {
-            excluded_accounts.insert(identity.account_name.clone());
-            *preferred_account = None;
+        match effects.retry_scope {
+            // The alternate-wire retry holds the account constant while the
+            // failed wire candidate is retired; the credential-refresh retry
+            // holds the account constant and resubmits the same request with
+            // the refreshed credential.
+            RetryScope::Wire | RetryScope::AccountCredentialRefresh => {
+                *preferred_account = Some(identity.account_name.clone());
+            }
+            _ => {
+                excluded_accounts.insert(identity.account_name.clone());
+                *preferred_account = None;
+            }
         }
     }
 
