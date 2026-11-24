@@ -177,6 +177,7 @@ M001 closes with secure per-user storage, backup/restore, gate semantics, proact
 | M001 | active | ../implementation/provider-oauth/001-oauth-credential-lifecycle-and-dispatch.md | — | None; dependency compatibility is the first implementation check in M001 |
 | M002 | active | ../implementation/provider-oauth/002-authenticated-web-ui-provider-login.md | — | Interface dependency on M001 account identity/commit contract; verify exact xAI/OpenAI provider registrations before closure |
 | M003 | active | ../implementation/provider-oauth/003-desktop-loopback-browser-login.md | — | M001 account identity/commit interface plus scoped `oauth_credentials_write` route; verify exact provider loopback registrations before closure |
+| M004 | active | ../implementation/provider-oauth/004-oauth-401-credential-refresh-retry.md | — | ADR-0015 supersedes the no-replay clause; verify exact provider registration separately |
 
 
 ## 13. Append-only flow-scope amendment — ADR-0014
@@ -189,3 +190,24 @@ This amendment controls the current milestone boundaries where earlier roadmap t
 - Exact provider support/registration remains a separate implementation-time and closure check; local stubs do not establish live support.
 
 See `plans/adrs/ADR-0014-provider-oauth-web-ui-and-desktop-flow-boundary.md` and the M002/M003 append-only amendments. M001 and ADR-0013 are unaffected.
+
+## 14. Append-only credential-refresh amendment — ADR-0015
+
+This amendment controls the current milestone boundaries and supersedes the earlier no-replay wording where it conflicts. The earlier text remains historical and is not rewritten.
+
+- M004 is the owner-scoped credential-refresh retry. An upstream HTTP 401 on an owner-bound OAuth account refreshes that owner's credential for that account and retries the same request against the same account exactly once, using the compare-and-refresh primitive the shared Eggpass library already provides.
+- The retry holds the account constant. It never reselects, never substitutes another account, provider, or user, and never crosses an owner boundary. No pooling and no cross-account fallback are introduced.
+- One refresh and one retry per request, inside the ordinary attempt budget. A refresh failure, or a second rejection of the refreshed credential, terminalizes the request and records the authentication failure exactly as before, so the account is disabled and the owner must log in again.
+- The M001 custody, owner-binding, operator-gate, secret-exclusion, and cross-process refresh-rotation invariants remain in force. The operator gate blocks the refresh exactly as it blocks login, routing, and proactive refresh.
+- The failure classifier's recorded output is unchanged. The recovery is coordinator-owned and adds its own scope and action labels for the healed attempt, so the frozen compatibility observation fixture for the 401 classification is unaffected.
+- M001's earlier "no 401 replay" wording, and the corresponding sentences in ADR-0012, ADR-0013, and ADR-0014, remain historical records. ADR-0015 supersedes that clause only.
+- Exact provider support/registration remains a separate implementation-time and closure check; local stubs do not establish live support.
+
+See `plans/adrs/ADR-0015-provider-oauth-owner-scoped-credential-refresh-retry.md` and `plans/implementation/provider-oauth/004-oauth-401-credential-refresh-retry.md`.
+
+### 14.1 Earlier text superseded by ADR-0014 and ADR-0015
+
+The sections below describe scope that the accepted amendments have since changed. They are retained as written and are not authoritative for current scope.
+
+- §1, §3, §6, §7, §9, and §11 still describe an OpenAI Web UI authorization-code/PKCE callback on EggPool's listener. ADR-0014 removed that surface: M002 is xAI Web UI device-code only, and M003 owns both desktop loopback flows.
+- §8, §11, and the M001, M002, and M003 plan text still state a no-replay rule for HTTP 401. ADR-0015 supersedes that clause with the owner-scoped credential-refresh retry described above. The prohibitions on pooling, cross-user fallback, and cross-account fallback are unchanged.
