@@ -538,6 +538,59 @@ discovery via `GET /v1/models`, so the bundled template uses
 `models_endpoint.method = "GET"` by default. Static model seeds are
 only a fallback if live discovery is unavailable.
 
+## Provider Agent accounts
+
+Agent accounts connect an owner-bound provider account through an EggPool
+reverse tunnel. Each account has a local bearer API key plus a separate
+transport secret for its reverse client. The reverse client authenticates with
+the configured account name and transport secret, then forwards requests to
+that account's external listener. Agent accounts require an active personal
+upstream binding; they are not shared. A provider-side Agent HTTP 401 is
+terminal: EggPool neither refreshes it as OAuth nor retries through a shared
+fallback account.
+
+`[agents].enabled` defaults to `true`. Setting it to `false` prevents Agent
+tunnel listeners from starting and excludes Agent accounts from routing while
+retaining their configuration and credentials. Every Agent control channel,
+including loopback, requires TLS 1.2+ with certificate validation and SNI;
+there is no plaintext loopback mode. Configure the server certificate and key
+paths below. Set `client_ca_path` and `require_client_cert = true` only when
+using mutual TLS. Agent account endpoints must match their configured loopback
+`external_bind`; the `transport_secret_env` value belongs in the process
+environment or the config-adjacent `.env` file.
+
+```toml
+[agents]
+enabled = true
+
+[providers.example]
+id = "example"
+base_url = "https://api.example.invalid/v1"
+protocols = ["openai"]
+
+[[providers.example.accounts]]
+name = "agent-owner"
+auth_mode = "agent"
+api_key_env = "AGENT_UPSTREAM_API_KEY"
+base_url = "http://127.0.0.1:19082/v1"
+
+[providers.example.accounts.agent]
+control_bind = "127.0.0.1:19081"
+external_bind = "127.0.0.1:19082"
+transport_secret_env = "AGENT_TRANSPORT_SECRET"
+
+[providers.example.accounts.agent.tls]
+cert_path = "/etc/eggpool/agent-control-cert.pem"
+key_path = "/etc/eggpool/agent-control-key.pem"
+# For mutual TLS, also configure a client CA and require its certificate:
+# client_ca_path = "/etc/eggpool/agent-client-ca.pem"
+# require_client_cert = true
+```
+
+Keep `AGENT_UPSTREAM_API_KEY` and `AGENT_TRANSPORT_SECRET` outside version
+control. The upstream API key is sent to the provider through the configured
+account endpoint; the transport secret authenticates only the reverse tunnel.
+
 ## Per-user OAuth accounts
 
 EggPool implements owner-bound OAuth login for configured OpenAI and xAI

@@ -137,6 +137,9 @@ impl StreamingCoordinator {
             AccountAuthMode::StaticKey => {
                 Ok(self.credentials.get(account_name).map(SecretString::from))
             }
+            AccountAuthMode::Agent => {
+                Ok(self.credentials.get(account_name).map(SecretString::from))
+            }
             AccountAuthMode::OAuth => {
                 let user_id = user_id.ok_or(crate::oauth::OAuthAccountError::InvalidOwner)?;
                 let manager = self
@@ -1493,7 +1496,9 @@ impl StreamingCoordinator {
             .unwrap_or_else(|e| e.into_inner())
             .decide(observation)
             .map_err(|error| StreamingCoordinatorError::Effects(error.to_string()))?;
-        if crate::coordinator::oauth_401_for_account(observation, &self.providers) {
+        if crate::coordinator::oauth_401_for_account(observation, &self.providers)
+            || crate::coordinator::agent_401_for_account(observation, &self.providers)
+        {
             crate::coordinator::terminalize_oauth_401(&mut effects);
         }
         Ok((effects, first))

@@ -541,6 +541,14 @@ const DYNAMIC_RULES: &[(&str, ReloadDisposition)] = &[
         "accounts.<provider_id>/<account_name>",
         ReloadDisposition::Live,
     ),
+    (
+        "accounts.<provider_id>/<account_name>.base_url",
+        ReloadDisposition::RestartRequired,
+    ),
+    (
+        "accounts.<provider_id>/<account_name>.agent",
+        ReloadDisposition::RestartRequired,
+    ),
     ("model_overrides.<model_id>", ReloadDisposition::Live),
     ("model_capabilities.<model_id>", ReloadDisposition::Live),
     ("transcoder.<field>", ReloadDisposition::Live),
@@ -815,6 +823,7 @@ const FIELD_DISPOSITIONS: &[(&str, ReloadDisposition)] = &[
         "pricing.catalogs.openrouter.ttl_seconds",
         ReloadDisposition::RestartRequired,
     ),
+    ("agents.enabled", ReloadDisposition::RestartRequired),
     ("oauth.enabled", ReloadDisposition::RestartRequired),
     ("pricing.fallback", ReloadDisposition::RestartRequired),
     ("providers", ReloadDisposition::Live),
@@ -986,6 +995,14 @@ pub fn dynamic_rules() -> &'static [(&'static str, ReloadDisposition)] {
 pub fn disposition_for(path: &str) -> ReloadDisposition {
     if let Some((_, disposition)) = FIELD_DISPOSITIONS.iter().find(|(known, _)| *known == path) {
         return *disposition;
+    }
+    for (rule, disposition) in DYNAMIC_RULES {
+        let Some(suffix) = rule.strip_prefix("accounts.<provider_id>/<account_name>") else {
+            continue;
+        };
+        if !suffix.is_empty() && path.starts_with("accounts.") && path.ends_with(suffix) {
+            return *disposition;
+        }
     }
     for (prefix, disposition) in [
         ("providers.", ReloadDisposition::Live),

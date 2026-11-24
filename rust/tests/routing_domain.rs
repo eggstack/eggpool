@@ -469,6 +469,73 @@ async fn account_repository_returns_stable_ids_and_config_sync_keeps_schema_54()
 #[allow(dead_code)]
 fn _identity_type_is_explicitly_non_secret(_: AccountIdentity) {}
 
+/// A router with one credentialed Agent account, used to verify the process
+/// gate and owner-binding rules without starting listeners.
+fn agent_router(agents_enabled: bool) -> (RoutingRouter, HealthManager) {
+    let agent_account = eggpool::config::AccountConfig {
+        name: "agent-a".into(),
+        auth_mode: eggpool::config::AccountAuthMode::Agent,
+        api_key: Some("agent-upstream-key".into()),
+        base_url: Some("http://127.0.0.1:19002/v1".into()),
+        agent: Some(eggpool::config::AgentAccountConfig {
+            control_bind: "127.0.0.1:19001".into(),
+            external_bind: "127.0.0.1:19002".into(),
+            transport_secret_env: "AGENT_TRANSPORT_SECRET".into(),
+            ..Default::default()
+        }),
+        ..Default::default()
+    };
+    let mut config = Config::default();
+    config.agents.enabled = agents_enabled;
+    config.providers.insert(
+        "agent-provider".into(),
+        eggpool::config::ProviderConfig {
+            id: "agent-provider".into(),
+            base_url: "https://provider.example/v1".into(),
+            protocols: vec!["openai".into()],
+            auth: eggpool::config::ProviderAuthConfig {
+                mode: "none".into(),
+                ..Default::default()
+            },
+            accounts: vec![agent_account],
+            ..Default::default()
+        },
+    );
+    let mut credentials = CredentialStore::default();
+    credentials.insert("agent-a", "agent-upstream-key");
+    let registry = AccountRegistry::from_config(
+        &config,
+        &[durable_account(1, "agent-a", "agent-provider", true)],
+        &credentials,
+    )
+    .expect("Agent registry builds");
+    let mut catalog = ModelCatalogCache::default();
+    catalog.set_account_provider("agent-a", "agent-provider");
+    let mut model = ModelInput::new("model-a");
+    model.protocol = Some("openai".into());
+    model.protocol_source = Some("fixture".into());
+    model.resolution_status = ProtocolResolutionStatus::Resolved;
+    catalog
+        .update_from_account("agent-a", "agent-provider", &[model], true, true)
+        .expect("Agent catalog account");
+    let estimator = QuotaEstimator::new([AccountQuota::new("agent-a")]);
+    let health = HealthManager::new();
+    health.register_account(1, "agent-a");
+    let router = RoutingRouter::new(
+        registry,
+        catalog,
+        estimator,
+        Some(health.clone()),
+        EligibilityPolicy {
+            fairness_mode: FairnessMode::RoundRobin,
+            fairness_scope: FairnessScope::ProviderModelProtocol,
+            local_quota_mode: LocalQuotaMode::ScoreOnly,
+            ..Default::default()
+        },
+    );
+    (router, health)
+}
+
 /// A router whose only health state is the health manager the live failure
 /// path updates.
 fn health_router() -> (RoutingRouter, HealthManager) {
@@ -590,6 +657,72 @@ async fn an_authentication_failure_still_produces_no_timed_backoff() {
         get_backoff_policy(BackoffReason::AuthenticationFailed).expect("the reason has a policy");
     assert_eq!(policy.base_delay, 0.0);
     assert_eq!(policy.cap, 0.0);
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn an_agent_account_is_selectable_only_by_its_owner_and_gate() {
+    let (database, path) = database("agent-personal-binding").await;
+    database
+        .call(|connection| {
+            connection.execute(
+                "INSERT INTO personal_upstream_bindings(provider_id, account_name, user_id, state)
+                 VALUES ('agent-provider', 'agent-a', 'owner-user', 'active')",
+                [],
+            )?;
+            Ok(())
+        })
+        .await
+        .expect("Agent owner binding inserts");
+    let bindings = eggpool::personal_upstream::load_snapshot(&database)
+        .await
+        .expect("Agent owner binding loads");
+    let (router, _) = agent_router(true);
+    let router = router.with_personal_bindings(bindings);
+
+    let mut owner = routing_facts("model-a");
+    owner.principal_user_id = Some("owner-user".into());
+    let claim = router
+        .select_and_claim(&owner, &BTreeSet::new())
+        .await
+        .expect("owner selection succeeds")
+        .expect("the Agent account is available to its owner");
+    assert_eq!(claim.account_name(), "agent-a");
+    drop(claim);
+
+    let mut other = routing_facts("model-a");
+    other.principal_user_id = Some("other-user".into());
+    assert!(
+        router
+            .select_and_claim(&other, &BTreeSet::new())
+            .await
+            .expect("other-user selection succeeds")
+            .is_none(),
+        "another user cannot select the Agent account"
+    );
+    assert!(
+        router
+            .select_and_claim(&routing_facts("model-a"), &BTreeSet::new())
+            .await
+            .expect("unattributed selection succeeds")
+            .is_none(),
+        "an unattributed request cannot select the Agent account"
+    );
+
+    let bindings = eggpool::personal_upstream::load_snapshot(&database)
+        .await
+        .expect("Agent owner binding reloads");
+    let (disabled_router, _) = agent_router(false);
+    let disabled_router = disabled_router.with_personal_bindings(bindings);
+    assert!(
+        disabled_router
+            .select_and_claim(&owner, &BTreeSet::new())
+            .await
+            .expect("disabled-gate selection succeeds")
+            .is_none(),
+        "agents.enabled=false excludes the Agent account"
+    );
+    database.close().await.expect("database closes");
+    fs::remove_file(path).expect("temporary database removed");
 }
 
 #[tokio::test(flavor = "current_thread")]

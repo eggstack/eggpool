@@ -11,6 +11,7 @@ use tokio::sync::Mutex as AsyncMutex;
 
 use crate::{
     Config,
+    agents::AgentTunnelManager,
     coordinator::{
         WireResolver, WireResolverConfig, WireResolverConfigError, WireResolverPolicyStage,
     },
@@ -35,6 +36,7 @@ use super::{
 /// candidate built from this context.
 pub struct ProcessRuntime {
     database: Database,
+    agent_tunnels: AgentTunnelManager,
     model_router_affinity: Arc<ModelRouterAffinity>,
     wire_profile_resolver: WireResolver,
     config_path: Option<PathBuf>,
@@ -53,6 +55,7 @@ impl Clone for ProcessRuntime {
     fn clone(&self) -> Self {
         Self {
             database: self.database.clone(),
+            agent_tunnels: self.agent_tunnels.clone(),
             model_router_affinity: Arc::clone(&self.model_router_affinity),
             wire_profile_resolver: self.wire_profile_resolver.clone(),
             config_path: self.config_path.clone(),
@@ -110,6 +113,7 @@ impl ProcessRuntime {
         callbacks.register_update_checker(Arc::clone(&update_checker));
         Ok(Self {
             database,
+            agent_tunnels: AgentTunnelManager::new(),
             model_router_affinity: Arc::new(ModelRouterAffinity::new()),
             wire_profile_resolver: WireResolver::new(WireResolverConfig::default()),
             config_path: None,
@@ -171,6 +175,10 @@ impl ProcessRuntime {
 
     pub fn database(&self) -> Database {
         self.database.clone()
+    }
+
+    pub fn agent_tunnel_manager(&self) -> AgentTunnelManager {
+        self.agent_tunnels.clone()
     }
 
     pub fn model_router_affinity(&self) -> Arc<ModelRouterAffinity> {

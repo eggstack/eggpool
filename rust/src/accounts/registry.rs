@@ -254,10 +254,14 @@ impl AccountRegistry {
                         no_auth_required || credentials.has_usable(&configured.name)
                     }
                     AccountAuthMode::OAuth => config.oauth.enabled,
+                    AccountAuthMode::Agent => credentials.has_usable(&configured.name),
                 };
                 if configured.enabled
-                    && configured.auth_mode == AccountAuthMode::StaticKey
-                    && !has_usable_credentials
+                    && ((configured.auth_mode == AccountAuthMode::StaticKey
+                        && !has_usable_credentials)
+                        || (configured.auth_mode == AccountAuthMode::Agent
+                            && config.agents.enabled
+                            && !has_usable_credentials))
                 {
                     return Err(AccountRegistryError::MissingCredential {
                         account_name: configured.name.clone(),
@@ -269,7 +273,11 @@ impl AccountRegistry {
                     provider_id: provider_id.clone(),
                     auth_mode: configured.auth_mode,
                     enabled: configured.enabled
-                        && (configured.auth_mode != AccountAuthMode::OAuth || config.oauth.enabled),
+                        && match configured.auth_mode {
+                            AccountAuthMode::StaticKey => true,
+                            AccountAuthMode::OAuth => config.oauth.enabled,
+                            AccountAuthMode::Agent => config.agents.enabled,
+                        },
                     has_usable_credentials,
                     routing_priority: provider.routing_priority,
                     weight: configured.weight,

@@ -471,6 +471,38 @@ trusted_proxies = []
 # browser authentication otherwise requires direct HTTPS or a trusted proxy.
 allow_insecure_web_auth = false
 
+# Process-level operator gate for reverse-tunnel Agent accounts.
+# Defaults to enabled. Disabling prevents Agent tunnel listeners and routing
+# while retaining the configured accounts and credentials.
+[agents]
+enabled = true
+
+# Agent accounts use TLS on every reverse control channel (loopback included).
+# Configure real operator-managed certificate and key files before enabling.
+# Uncomment and adapt this example to add an Agent account.
+#[providers.agent-example]
+#id = "agent-example"
+#base_url = "https://provider.example/v1"
+#protocols = ["openai"]
+#
+#[[providers.agent-example.accounts]]
+#name = "workstation"
+#auth_mode = "agent"
+#api_key_env = "AGENT_UPSTREAM_API_KEY"
+#base_url = "http://127.0.0.1:19082/v1"
+#
+#[providers.agent-example.accounts.agent]
+#control_bind = "127.0.0.1:19081"
+#external_bind = "127.0.0.1:19082"
+#transport_secret_env = "AGENT_TRANSPORT_SECRET"
+#
+#[providers.agent-example.accounts.agent.tls]
+#cert_path = "/etc/eggpool/agent-control-cert.pem"
+#key_path = "/etc/eggpool/agent-control-key.pem"
+## Optional for mTLS; require_client_cert must be true to require it.
+## client_ca_path = "/etc/eggpool/agent-client-ca.pem"
+## require_client_cert = true
+
 # Infrastructure-only operator gate for per-user provider OAuth credentials.
 # Defaults to enabled. Disabling blocks OAuth login, routing, and token refresh
 # but retains stored files.

@@ -1708,6 +1708,50 @@ fn provider_client_pool_builds_empty_and_provider_topologies() {
     assert_eq!(pool.snapshot().build_count, 2);
 }
 
+#[tokio::test(flavor = "current_thread")]
+async fn provider_client_pool_uses_agent_account_endpoint() {
+    let server = FixtureServer::http(ResponseMode::Normal, 1);
+    let provider_url = "http://127.0.0.1:1/v1";
+    let agent_url = server.http_url();
+    let config = config_with_providers(vec![provider_config(
+        "agent-provider",
+        provider_url,
+        vec![eggpool::config::AccountConfig {
+            name: "agent-account".to_owned(),
+            auth_mode: eggpool::config::AccountAuthMode::Agent,
+            api_key: Some("agent-upstream-key".into()),
+            base_url: Some(agent_url.clone()),
+            agent: Some(eggpool::config::AgentAccountConfig::default()),
+            ..Default::default()
+        }],
+    )]);
+    let pool = ProviderClientPool::from_config(&config).expect("Agent provider pool");
+    let provider_client = pool
+        .get_client("agent-provider", None)
+        .expect("provider fallback client");
+    let agent_client = pool
+        .get_client("agent-provider", Some("agent-account"))
+        .expect("Agent account client");
+    assert_eq!(agent_client.base_url().to_string(), format!("{agent_url}/"));
+    assert_ne!(provider_client.base_url(), agent_client.base_url());
+    assert_eq!(pool.snapshot().account_client_count, 1);
+
+    let mut response = agent_client
+        .send(
+            Method::POST,
+            "/v1/chat/completions",
+            HeaderMap::new(),
+            Bytes::from_static(b"{}"),
+        )
+        .await
+        .expect("Agent request uses its account endpoint");
+    assert!(response.body.next().await.is_some());
+    drop(response);
+    let requests = server.requests();
+    assert_eq!(requests.len(), 1);
+    assert_eq!(requests[0].target, "/v1/chat/completions");
+}
+
 #[test]
 fn provider_client_pool_uses_direct_fallback_and_dedicated_proxy_clients() {
     let mut direct = eggpool::config::AccountConfig {

@@ -17,7 +17,10 @@ use arc_swap::ArcSwapOption;
 use serde::Serialize;
 use thiserror::Error;
 
-use crate::{Config, config::ConfigError};
+use crate::{
+    Config,
+    config::{AccountAuthMode, ConfigError},
+};
 
 use super::{ProviderHttpClient, ProviderHttpConfig, TransportError};
 
@@ -38,14 +41,28 @@ pub enum ProviderClientPoolError {
         provider_id: String,
         account_name: String,
     },
-    /// A configured account's dedicated proxy client could not be built.
+    /// A configured account-specific client could not be built.
     #[error(
-        "provider {provider_id:?} account {account_name:?} proxy transport construction failed: {kind}"
+        "provider {provider_id:?} account {account_name:?} transport construction failed: {kind}"
     )]
     AccountTransport {
         provider_id: String,
         account_name: String,
         kind: TransportError,
+    },
+    /// An Agent account cannot use EggPool's outbound proxy path.
+    #[error(
+        "provider {provider_id:?} account {account_name:?} must not configure an outbound proxy"
+    )]
+    AgentProxyConfiguration {
+        provider_id: String,
+        account_name: String,
+    },
+    /// An Agent account does not have a valid account-specific endpoint.
+    #[error("provider {provider_id:?} account {account_name:?} endpoint is invalid")]
+    AccountEndpoint {
+        provider_id: String,
+        account_name: String,
     },
     /// The requested provider is not part of this immutable pool.
     #[error("No client for provider {provider_id:?}")]
@@ -147,6 +164,43 @@ impl ProviderClientPool {
             topology.clients.insert(provider_id.clone(), direct_client);
 
             for account in &provider.accounts {
+                if account.auth_mode == AccountAuthMode::Agent {
+                    if account.proxy.is_some()
+                        || account.proxy_url.is_some()
+                        || account.proxy_url_env.is_some()
+                    {
+                        return Err(ProviderClientPoolError::AgentProxyConfiguration {
+                            provider_id: provider_id.clone(),
+                            account_name: account.name.clone(),
+                        });
+                    }
+                    let account_config = account
+                        .base_url
+                        .as_deref()
+                        .and_then(|value| value.parse::<http::Uri>().ok())
+                        .map(|base_url| ProviderHttpConfig {
+                            base_url,
+                            ..provider_config.clone()
+                        })
+                        .ok_or_else(|| ProviderClientPoolError::AccountEndpoint {
+                            provider_id: provider_id.clone(),
+                            account_name: account.name.clone(),
+                        })?;
+                    let account_client =
+                        ProviderHttpClient::new(account_config).map_err(|kind| {
+                            ProviderClientPoolError::AccountTransport {
+                                provider_id: provider_id.clone(),
+                                account_name: account.name.clone(),
+                                kind,
+                            }
+                        })?;
+                    topology
+                        .account_clients
+                        .entry(provider_id.clone())
+                        .or_default()
+                        .insert(account.name.clone(), account_client);
+                    continue;
+                }
                 let proxy_url =
                     config
                         .resolve_account_proxy_url(account)

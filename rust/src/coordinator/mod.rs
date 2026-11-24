@@ -76,6 +76,25 @@ pub(crate) use endpoints::{
 pub(crate) use failure::terminalize_oauth_401;
 pub(crate) use finalization::release_claim;
 
+pub(crate) fn agent_401_for_account(
+    observation: &FailureObservation,
+    providers: &std::collections::BTreeMap<String, crate::config::ProviderConfig>,
+) -> bool {
+    observation.status == Some(401)
+        && observation
+            .provider_id
+            .as_deref()
+            .and_then(|provider_id| providers.get(provider_id))
+            .and_then(|provider| {
+                let account_name = observation.account_name.as_deref()?;
+                provider
+                    .accounts
+                    .iter()
+                    .find(|account| account.name == account_name)
+            })
+            .is_some_and(|account| account.auth_mode == crate::config::AccountAuthMode::Agent)
+}
+
 pub(crate) fn oauth_401_for_account(
     observation: &FailureObservation,
     providers: &std::collections::BTreeMap<String, crate::config::ProviderConfig>,

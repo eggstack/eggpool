@@ -650,6 +650,9 @@ impl FiniteCoordinator {
             AccountAuthMode::StaticKey => {
                 Ok(self.credentials.get(account_name).map(SecretString::from))
             }
+            AccountAuthMode::Agent => {
+                Ok(self.credentials.get(account_name).map(SecretString::from))
+            }
             AccountAuthMode::OAuth => {
                 let user_id = user_id.ok_or(crate::oauth::OAuthAccountError::InvalidOwner)?;
                 let manager = self
@@ -2439,7 +2442,9 @@ impl FiniteCoordinator {
             .unwrap_or_else(|e| e.into_inner())
             .decide(observation)
             .map_err(|error| FiniteCoordinatorError::Effects(error.to_string()))?;
-        if super::oauth_401_for_account(observation, &self.providers) {
+        if super::oauth_401_for_account(observation, &self.providers)
+            || super::agent_401_for_account(observation, &self.providers)
+        {
             super::terminalize_oauth_401(&mut effects);
         }
         Ok((effects, first))

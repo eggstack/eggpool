@@ -1004,6 +1004,7 @@ dependencies = [
  "eggress-core",
  "eggress-outbound",
  "eggress-pproxy-compat",
+ "eggress-protocol-reverse",
  "eggress-protocol-shadowsocks",
  "eggress-protocol-trojan",
  "eggress-server",
@@ -1204,6 +1205,27 @@ dependencies = [
  "tokio",
  "tokio-util",
  "tracing",
+]
+
+[[package]]
+name = "eggress-protocol-reverse"
+version = "1.0.12"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "ed062158bbc4246fbcdaf1be2571e329b6c27ee0a2b60b013281aec69bfe8186"
+dependencies = [
+ "bytes",
+ "eggress-core",
+ "eggress-transport-tls",
+ "eggress-uri",
+ "rustls",
+ "serde",
+ "serde_json",
+ "subtle",
+ "thiserror",
+ "tokio",
+ "tokio-util",
+ "tracing",
+ "zeroize",
 ]
 
 [[package]]

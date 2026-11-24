@@ -7,6 +7,7 @@
 use std::{
     collections::{BTreeMap, BTreeSet},
     env, fs,
+    net::{IpAddr, SocketAddr},
     path::{Path, PathBuf},
 };
 
@@ -507,6 +508,40 @@ pub enum AccountAuthMode {
     #[default]
     StaticKey,
     OAuth,
+    Agent,
+}
+
+#[derive(Debug, Clone, Deserialize, Serialize)]
+#[serde(deny_unknown_fields, default)]
+pub struct AgentAccountConfig {
+    pub control_bind: String,
+    pub external_bind: String,
+    pub transport_secret_env: String,
+    pub tls: Option<AgentTlsConfig>,
+    pub max_streams: u32,
+    pub heartbeat_interval_s: u64,
+}
+
+impl Default for AgentAccountConfig {
+    fn default() -> Self {
+        Self {
+            control_bind: String::new(),
+            external_bind: String::new(),
+            transport_secret_env: String::new(),
+            tls: None,
+            max_streams: 16,
+            heartbeat_interval_s: 30,
+        }
+    }
+}
+
+#[derive(Debug, Clone, Default, Deserialize, Serialize)]
+#[serde(deny_unknown_fields, default)]
+pub struct AgentTlsConfig {
+    pub cert_path: String,
+    pub key_path: String,
+    pub client_ca_path: Option<String>,
+    pub require_client_cert: bool,
 }
 
 #[derive(Clone, Deserialize, Serialize)]
@@ -516,6 +551,11 @@ pub struct AccountConfig {
     pub auth_mode: AccountAuthMode,
     pub api_key: Option<SecretString>,
     pub api_key_env: String,
+    /// Account-specific API endpoint. For non-agent accounts this is retained
+    /// for forward compatibility but ignored by provider transport.
+    pub base_url: Option<String>,
+    pub agent: Option<AgentAccountConfig>,
+    pub label: Option<String>,
     pub enabled: bool,
     pub weight: f64,
     pub five_hour_offset_microdollars: i64,
@@ -533,6 +573,9 @@ impl std::fmt::Debug for AccountConfig {
             .field("auth_mode", &self.auth_mode)
             .field("api_key", &self.api_key.as_ref().map(|_| "[REDACTED]"))
             .field("api_key_env", &self.api_key_env)
+            .field("base_url", &self.base_url)
+            .field("agent", &self.agent)
+            .field("label", &self.label)
             .field("enabled", &self.enabled)
             .field("weight", &self.weight)
             .field(
@@ -560,6 +603,9 @@ impl Default for AccountConfig {
             auth_mode: AccountAuthMode::StaticKey,
             api_key: None,
             api_key_env: String::new(),
+            base_url: None,
+            agent: None,
+            label: None,
             enabled: true,
             weight: 1.0,
             five_hour_offset_microdollars: 0,
@@ -985,6 +1031,20 @@ pub struct OAuthConfig {
 }
 
 impl Default for OAuthConfig {
+    fn default() -> Self {
+        Self { enabled: true }
+    }
+}
+
+/// Process-level gate for agent enrollment and routing. Disabling it retains
+/// the configured account and its secrets without starting agent listeners.
+#[derive(Debug, Clone, Deserialize, Serialize)]
+#[serde(deny_unknown_fields, default)]
+pub struct AgentsConfig {
+    pub enabled: bool,
+}
+
+impl Default for AgentsConfig {
     fn default() -> Self {
         Self { enabled: true }
     }
@@ -1534,6 +1594,7 @@ pub struct Config {
     pub update_checker: UpdateCheckerConfig,
     pub integrations: IntegrationsConfig,
     pub oauth: OAuthConfig,
+    pub agents: AgentsConfig,
     pub tools: ToolBackendConfig,
 }
 
@@ -1715,13 +1776,20 @@ impl Config {
             }
         }
         let mut account_names = BTreeSet::new();
+        let mut agent_binds = BTreeSet::new();
         for (provider_id, provider) in &mut self.providers {
             if provider.id != *provider_id {
                 return Err(ConfigError::validation(format!(
                     "Provider key does not match declared id for {provider_id}"
                 )));
             }
-            validate_provider(provider, &self.proxies, &mut account_names, &wire_registry)?;
+            validate_provider(
+                provider,
+                &self.proxies,
+                &mut account_names,
+                &mut agent_binds,
+                &wire_registry,
+            )?;
             validate_oauth_accounts(provider_id, provider)?;
         }
         validate_model_routers(&self.model_routers)?;
@@ -2203,6 +2271,7 @@ fn validate_provider(
     provider: &mut ProviderConfig,
     proxies: &BTreeMap<String, ProxyConfig>,
     names: &mut BTreeSet<String>,
+    agent_binds: &mut BTreeSet<SocketAddr>,
     wire_registry: &crate::wire::WireProfileRegistry,
 ) -> Result<(), ConfigError> {
     if provider.id.is_empty()
@@ -2446,6 +2515,7 @@ fn validate_provider(
         }
     }
     for account in &provider.accounts {
+        validate_agent_account(account, agent_binds)?;
         if account.name.trim().is_empty() {
             return Err(ConfigError::validation("account name must not be empty"));
         }
@@ -2487,8 +2557,10 @@ fn validate_provider(
                 .wire_surfaces
                 .values()
                 .any(|s| s.auth.as_ref().is_some_and(|a| a.mode != "none"));
-        if account.auth_mode == AccountAuthMode::StaticKey
-            && needs_key
+        if matches!(
+            account.auth_mode,
+            AccountAuthMode::StaticKey | AccountAuthMode::Agent
+        ) && (account.auth_mode == AccountAuthMode::Agent || needs_key)
             && account.api_key.is_none()
             && account.api_key_env.trim().is_empty()
         {
@@ -2499,6 +2571,169 @@ fn validate_provider(
         }
     }
     Ok(())
+}
+
+fn validate_agent_account(
+    account: &AccountConfig,
+    agent_binds: &mut BTreeSet<SocketAddr>,
+) -> Result<(), ConfigError> {
+    if let Some(label) = &account.label
+        && (label.chars().count() > 64
+            || label.chars().any(char::is_control)
+            || label.contains("=")
+            || label.contains("://")
+            || label.to_ascii_lowercase().starts_with("bearer ")
+            || label.starts_with("sk-"))
+    {
+        return Err(ConfigError::validation(
+            "account label must be bounded, printable display text without credential syntax",
+        ));
+    }
+
+    let Some(agent) = account.agent.as_ref() else {
+        if account.auth_mode == AccountAuthMode::Agent {
+            return Err(ConfigError::validation(
+                "agent account must configure an agent transport block",
+            ));
+        }
+        return Ok(());
+    };
+    if account.auth_mode != AccountAuthMode::Agent {
+        return Err(ConfigError::validation(
+            "agent transport block is only valid for agent accounts",
+        ));
+    }
+    if account
+        .api_key
+        .as_ref()
+        .is_none_or(|key| key.expose_secret().trim().is_empty())
+        && account.api_key_env.trim().is_empty()
+    {
+        return Err(ConfigError::validation(
+            "agent account must configure its local API key or api_key_env",
+        ));
+    }
+    if account.proxy.is_some() || account.proxy_url.is_some() || account.proxy_url_env.is_some() {
+        return Err(ConfigError::validation(
+            "agent accounts must not configure an outbound proxy",
+        ));
+    }
+    let base_url = account.base_url.as_deref().ok_or_else(|| {
+        ConfigError::validation("agent account must configure a loopback base_url")
+    })?;
+    let external_bind = agent.external_bind.parse::<SocketAddr>().map_err(|_| {
+        ConfigError::validation("agent.external_bind must be a loopback socket address")
+    })?;
+    if !external_bind.ip().is_loopback() || external_bind.port() == 0 {
+        return Err(ConfigError::validation(
+            "agent.external_bind must use a concrete loopback address and port",
+        ));
+    }
+    if !agent_binds.insert(external_bind) {
+        return Err(ConfigError::validation(
+            "agent control and external binds must be unique across accounts",
+        ));
+    }
+    let control_bind = agent.control_bind.parse::<SocketAddr>().map_err(|_| {
+        ConfigError::validation("agent.control_bind must be a socket address with a non-zero port")
+    })?;
+    if control_bind.port() == 0 {
+        return Err(ConfigError::validation(
+            "agent.control_bind must use a non-zero port",
+        ));
+    }
+    if !agent_binds.insert(control_bind) {
+        return Err(ConfigError::validation(
+            "agent control and external binds must be unique across accounts",
+        ));
+    }
+    if agent.tls.is_none() {
+        return Err(ConfigError::validation(
+            "agent TLS configuration is required for the control channel",
+        ));
+    }
+    if !valid_agent_base_url(base_url, external_bind) {
+        return Err(ConfigError::validation(
+            "agent base_url must be an absolute credential-free HTTP(S) URL on agent.external_bind",
+        ));
+    }
+    if !agent.transport_secret_env.is_empty() && !valid_env_var_name(&agent.transport_secret_env) {
+        return Err(ConfigError::validation(
+            "agent.transport_secret_env must be a valid environment variable name",
+        ));
+    }
+    if agent.max_streams == 0 || agent.heartbeat_interval_s == 0 {
+        return Err(ConfigError::validation(
+            "agent max_streams and heartbeat_interval_s must be greater than zero",
+        ));
+    }
+    if let Some(tls) = &agent.tls {
+        if tls.cert_path.trim().is_empty()
+            || tls.key_path.trim().is_empty()
+            || tls
+                .client_ca_path
+                .as_ref()
+                .is_some_and(|path| path.trim().is_empty())
+        {
+            return Err(ConfigError::validation(
+                "agent TLS certificate and key paths must be non-empty",
+            ));
+        }
+        if tls.require_client_cert && tls.client_ca_path.is_none() {
+            return Err(ConfigError::validation(
+                "agent TLS client certificate requirement needs client_ca_path",
+            ));
+        }
+    }
+    Ok(())
+}
+
+fn valid_env_var_name(name: &str) -> bool {
+    let mut characters = name.chars();
+    characters
+        .next()
+        .is_some_and(|first| first == '_' || first.is_ascii_alphabetic())
+        && characters.all(|character| character == '_' || character.is_ascii_alphanumeric())
+}
+
+fn valid_agent_base_url(value: &str, external_bind: SocketAddr) -> bool {
+    if value.trim() != value
+        || value.chars().any(char::is_whitespace)
+        || value.contains('#')
+        || value.contains('?')
+    {
+        return false;
+    }
+    let Ok(uri) = value.parse::<http::Uri>() else {
+        return false;
+    };
+    if !matches!(uri.scheme_str(), Some("http" | "https")) {
+        return false;
+    }
+    let Some(authority) = uri.authority() else {
+        return false;
+    };
+    if authority.as_str().contains('@') {
+        return false;
+    }
+    let Some(port) = authority.port_u16() else {
+        return false;
+    };
+    if port == 0 || port != external_bind.port() {
+        return false;
+    }
+    let host = authority.host();
+    let matches_external = if host.eq_ignore_ascii_case("localhost") {
+        matches!(external_bind.ip(), IpAddr::V4(ip) if ip == std::net::Ipv4Addr::LOCALHOST)
+            || matches!(external_bind.ip(), IpAddr::V6(ip) if ip == std::net::Ipv6Addr::LOCALHOST)
+    } else {
+        host.parse::<IpAddr>()
+            .is_ok_and(|ip| ip == external_bind.ip())
+    };
+    matches_external
+        && uri
+            .path_and_query()
+            .is_none_or(|path| !path.as_str().contains('?'))
 }
 
 fn validate_oauth_accounts(
@@ -2795,6 +3030,396 @@ pub fn content_digest(path: &Path) -> Result<String, ConfigError> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn valid_agent_config() -> Config {
+        let mut config = Config::default();
+        config.providers.insert(
+            "demo".into(),
+            ProviderConfig {
+                id: "demo".into(),
+                base_url: "https://provider.example/v1".into(),
+                accounts: vec![AccountConfig {
+                    name: "agent-a".into(),
+                    auth_mode: AccountAuthMode::Agent,
+                    api_key: Some("local-agent-key".into()),
+                    base_url: Some("http://127.0.0.1:19002/v1".into()),
+                    agent: Some(AgentAccountConfig {
+                        control_bind: "127.0.0.1:19001".into(),
+                        external_bind: "127.0.0.1:19002".into(),
+                        tls: Some(AgentTlsConfig {
+                            cert_path: "/certs/server.pem".into(),
+                            key_path: "/certs/server-key.pem".into(),
+                            client_ca_path: None,
+                            require_client_cert: false,
+                        }),
+                        ..Default::default()
+                    }),
+                    ..Default::default()
+                }],
+                ..Default::default()
+            },
+        );
+        config
+    }
+
+    fn agent_account_mut(config: &mut Config) -> &mut AccountConfig {
+        &mut config
+            .providers
+            .get_mut("demo")
+            .expect("demo provider")
+            .accounts[0]
+    }
+
+    fn append_agent(config: &mut Config, name: &str, external: &str, control: &str) {
+        let mut account = config.providers["demo"].accounts[0].clone();
+        account.name = name.to_owned();
+        account.base_url = Some(format!("http://{external}/v1"));
+        let agent = account.agent.as_mut().expect("agent config");
+        agent.external_bind = external.to_owned();
+        agent.control_bind = control.to_owned();
+        config
+            .providers
+            .get_mut("demo")
+            .expect("demo provider")
+            .accounts
+            .push(account);
+    }
+
+    #[test]
+    fn legacy_config_without_agents_loads_and_round_trips_semantically() {
+        let legacy = "[server]\nhost = \"127.0.0.1\"\nport = 11300\n";
+        assert!(!legacy.contains("[agents]"));
+        let config = Config::from_toml_bytes("legacy.toml", legacy.as_bytes())
+            .expect("legacy config without agents loads");
+        assert!(config.providers.is_empty(), "legacy config has no accounts");
+        assert!(
+            config.agents.enabled,
+            "missing gate uses its compatible default"
+        );
+
+        let saved = toml::to_string(&config).expect("serialize legacy config");
+        let loaded = Config::from_toml_bytes("legacy-round-trip.toml", saved.as_bytes())
+            .expect("serialized legacy config reloads");
+        assert_eq!(
+            crate::config_reload_policy::semantic_digest(&config)
+                .expect("original semantic digest"),
+            crate::config_reload_policy::semantic_digest(&loaded)
+                .expect("round-trip semantic digest")
+        );
+    }
+
+    #[test]
+    fn agent_tls_and_loopback_endpoint_are_accepted() {
+        let mut config = valid_agent_config();
+        config.validate().expect("loopback agent validates");
+        let account = &config.providers["demo"].accounts[0];
+        let agent = account.agent.as_ref().expect("agent config");
+        assert_eq!(agent.max_streams, 16);
+        assert_eq!(agent.heartbeat_interval_s, 30);
+        assert!(agent.tls.is_some());
+
+        let serialized = toml::to_string(&config).expect("serialize config");
+        let parsed: Config = toml::from_str(&serialized).expect("parse agent config");
+        assert_eq!(
+            parsed.providers["demo"].accounts[0].auth_mode,
+            AccountAuthMode::Agent
+        );
+        assert!(parsed.agents.enabled);
+
+        let account = AccountConfig {
+            base_url: Some("http://localhost:19002/v1".into()),
+            ..config.providers["demo"].accounts[0].clone()
+        };
+        assert!(valid_agent_base_url(
+            account.base_url.as_deref().expect("base url"),
+            "127.0.0.1:19002".parse().expect("socket address")
+        ));
+        assert!(valid_agent_base_url(
+            "https://127.0.0.1:19002/prefix/v1",
+            "127.0.0.1:19002".parse().expect("socket address")
+        ));
+        assert!(valid_agent_base_url(
+            "http://localhost:19002/v1",
+            "[::1]:19002".parse().expect("IPv6 loopback socket address")
+        ));
+        assert!(valid_agent_base_url(
+            "http://127.0.0.2:19002/v1",
+            "127.0.0.2:19002".parse().expect("socket address")
+        ));
+        assert!(
+            !valid_agent_base_url(
+                "http://localhost:19002/v1",
+                "127.0.0.2:19002".parse().expect("socket address")
+            ),
+            "localhost must not alias a different 127/8 address"
+        );
+        assert!(
+            !valid_agent_base_url(
+                "http://127.0.0.1:19002/v1",
+                "127.0.0.2:19002".parse().expect("socket address")
+            ),
+            "IP literal must exactly match the bound address"
+        );
+    }
+
+    #[test]
+    fn agent_control_requires_tls_on_loopback_and_remote_binds() {
+        let mut config = valid_agent_config();
+        agent_account_mut(&mut config).agent.as_mut().unwrap().tls = None;
+        let error = config
+            .validate()
+            .expect_err("loopback plaintext control is rejected");
+        assert!(error.to_string().contains("TLS"));
+
+        let mut config = valid_agent_config();
+        agent_account_mut(&mut config)
+            .agent
+            .as_mut()
+            .unwrap()
+            .control_bind = "192.0.2.10:19001".into();
+        agent_account_mut(&mut config).agent.as_mut().unwrap().tls = None;
+        assert!(
+            config.validate().is_err(),
+            "remote plaintext control is rejected"
+        );
+
+        let agent = agent_account_mut(&mut config).agent.as_mut().unwrap();
+        agent.tls = Some(AgentTlsConfig {
+            cert_path: "/certs/server.pem".into(),
+            key_path: "/certs/server-key.pem".into(),
+            client_ca_path: Some("/certs/client-ca.pem".into()),
+            require_client_cert: true,
+        });
+        config
+            .validate()
+            .expect("remote control with TLS validates");
+    }
+
+    #[test]
+    fn agent_configuration_rejects_missing_or_mismatched_fields() {
+        let mut config = valid_agent_config();
+        agent_account_mut(&mut config).base_url = None;
+        assert!(config.validate().is_err(), "missing base URL");
+
+        let mut config = valid_agent_config();
+        agent_account_mut(&mut config).agent = None;
+        assert!(config.validate().is_err(), "missing agent block");
+
+        let mut config = valid_agent_config();
+        agent_account_mut(&mut config)
+            .agent
+            .as_mut()
+            .unwrap()
+            .external_bind = "192.0.2.2:19002".into();
+        assert!(config.validate().is_err(), "non-loopback external bind");
+
+        let mut config = valid_agent_config();
+        agent_account_mut(&mut config)
+            .agent
+            .as_mut()
+            .unwrap()
+            .external_bind = "127.0.0.1:0".into();
+        assert!(config.validate().is_err(), "ephemeral external port");
+
+        let mut config = valid_agent_config();
+        agent_account_mut(&mut config)
+            .agent
+            .as_mut()
+            .unwrap()
+            .control_bind = "invalid".into();
+        assert!(config.validate().is_err(), "invalid control socket");
+
+        let mut config = valid_agent_config();
+        agent_account_mut(&mut config)
+            .agent
+            .as_mut()
+            .unwrap()
+            .control_bind = "127.0.0.1:0".into();
+        assert!(config.validate().is_err(), "zero control port");
+
+        let mut config = valid_agent_config();
+        agent_account_mut(&mut config).base_url = Some("http://127.0.0.2:19002/v1".into());
+        assert!(config.validate().is_err(), "authority host mismatch");
+
+        let mut config = valid_agent_config();
+        agent_account_mut(&mut config)
+            .agent
+            .as_mut()
+            .unwrap()
+            .external_bind = "127.0.0.2:19002".into();
+        agent_account_mut(&mut config).base_url = Some("http://localhost:19002/v1".into());
+        assert!(
+            config.validate().is_err(),
+            "localhost does not match 127.0.0.2"
+        );
+
+        let mut config = valid_agent_config();
+        agent_account_mut(&mut config).base_url = Some("http://127.0.0.1:19003/v1".into());
+        assert!(config.validate().is_err(), "authority port mismatch");
+
+        for base_url in [
+            "ftp://127.0.0.1:19002/v1",
+            "http://user:secret@127.0.0.1:19002/v1",
+            "http://127.0.0.1:19002/v1?secret=1",
+            "http://127.0.0.1:19002/v1#fragment",
+            "http://192.0.2.1:19002/v1",
+        ] {
+            let mut config = valid_agent_config();
+            agent_account_mut(&mut config).base_url = Some(base_url.into());
+            let error = config.validate().expect_err("unsafe agent URL rejected");
+            assert!(!error.to_string().contains("secret"));
+        }
+    }
+
+    #[test]
+    fn agent_configuration_rejects_conflicts_proxies_and_missing_bearer_key() {
+        let mut config = valid_agent_config();
+        config
+            .providers
+            .get_mut("demo")
+            .unwrap()
+            .accounts
+            .push(AccountConfig {
+                name: "agent-b".into(),
+                auth_mode: AccountAuthMode::Agent,
+                api_key: Some("key".into()),
+                base_url: Some("http://127.0.0.1:19002/v1".into()),
+                agent: Some(AgentAccountConfig {
+                    control_bind: "127.0.0.1:19003".into(),
+                    external_bind: "127.0.0.1:19002".into(),
+                    ..Default::default()
+                }),
+                ..Default::default()
+            });
+        assert!(config.validate().is_err(), "duplicate external bind");
+
+        let mut config = valid_agent_config();
+        append_agent(&mut config, "agent-b", "127.0.0.1:19003", "127.0.0.1:19001");
+        assert!(config.validate().is_err(), "duplicate control bind");
+
+        let mut config = valid_agent_config();
+        append_agent(&mut config, "agent-b", "127.0.0.1:19003", "127.0.0.1:19002");
+        assert!(
+            config.validate().is_err(),
+            "control bind collides with another external bind"
+        );
+
+        let mut config = valid_agent_config();
+        append_agent(&mut config, "agent-b", "127.0.0.1:19001", "127.0.0.1:19003");
+        assert!(
+            config.validate().is_err(),
+            "external bind collides with another control bind"
+        );
+
+        let mut config = valid_agent_config();
+        agent_account_mut(&mut config).proxy_url = Some("http://127.0.0.1:3128".into());
+        assert!(config.validate().is_err(), "proxy URL is rejected");
+
+        let mut config = valid_agent_config();
+        let account = agent_account_mut(&mut config);
+        account.api_key = None;
+        account.api_key_env.clear();
+        assert!(config.validate().is_err(), "agent bearer key is mandatory");
+
+        let mut config = valid_agent_config();
+        agent_account_mut(&mut config)
+            .agent
+            .as_mut()
+            .unwrap()
+            .transport_secret_env = "bad-name".into();
+        assert!(config.validate().is_err(), "invalid transport env name");
+    }
+
+    #[test]
+    fn agent_tls_paths_and_labels_are_bounded_and_validated() {
+        let mut config = valid_agent_config();
+        agent_account_mut(&mut config).agent.as_mut().unwrap().tls = Some(AgentTlsConfig {
+            cert_path: "/cert.pem".into(),
+            key_path: "/key.pem".into(),
+            client_ca_path: None,
+            require_client_cert: true,
+        });
+        assert!(config.validate().is_err(), "mTLS needs a CA path");
+
+        for tls in [
+            AgentTlsConfig {
+                cert_path: String::new(),
+                key_path: "/key.pem".into(),
+                ..Default::default()
+            },
+            AgentTlsConfig {
+                cert_path: "/cert.pem".into(),
+                key_path: " ".into(),
+                ..Default::default()
+            },
+            AgentTlsConfig {
+                cert_path: "/cert.pem".into(),
+                key_path: "/key.pem".into(),
+                client_ca_path: Some(String::new()),
+                ..Default::default()
+            },
+        ] {
+            let mut config = valid_agent_config();
+            agent_account_mut(&mut config).agent.as_mut().unwrap().tls = Some(tls);
+            assert!(config.validate().is_err(), "empty TLS path");
+        }
+
+        for label in [
+            "x".repeat(65),
+            "line
+break"
+                .into(),
+            "Bearer secret".into(),
+            "sk-secret".into(),
+        ] {
+            let mut config = valid_agent_config();
+            agent_account_mut(&mut config).label = Some(label);
+            assert!(config.validate().is_err(), "unsafe label");
+        }
+        let mut config = valid_agent_config();
+        agent_account_mut(&mut config).label = Some("Workstation A".into());
+        config.validate().expect("safe label validates");
+    }
+
+    #[test]
+    fn non_agent_base_url_is_ignored_but_agent_block_is_rejected() {
+        let mut config = Config::default();
+        config.providers.insert(
+            "demo".into(),
+            ProviderConfig {
+                id: "demo".into(),
+                base_url: "https://provider.example/v1".into(),
+                accounts: vec![AccountConfig {
+                    name: "static".into(),
+                    api_key: Some("key".into()),
+                    base_url: Some("http://127.0.0.1:19002/v1".into()),
+                    ..Default::default()
+                }],
+                ..Default::default()
+            },
+        );
+        config.validate().expect("non-agent base URL is ignored");
+
+        let mut config = Config::default();
+        config.providers.insert(
+            "demo".into(),
+            ProviderConfig {
+                id: "demo".into(),
+                base_url: "https://provider.example/v1".into(),
+                accounts: vec![AccountConfig {
+                    name: "static".into(),
+                    api_key: Some("key".into()),
+                    agent: Some(AgentAccountConfig::default()),
+                    ..Default::default()
+                }],
+                ..Default::default()
+            },
+        );
+        assert!(
+            config.validate().is_err(),
+            "non-agent transport block rejected"
+        );
+    }
 
     #[test]
     fn defaults_match_the_current_product_contract() {

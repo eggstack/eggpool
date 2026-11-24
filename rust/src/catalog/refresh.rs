@@ -321,6 +321,10 @@ impl CatalogService {
                         }
                     }
                 }
+                crate::config::AccountAuthMode::Agent => {
+                    outcomes.insert(identity.account_name.clone(), RefreshOutcome::Skipped);
+                    continue;
+                }
             };
             let Some(api_key) = api_key else {
                 outcomes.insert(identity.account_name.clone(), RefreshOutcome::Skipped);

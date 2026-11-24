@@ -4,7 +4,7 @@ use std::{collections::BTreeMap, fs};
 
 use eggpool::{
     Config,
-    config::{AccountConfig, ProviderConfig},
+    config::{AccountAuthMode, AccountConfig, AgentAccountConfig, AgentTlsConfig, ProviderConfig},
     config_reload_policy::{
         ConfigDiff, ReloadDisposition, classify_transition, compute_diff, disposition_for,
         dynamic_rules, field_dispositions, sanitize_text_for_audit, schema_paths, semantic_digest,
@@ -58,6 +58,45 @@ fn account(name: &str, api_key: &str) -> AccountConfig {
     }
 }
 
+fn agent_account() -> AccountConfig {
+    AccountConfig {
+        name: "agent-owner".to_owned(),
+        auth_mode: AccountAuthMode::Agent,
+        api_key: Some("local-agent-key".into()),
+        base_url: Some("http://127.0.0.1:19082/v1".to_owned()),
+        agent: Some(AgentAccountConfig {
+            control_bind: "127.0.0.1:19081".to_owned(),
+            external_bind: "127.0.0.1:19082".to_owned(),
+            transport_secret_env: "AGENT_TRANSPORT_SECRET".to_owned(),
+            tls: Some(AgentTlsConfig {
+                cert_path: "/test/agent-cert.pem".to_owned(),
+                key_path: "/test/agent-key.pem".to_owned(),
+                ..AgentTlsConfig::default()
+            }),
+            ..AgentAccountConfig::default()
+        }),
+        ..AccountConfig::default()
+    }
+}
+
+fn agent_config() -> Config {
+    let mut config = Config::default();
+    config.providers.insert(
+        "agent-provider".to_owned(),
+        provider("agent-provider", Some(agent_account())),
+    );
+    config
+}
+
+fn assert_agent_restart(old: &Config, new: &Config, path: &str) {
+    let transition = classify_transition(old, new).expect("agent transition classifies");
+    assert!(
+        transition.has_restart_required(),
+        "{path} must require restart"
+    );
+    assert_eq!(transition.restart_required_paths(), vec![path.to_owned()]);
+}
+
 fn diff_projection(diff: &ConfigDiff) -> Value {
     json!({
         "paths": diff.changes.iter().map(|change| &change.path).collect::<Vec<_>>(),
@@ -87,7 +126,7 @@ fn exact_r001_field_dispositions_are_ported() {
         .collect::<Vec<_>>();
     let r001_actual = actual
         .iter()
-        .filter(|(path, _)| !path.starts_with("oauth."))
+        .filter(|(path, _)| !path.starts_with("oauth.") && !path.starts_with("agents."))
         .cloned()
         .collect::<Vec<_>>();
     assert_eq!(r001_actual, expected);
@@ -113,13 +152,18 @@ fn exact_r001_field_dispositions_are_ported() {
             .count(),
         0
     );
+    let mut added_gate_fields = actual
+        .iter()
+        .filter(|(path, _)| path.as_str() == "agents.enabled" || path.as_str() == "oauth.enabled")
+        .cloned()
+        .collect::<Vec<_>>();
+    added_gate_fields.sort();
     assert_eq!(
-        actual
-            .iter()
-            .filter(|(path, _)| path.starts_with("oauth."))
-            .cloned()
-            .collect::<Vec<_>>(),
-        vec![("oauth.enabled".to_owned(), "restart_required".to_owned()),]
+        added_gate_fields,
+        vec![
+            ("agents.enabled".to_owned(), "restart_required".to_owned()),
+            ("oauth.enabled".to_owned(), "restart_required".to_owned()),
+        ]
     );
 }
 
@@ -129,6 +173,7 @@ fn serialized_schema_projection_is_the_coverage_guard() {
         .into_iter()
         .map(|(path, _)| path)
         .collect::<Vec<_>>();
+    expected.push("agents.enabled".to_owned());
     expected.push("oauth.enabled".to_owned());
     expected.sort();
     assert_eq!(schema_paths().expect("schema projection"), expected);
@@ -138,6 +183,10 @@ fn serialized_schema_projection_is_the_coverage_guard() {
 fn unknown_paths_and_dynamic_rules_fail_closed_or_match_oracle() {
     assert_eq!(
         disposition_for("unknown.future.field"),
+        ReloadDisposition::RestartRequired
+    );
+    assert_eq!(
+        disposition_for("agents.enabled"),
         ReloadDisposition::RestartRequired
     );
     assert_eq!(
@@ -198,6 +247,85 @@ fn live_restart_and_mixed_mutations_are_classified_without_partial_semantics() {
     assert_eq!(
         transition.restart_required_paths(),
         vec!["server.port".to_owned()]
+    );
+}
+
+#[test]
+fn agent_transport_configuration_changes_require_restart() {
+    let old = agent_config();
+    let agent_path = "accounts.agent-provider/agent-owner.agent";
+
+    let mut control_bind = old.clone();
+    control_bind
+        .providers
+        .get_mut("agent-provider")
+        .unwrap()
+        .accounts[0]
+        .agent
+        .as_mut()
+        .unwrap()
+        .control_bind = "127.0.0.1:19083".to_owned();
+    assert_agent_restart(&old, &control_bind, agent_path);
+
+    let mut external_bind = old.clone();
+    external_bind
+        .providers
+        .get_mut("agent-provider")
+        .unwrap()
+        .accounts[0]
+        .agent
+        .as_mut()
+        .unwrap()
+        .external_bind = "127.0.0.1:19084".to_owned();
+    assert_agent_restart(&old, &external_bind, agent_path);
+
+    let mut tls_material = old.clone();
+    tls_material
+        .providers
+        .get_mut("agent-provider")
+        .unwrap()
+        .accounts[0]
+        .agent
+        .as_mut()
+        .unwrap()
+        .tls
+        .as_mut()
+        .unwrap()
+        .cert_path = "/test/rotated-agent-cert.pem".to_owned();
+    assert_agent_restart(&old, &tls_material, agent_path);
+
+    let mut transport_credential = old.clone();
+    transport_credential
+        .providers
+        .get_mut("agent-provider")
+        .unwrap()
+        .accounts[0]
+        .agent
+        .as_mut()
+        .unwrap()
+        .transport_secret_env = "ROTATED_AGENT_TRANSPORT_SECRET".to_owned();
+    assert_agent_restart(&old, &transport_credential, agent_path);
+
+    let mut mixed = old.clone();
+    mixed.server.max_request_body_bytes += 1;
+    mixed.providers.get_mut("agent-provider").unwrap().accounts[0]
+        .agent
+        .as_mut()
+        .unwrap()
+        .transport_secret_env = "MIXED_AGENT_TRANSPORT_SECRET".to_owned();
+    let transition = classify_transition(&old, &mixed).expect("mixed agent transition");
+    assert!(transition.has_restart_required());
+    assert!(
+        transition
+            .diff()
+            .live()
+            .iter()
+            .any(|change| change.path == "server.max_request_body_bytes"),
+        "the mixed transition retains its live server change"
+    );
+    assert_eq!(
+        transition.restart_required_paths(),
+        vec![agent_path.to_owned()]
     );
 }
 

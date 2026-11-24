@@ -10,6 +10,7 @@ use tokio::sync::Notify;
 
 use crate::{
     Config,
+    agents::{AgentTunnelCloseReport, AgentTunnelError, AgentTunnelSet},
     coordinator::{
         FinalizationDrainError, FinalizationSupervisor, InferenceState, TerminalReferenceOwner,
         WireResolver, WireResolverConfigError, build_inference_state_with_shared,
@@ -38,6 +39,8 @@ pub enum GenerationBuildError {
     EmptyDigest,
     #[error("generation provider client pool construction failed: {0}")]
     ProviderPool(#[from] ProviderClientPoolError),
+    #[error("generation agent tunnel construction failed: {0}")]
+    AgentTunnel(#[from] AgentTunnelError),
     #[error("generation wire/model-router compilation failed: {detail}")]
     Compilation { detail: String },
     #[error("generation wire resolver policy construction failed: {0}")]
@@ -82,13 +85,18 @@ impl RuntimeGeneration {
         inference: InferenceState,
         provider_clients: ProviderClientPool,
         finalization: FinalizationSupervisor,
+        agent_tunnels: AgentTunnelSet,
     ) -> Self {
         Self {
             generation_id,
             config,
             content_digest,
             inference: Arc::new(inference),
-            resources: Arc::new(GenerationResources::new(provider_clients, finalization)),
+            resources: Arc::new(GenerationResources::new(
+                provider_clients,
+                finalization,
+                agent_tunnels,
+            )),
         }
     }
 
@@ -107,7 +115,11 @@ impl RuntimeGeneration {
             config,
             content_digest,
             inference,
-            resources: Arc::new(GenerationResources::new(provider_clients, finalization)),
+            resources: Arc::new(GenerationResources::new(
+                provider_clients,
+                finalization,
+                AgentTunnelSet::empty(),
+            )),
         })
     }
 
@@ -189,19 +201,37 @@ impl RuntimeGeneration {
 struct GenerationResources {
     provider_clients: ProviderClientPool,
     finalization: FinalizationSupervisor,
+    agent_tunnels: Mutex<Option<AgentTunnelSet>>,
     closed: AtomicBool,
     close_report: Mutex<Option<GenerationCloseReport>>,
     close_notify: Notify,
 }
 
 impl GenerationResources {
-    fn new(provider_clients: ProviderClientPool, finalization: FinalizationSupervisor) -> Self {
+    fn new(
+        provider_clients: ProviderClientPool,
+        finalization: FinalizationSupervisor,
+        agent_tunnels: AgentTunnelSet,
+    ) -> Self {
         Self {
             provider_clients,
             finalization,
+            agent_tunnels: Mutex::new(Some(agent_tunnels)),
             closed: AtomicBool::new(false),
             close_report: Mutex::new(None),
             close_notify: Notify::new(),
+        }
+    }
+
+    async fn close_agent_tunnels(&self, timeout: Duration) -> AgentTunnelCloseReport {
+        let tunnels = self
+            .agent_tunnels
+            .lock()
+            .unwrap_or_else(|error| error.into_inner())
+            .take();
+        match tunnels {
+            Some(tunnels) => tunnels.close(timeout).await,
+            None => AgentTunnelCloseReport::default(),
         }
     }
 
@@ -230,6 +260,13 @@ impl GenerationResources {
                     );
                 }
             };
+            let agent_tunnels = self.close_agent_tunnels(timeout).await;
+            if agent_tunnels.shutdown_timed_out > 0 {
+                tracing::warn!(
+                    timed_out = agent_tunnels.shutdown_timed_out,
+                    "agent tunnel shutdown exceeded its bounded grace period"
+                );
+            }
             let provider_clients = self.provider_clients.close();
             close_order.push(GenerationCloseStep::ProviderClientsClosed);
             close_order.push(GenerationCloseStep::GenerationHandlesReleased);
@@ -272,6 +309,13 @@ impl GenerationResources {
         // `close` records a failed finalization drain and intentionally keeps
         // transports open for live retirement.  A process exit is allowed to
         // finish that close boundary deterministically.
+        let agent_tunnels = self.close_agent_tunnels(timeout).await;
+        if agent_tunnels.shutdown_timed_out > 0 {
+            tracing::warn!(
+                timed_out = agent_tunnels.shutdown_timed_out,
+                "forced agent tunnel shutdown exceeded its bounded grace period"
+            );
+        }
         let provider_clients = self.provider_clients.close();
         let mut forced = report;
         forced.provider_clients = provider_clients;
@@ -617,6 +661,10 @@ impl RuntimeGenerationFactory {
         let model_registry = config.compile_model_router_registry()?;
         let provider_profiles = compile_provider_profiles(&config)
             .map_err(|detail| GenerationBuildError::Compilation { detail })?;
+        let agent_tunnels = process
+            .agent_tunnel_manager()
+            .prepare_for_generation(&config, process.config_path())
+            .await?;
 
         let configured_preferences = config.providers.iter().flat_map(|(provider_id, provider)| {
             provider
@@ -653,6 +701,7 @@ impl RuntimeGenerationFactory {
                 process
                     .wire_profile_resolver()
                     .set_configured_preferences(previous_preferences);
+                let _ = agent_tunnels.close(DEFAULT_GENERATION_CLOSE_TIMEOUT).await;
                 return Err(error.into());
             }
         };
@@ -690,9 +739,11 @@ impl RuntimeGenerationFactory {
                 process
                     .wire_profile_resolver()
                     .set_configured_preferences(previous_preferences);
+                let provider_clients = provider_clients.close();
+                let _ = agent_tunnels.close(DEFAULT_GENERATION_CLOSE_TIMEOUT).await;
                 return Err(GenerationBuildError::Graph {
                     detail,
-                    provider_clients: provider_clients.close(),
+                    provider_clients,
                 });
             }
         };
@@ -704,6 +755,7 @@ impl RuntimeGenerationFactory {
             inference,
             provider_clients,
             finalization,
+            agent_tunnels,
         ));
         Ok(PreparedGeneration::new(
             generation,

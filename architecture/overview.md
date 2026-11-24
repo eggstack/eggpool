@@ -318,6 +318,15 @@ dependency authority; `deny.toml` + `cargo deny check` gates
 licenses/advisories/sources/duplicates. `unsafe_code = "forbid"` is a repo
 invariant.
 
+`rust/src/agents/` owns the per-user provider-agent reverse tunnel: one
+Eggress `1.0.12` reverse server per Agent account, bound to a
+server-local loopback external port that the provider client pool dials, with
+the agent dialing out over a TLS control channel. The tunnel manager is
+process-owned with weak references and generation-owned leases, so an
+unchanged listener survives a live rehash while a failed candidate releases its
+own tunnels before publication. It owns no supervisor, reload loop, config
+source, or database connection.
+
 Deep dive: [Providers](deep-dive-providers.md).
 
 ### 8. Routing, quota, health, accounts, catalog, semantic model routing
