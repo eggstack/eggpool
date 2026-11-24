@@ -1,6 +1,6 @@
 # Provider OAuth Milestone 004 — Owner-scoped credential refresh and retry
 
-Status: active
+Status: implemented
 
 Repository baseline: `7874d0e27d2942c310b414b4a4633629de59afb4`
 

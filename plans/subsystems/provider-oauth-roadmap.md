@@ -177,7 +177,7 @@ M001 closes with secure per-user storage, backup/restore, gate semantics, proact
 | M001 | active | ../implementation/provider-oauth/001-oauth-credential-lifecycle-and-dispatch.md | — | None; dependency compatibility is the first implementation check in M001 |
 | M002 | active | ../implementation/provider-oauth/002-authenticated-web-ui-provider-login.md | — | Interface dependency on M001 account identity/commit contract; verify exact xAI/OpenAI provider registrations before closure |
 | M003 | active | ../implementation/provider-oauth/003-desktop-loopback-browser-login.md | — | M001 account identity/commit interface plus scoped `oauth_credentials_write` route; verify exact provider loopback registrations before closure |
-| M004 | active | ../implementation/provider-oauth/004-oauth-401-credential-refresh-retry.md | — | ADR-0015 supersedes the no-replay clause; verify exact provider registration separately |
+| M004 | closed | ../implementation/provider-oauth/004-oauth-401-credential-refresh-retry.md | ../closure/provider-oauth/004-status.md | ADR-0015 supersedes the no-replay clause; local-stub evidence only, exact provider registration remains an M001–M003 condition |
 
 
 ## 13. Append-only flow-scope amendment — ADR-0014
@@ -211,3 +211,12 @@ The sections below describe scope that the accepted amendments have since change
 
 - §1, §3, §6, §7, §9, and §11 still describe an OpenAI Web UI authorization-code/PKCE callback on EggPool's listener. ADR-0014 removed that surface: M002 is xAI Web UI device-code only, and M003 owns both desktop loopback flows.
 - §8, §11, and the M001, M002, and M003 plan text still state a no-replay rule for HTTP 401. ADR-0015 supersedes that clause with the owner-scoped credential-refresh retry described above. The prohibitions on pooling, cross-user fallback, and cross-account fallback are unchanged.
+
+## 15. Append-only closure note — M004
+
+This note records the M004 closure. It does not rewrite the earlier text, and it does not change the M001–M003 boundaries.
+
+- M004 is closed through `plans/closure/provider-oauth/004-status.md`. The owner-scoped credential-refresh retry refreshes the rejected owner's own credential and retries the same request against the same account exactly once, holds the account constant, and re-offers the rejected wire surface.
+- The published `RetryScope`/`NextAction` variant sets and the failure classifier's recorded output are unchanged, so the frozen compatibility observation fixture and the library's public API are unaffected.
+- A local stub proves the coordinator and credential-manager behavior only. Exact xAI and OpenAI provider registration and live provider support are not established by M004 and remain an M001–M003 condition.
+- M001, M002, and M003 stay `active` and are neither promoted nor reopened.
