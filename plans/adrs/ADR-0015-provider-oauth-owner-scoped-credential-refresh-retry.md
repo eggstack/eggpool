@@ -1,6 +1,6 @@
 # ADR-0015: Provider OAuth Owner-Scoped Credential Refresh Retry
 
-Status: accepted
+Status: superseded
 
 Date: 2026-11-24
 

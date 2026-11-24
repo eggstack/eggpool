@@ -249,3 +249,22 @@ This note records the M003 closure. It does not rewrite the earlier text, and it
 - The self-only `oauth_credentials_write` scope and the two credential routes are part of this milestone. The route requires the single scope, derives the owner only from the verified principal, accepts no owner field, and commits through M001's atomic store.
 - The condition is exact xAI and OpenAI loopback redirect and PKCE client registration plus live loopback login evidence. The closure record names the risk and the exact future evidence; local stubs do not establish live provider support.
 - M001 is closed and M002 is conditionally closed. No Provider OAuth implementation plan remains active, and the roadmap stays `active` only for the two conditional evidence conditions.
+
+## 19. Append-only supersession direction
+
+[ADR-0016](../adrs/ADR-0016-provider-agent-upstreams.md) (proposed) would replace
+server-held OAuth custody for personal accounts with per-user Eggpass agents
+reached through an Eggress reverse TLS tunnel. This roadmap stays `active` while
+the OAuth surfaces exist and becomes `superseded` when Provider Agents M004
+closes. The M001–M004 closure records, their conditional evidence conditions, and
+the accepted ADRs remain historical and are not rewritten.
+
+## 20. Append-only note — ADR-0016 acceptance
+
+[ADR-0016](../adrs/ADR-0016-provider-agent-upstreams.md) is accepted as of
+2026-11-24. On that acceptance ADR-0012, ADR-0014, and ADR-0015 are marked
+`superseded`; their content is not rewritten and the M001–M004 closure records
+stand. This roadmap stays `active` while the OAuth surfaces exist and becomes
+`superseded` when Provider Agents M004 closes. Nothing in this note removes a
+route, a configuration key, a credential file, or the ADR-0015 retry path; direct
+OAuth custody remains in force.

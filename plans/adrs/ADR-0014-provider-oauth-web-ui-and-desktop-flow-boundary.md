@@ -1,6 +1,6 @@
 # ADR-0014: Provider OAuth Web UI and Desktop Flow Boundary
 
-Status: accepted
+Status: superseded
 
 Date: 2026-11-23
 

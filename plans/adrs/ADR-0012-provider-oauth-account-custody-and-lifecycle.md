@@ -1,6 +1,6 @@
 # ADR-0012: Provider OAuth account custody and lifecycle
 
-Status: accepted
+Status: superseded
 
 Date: 2026-11-22
 
