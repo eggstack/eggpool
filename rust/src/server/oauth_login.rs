@@ -310,12 +310,22 @@ impl FlowRegistry {
         {
             let mut entries = lock(&self.inner.entries);
             reap(&mut entries);
-            if entries.iter().any(|(existing_key, entry)| {
-                existing_key.account_name == account_name
-                    && entry.user_id == user_id
-                    && entry.status.is_active()
-            }) {
-                return Err(FlowError::AlreadyActive);
+            // One active flow per owner and account. A retry from another
+            // authenticated session supersedes the earlier attempt: the
+            // previous entry is canceled instead of returning a conflict the
+            // new session can neither see nor clear.
+            let superseded = entries
+                .iter()
+                .find(|(existing_key, entry)| {
+                    existing_key.account_name == account_name
+                        && entry.user_id == user_id
+                        && entry.status.is_active()
+                })
+                .map(|(existing_key, _)| existing_key.clone());
+            if let Some(superseded) = superseded
+                && let Some(previous) = entries.remove(&superseded)
+            {
+                previous.cancellation.cancel();
             }
             if let Some(previous) = entries.remove(&key) {
                 previous.cancellation.cancel();
@@ -734,7 +744,6 @@ fn lock<T>(mutex: &Mutex<T>) -> std::sync::MutexGuard<'_, T> {
 #[derive(Clone, Debug, PartialEq, Eq)]
 enum FlowError {
     NotFound,
-    AlreadyActive,
     Capacity,
     Canceled,
     NotReady,
@@ -748,19 +757,40 @@ enum StartFailure {
     ProviderUnavailable,
 }
 
+/// Verification pages EggPool is willing to display for xAI.
+///
+/// The set and the comparison mirror the pinned provider profile and the
+/// Eggpass reference listener: DNS names are case-insensitive and one trailing
+/// dot is not a different host, while `http::uri::Authority::host` preserves
+/// the received case.
+const XAI_VERIFICATION_HOSTS: &[&str] = &["accounts.x.ai", "auth.x.ai", "x.ai"];
+
 fn trusted_xai_verification_uri(raw: &str) -> bool {
+    // The pinned profile already validated this value. Repeat the same
+    // fail-closed raw-byte refusal at the display seam: a backslash or
+    // whitespace byte must not be able to re-aim the presentation.
+    if raw.contains('#')
+        || raw
+            .bytes()
+            .any(|byte| byte == b'\\' || byte.is_ascii_whitespace() || byte < 0x20)
+    {
+        return false;
+    }
     let Ok(uri) = raw.parse::<Uri>() else {
         return false;
     };
     let Some(authority) = uri.authority() else {
         return false;
     };
-    uri.scheme_str() == Some("https")
-        && matches!(authority.host(), "accounts.x.ai" | "auth.x.ai")
+    let host = authority.host();
+    let host = host.strip_suffix('.').unwrap_or(host);
+    uri.scheme_str()
+        .is_some_and(|scheme| scheme.eq_ignore_ascii_case("https"))
+        && XAI_VERIFICATION_HOSTS
+            .iter()
+            .any(|trusted| trusted.eq_ignore_ascii_case(host))
         && !authority.as_str().contains('@')
         && authority.port_u16().is_none_or(|port| port == 443)
-        && uri.path().starts_with('/')
-        && !raw.contains('#')
 }
 
 fn valid_account_name(account_name: &str) -> bool {
@@ -935,7 +965,6 @@ fn error_response(status: StatusCode, code: &'static str) -> Response {
 fn flow_error(error: FlowError) -> Response {
     let (status, code) = match error {
         FlowError::NotFound => (StatusCode::NOT_FOUND, "flow_not_found"),
-        FlowError::AlreadyActive => (StatusCode::CONFLICT, "flow_already_active"),
         FlowError::Capacity => (StatusCode::TOO_MANY_REQUESTS, "flow_capacity"),
         FlowError::Canceled => (StatusCode::CONFLICT, "flow_canceled"),
         FlowError::NotReady => (StatusCode::CONFLICT, "flow_not_ready"),
@@ -1588,24 +1617,57 @@ mod tests {
                 .is_none()
         );
         assert!(!registry.cancel(TEST_SESSION, "another-user", TEST_ACCOUNT));
-        assert!(matches!(
-            registry
-                .begin(
-                    "another-session",
-                    TEST_USER,
-                    TEST_ACCOUNT,
-                    &ProviderClientPool::new(),
-                )
-                .await,
-            Err(FlowError::AlreadyActive)
-        ));
-        assert_eq!(
+        // A retry from another authenticated session supersedes the earlier
+        // attempt instead of returning a conflict that session cannot clear.
+        let replacement = registry
+            .begin(
+                "another-session",
+                TEST_USER,
+                TEST_ACCOUNT,
+                &ProviderClientPool::new(),
+            )
+            .await
+            .expect("an owned retry supersedes the previous flow");
+        assert_eq!(replacement.status, "pending");
+        assert!(
             registry
                 .view(TEST_SESSION, TEST_USER, TEST_ACCOUNT)
-                .expect("original flow remains isolated")
+                .is_none(),
+            "the superseded session no longer owns a flow"
+        );
+        assert_eq!(
+            registry
+                .view("another-session", TEST_USER, TEST_ACCOUNT)
+                .expect("the replacement is bound to its own session")
                 .status,
             "pending"
         );
+    }
+
+    #[test]
+    fn verification_hosts_match_the_pinned_profile_case_insensitively() {
+        for uri in [
+            "https://accounts.x.ai/device",
+            "https://auth.x.ai/oauth2/device?user_code=ABCD",
+            "https://x.ai/device",
+            "https://Accounts.X.AI/device",
+            "https://accounts.x.ai./device",
+            "https://auth.x.ai:443/device",
+        ] {
+            assert!(trusted_xai_verification_uri(uri), "{uri} is trusted");
+        }
+        for uri in [
+            "http://accounts.x.ai/device",
+            "https://accounts.x.ai.evil.test/device",
+            "https://evil.test/device",
+            "https://user@accounts.x.ai/device",
+            r"https://accounts.x.ai\\@evil.test/device",
+            "https://accounts.x.ai:8443/device",
+            "https://accounts.x.ai/device#fragment",
+            "not a url",
+        ] {
+            assert!(!trusted_xai_verification_uri(uri), "{uri} is refused");
+        }
     }
 
     #[tokio::test]

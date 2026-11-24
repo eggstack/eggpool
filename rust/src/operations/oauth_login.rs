@@ -1,14 +1,23 @@
 //! OpenAI desktop-loopback authorization for a managed user's own account.
 //!
-//! The command owns only browser launch and the short-lived loopback callback.
-//! Provider traffic uses the configured account's existing Eggfetch client;
-//! the completed credential set is submitted to the server's authenticated
-//! owner-bound commit route.
+//! The command owns only browser launch, the short-lived loopback callback,
+//! and the optional interactive paste fallback for a browser on another
+//! machine. Provider traffic uses the configured account's existing Eggfetch
+//! client; the completed credential set is submitted to the server's
+//! authenticated owner-bound commit route.
 
-use std::{fs, future::Future, io::Write, net::IpAddr, path::Path, process::Stdio, time::Duration};
+use std::{
+    fs,
+    future::Future,
+    io::{BufRead, Write},
+    net::IpAddr,
+    path::Path,
+    process::Stdio,
+    time::Duration,
+};
 
 use bytes::Bytes;
-use eggpass_auth::{ClientIdPolicy, OAuthClient, OAuthProviderConfig};
+use eggpass_auth::{ClientIdPolicy, OAuthClient, OAuthProviderConfig, OPENAI_ISSUER};
 use http::{
     HeaderValue, Method, Request, StatusCode, Uri,
     header::{AUTHORIZATION, CONTENT_TYPE},
@@ -33,6 +42,8 @@ use crate::{
 };
 
 const CALLBACK_TIMEOUT: Duration = Duration::from_secs(5 * 60);
+const MAX_REJECTED_CALLBACKS: usize = 16;
+const MAX_PASTED_INPUT_BYTES: usize = 8 * 1024;
 const BROWSER_OPEN_CONFIRM_TIMEOUT: Duration = Duration::from_secs(3);
 const CLIPBOARD_TIMEOUT: Duration = Duration::from_secs(3);
 const EXCHANGE_TIMEOUT: Duration = Duration::from_secs(60);
@@ -46,18 +57,10 @@ const MAX_CALLBACK_QUERY_BYTES: usize = 4 * 1024;
 const OAUTH_UPLOAD_PATH: &str = "/api/user/oauth-credentials";
 const OAUTH_REAUTHORIZATION_HINT_PATH: &str = "/api/user/oauth-credentials/hint";
 const OPENAI_INSTALLATION_ID_FILENAME: &str = "openai-installation-id";
-const OPENAI_ISSUER: &str = "https://auth.openai.com";
-const OPENAI_ENTRY_CLIENT_ID: &str = "dynamic_agent_client";
-const OPENAI_RESOURCE: &str = "https://api.openai.com/v1";
+/// EggPool's registration hint. The issuer, endpoints, client-id policy, and
+/// scope set come from the pinned `eggpass-auth` build, so the CLI login and
+/// the server-side refresh cannot describe OpenAI differently.
 const OPENAI_AGENT_NAME: &str = "EggPool";
-const OPENAI_SCOPES: &[&str] = &[
-    "openid",
-    "profile",
-    "email",
-    "offline_access",
-    "resource.invoke",
-    "chatgpt.tokens.use.direct",
-];
 
 #[derive(Debug, Error)]
 pub(crate) enum LoginError {
@@ -116,8 +119,48 @@ struct CallbackConnection {
     callback_url: String,
 }
 
+/// Where a completed authorization callback came from.
+enum CallbackSource {
+    /// The loopback listener accepted a matching request; the browser is
+    /// waiting for its response on this stream.
+    Loopback(CallbackConnection),
+    /// The user pasted the complete callback URL from a browser elsewhere.
+    PastedUrl(String),
+    /// The user pasted a standalone code for a fixed-client-ID provider.
+    PastedCode(String),
+}
+
+/// Interactive prompts for the paste fallback. The CLI adapter owns the
+/// wording; this module only decides when one is needed.
+#[derive(Clone, Copy)]
+pub(crate) enum PasteNotice {
+    /// A pasted callback URL is accepted while the wait is active.
+    Hint,
+    /// The pasted value did not belong to this transaction.
+    Rejected,
+}
+
+/// One event while waiting for the callback.
+enum NextCallback {
+    Connection((TcpStream, std::net::SocketAddr)),
+    Pasted(String),
+    InputClosed,
+}
+
+/// What a pasted line turned out to be.
+enum PastedOutcome {
+    Accept(CallbackSource),
+    Rejected,
+    Denied,
+}
+
 /// Run an OpenAI or xAI authorization-code/PKCE loopback flow. The caller
 /// must obtain the EggPool credential via hidden TTY input or stdin.
+///
+/// In an interactive terminal the command also accepts a pasted callback URL
+/// from a browser on another machine, plus a standalone authorization code for
+/// a fixed-client-ID provider. Both are validated against the same pending
+/// transaction before anything is exchanged.
 pub(crate) async fn login_provider(
     config: &Config,
     provider_id: &str,
@@ -125,6 +168,7 @@ pub(crate) async fn login_provider(
     eggpool_token: &str,
     interactive_tty: bool,
     present_browser: impl FnOnce(BrowserPresentation, &str),
+    present_paste: impl Fn(PasteNotice),
 ) -> Result<(), LoginError> {
     if !config.oauth.enabled {
         return Err(LoginError::Disabled);
@@ -202,6 +246,7 @@ pub(crate) async fn login_provider(
     let authorization_url = pending.authorization_url().to_owned();
     validate_provider_authorization_url(provider_id, &authorization_url)?;
     let authorization = async {
+        let pasted = watch_stdin_for_response(interactive_tty);
         let opener_succeeded = open_browser(&authorization_url).await;
         let copied_to_clipboard = if opener_succeeded {
             false
@@ -211,23 +256,64 @@ pub(crate) async fn login_provider(
         let presentation =
             choose_browser_presentation(opener_succeeded, copied_to_clipboard, interactive_tty)?;
         present_browser(presentation, &authorization_url);
+        if pasted.is_some() {
+            present_paste(PasteNotice::Hint);
+        }
 
-        let callback =
-            wait_for_callback(&listener, &expected_host, &callback_path, &origin).await?;
-        let mut stream = callback.stream;
-        let credentials = match tokio::time::timeout(
-            EXCHANGE_TIMEOUT,
-            client.complete_authorization(pending, &callback.callback_url),
+        let allow_pasted_code = client.provider().client_id_policy() == ClientIdPolicy::Fixed;
+        let callback = wait_for_callback(
+            &listener,
+            &expected_host,
+            &callback_path,
+            &origin,
+            pasted,
+            allow_pasted_code,
+            &present_paste,
+            |url| client.validate_authorization_callback(&pending, url),
         )
-        .await
-        {
+        .await?;
+        // A pasted callback has no browser connection to answer.
+        let (mut stream, exchange) = match callback {
+            CallbackSource::Loopback(CallbackConnection {
+                stream,
+                callback_url,
+            }) => (
+                Some(stream),
+                tokio::time::timeout(
+                    EXCHANGE_TIMEOUT,
+                    client.complete_authorization(pending, &callback_url),
+                )
+                .await,
+            ),
+            CallbackSource::PastedUrl(callback_url) => (
+                None,
+                tokio::time::timeout(
+                    EXCHANGE_TIMEOUT,
+                    client.complete_authorization(pending, &callback_url),
+                )
+                .await,
+            ),
+            CallbackSource::PastedCode(code) => (
+                None,
+                tokio::time::timeout(
+                    EXCHANGE_TIMEOUT,
+                    client.complete_authorization_with_code(pending, &code),
+                )
+                .await,
+            ),
+        };
+        let credentials = match exchange {
             Ok(Ok(credentials)) => credentials,
             _ => {
-                respond_to_callback(&mut stream, false).await;
+                if let Some(stream) = stream.as_mut() {
+                    respond_to_callback(stream, false).await;
+                }
                 return Err(LoginError::AuthorizationFailed);
             }
         };
-        respond_to_callback(&mut stream, true).await;
+        if let Some(mut stream) = stream {
+            respond_to_callback(&mut stream, true).await;
+        }
         upload_credentials(
             config,
             provider_id,
@@ -369,19 +455,10 @@ fn is_canonical_openai_host_id(value: &str) -> bool {
 }
 
 fn openai_provider_config(host_id: String) -> Result<OAuthProviderConfig, LoginError> {
-    OAuthProviderConfig::custom("OpenAI", OPENAI_ISSUER, OPENAI_ENTRY_CLIENT_ID)
-        .authorization_endpoint(format!("{OPENAI_ISSUER}/api/accounts/authorize"))
-        .token_endpoint(format!("{OPENAI_ISSUER}/api/accounts/oauth/token"))
-        .userinfo_endpoint(format!("{OPENAI_ISSUER}/api/accounts/oauth/userinfo"))
-        .revocation_endpoint(format!("{OPENAI_ISSUER}/api/accounts/oauth/revoke"))
-        .callback_path("/auth/callback")
-        .client_id_policy(ClientIdPolicy::IssuedOnRegistration)
-        .scopes(OPENAI_SCOPES.iter().copied())
-        .authorization_parameter("resource", OPENAI_RESOURCE)
-        .authorization_parameter("ext_agent_host_id", host_id)
-        .registration_parameter("agent_name_hint", OPENAI_AGENT_NAME)
-        .token_parameter("resource", OPENAI_RESOURCE)
-        .build()
+    OAuthProviderConfig::openai_with_host_id(host_id)
+        .and_then(|provider| {
+            provider.with_registration_parameter("agent_name_hint", OPENAI_AGENT_NAME)
+        })
         .map_err(|_| LoginError::AuthorizationRequest)
 }
 
@@ -461,29 +538,144 @@ fn validate_xai_authorization_url(raw: &str) -> Result<(), LoginError> {
     Ok(())
 }
 
-async fn wait_for_callback(
+/// Watch stdin for a pasted callback URL or fixed-client authorization code.
+///
+/// Returns `None` unless the caller has an interactive terminal. Reading a
+/// pipe would consume scripted input, and a login that cannot be completed
+/// from this machine must not block on a stream nobody is typing into.
+fn watch_stdin_for_response(
+    interactive_tty: bool,
+) -> Option<tokio::sync::mpsc::UnboundedReceiver<String>> {
+    if !interactive_tty {
+        return None;
+    }
+    let (sender, receiver) = tokio::sync::mpsc::unbounded_channel();
+    std::thread::spawn(move || {
+        let stdin = std::io::stdin();
+        let mut line = String::new();
+        loop {
+            line.clear();
+            match stdin.lock().read_line(&mut line) {
+                Ok(0) => break,
+                Ok(_) => {
+                    let value = line.trim().to_owned();
+                    if value.is_empty() {
+                        continue;
+                    }
+                    if sender.send(value).is_err() {
+                        break;
+                    }
+                }
+                Err(_) => break,
+            }
+        }
+    });
+    Some(receiver)
+}
+
+/// Whether a pasted line could be an authorization code.
+///
+/// Codes are opaque, so this only rules out what clearly is not one: too
+/// short, too long, whitespace, or non-printable content.
+fn looks_like_authorization_code(value: &str) -> bool {
+    (8..=512).contains(&value.len())
+        && !value.chars().any(char::is_whitespace)
+        && value.chars().all(|character| character.is_ascii_graphic())
+}
+
+/// Classify one pasted line without consuming the pending transaction.
+fn pasted_callback<F>(raw: &str, allow_pasted_code: bool, validate_callback_url: F) -> PastedOutcome
+where
+    F: Fn(&str) -> Result<(), eggpass_auth::Error>,
+{
+    let value = raw.trim();
+    if value.is_empty() || value.len() > MAX_PASTED_INPUT_BYTES {
+        return PastedOutcome::Rejected;
+    }
+    // A browser callback always carries a scheme; the shared validator owns
+    // origin, exact path, state, and the issued client ID.
+    if value.contains("://") {
+        return match validate_callback_url(value) {
+            Ok(()) => PastedOutcome::Accept(CallbackSource::PastedUrl(value.to_owned())),
+            Err(eggpass_auth::Error::ProviderDenied(_)) => PastedOutcome::Denied,
+            Err(_) => PastedOutcome::Rejected,
+        };
+    }
+    if allow_pasted_code && looks_like_authorization_code(value) {
+        PastedOutcome::Accept(CallbackSource::PastedCode(value.to_owned()))
+    } else {
+        PastedOutcome::Rejected
+    }
+}
+
+#[allow(clippy::too_many_arguments)]
+async fn wait_for_callback<F>(
     listener: &TcpListener,
     expected_host: &str,
     expected_path: &str,
     origin: &str,
-) -> Result<CallbackConnection, LoginError> {
+    mut pasted: Option<tokio::sync::mpsc::UnboundedReceiver<String>>,
+    allow_pasted_code: bool,
+    present_paste: impl Fn(PasteNotice),
+    validate_callback_url: F,
+) -> Result<CallbackSource, LoginError>
+where
+    F: Fn(&str) -> Result<(), eggpass_auth::Error>,
+{
+    // A foreign or malformed connection — a prefetch, a stale tab, or a local
+    // scanner — is answered and ignored, and a pasted value that fails the
+    // shared validator keeps the transaction available. Only a value that
+    // matches this transaction ends the wait, matching the Eggpass reference
+    // listener. The rejection budget keeps a local flood from pinning the
+    // command past its deadline.
     let accept = async {
-        let (mut stream, peer) = listener
-            .accept()
-            .await
-            .map_err(|_| LoginError::CallbackListener)?;
-        if !peer.ip().is_loopback() {
-            respond_to_callback(&mut stream, false).await;
-            return Err(LoginError::InvalidCallback);
-        }
-        match read_callback_url(&mut stream, expected_host, expected_path, origin).await {
-            Ok(callback_url) => Ok(CallbackConnection {
-                stream,
-                callback_url,
-            }),
-            Err(()) => {
-                respond_to_callback(&mut stream, false).await;
-                Err(LoginError::InvalidCallback)
+        let mut rejected = 0_usize;
+        loop {
+            let next = match pasted.as_mut() {
+                Some(receiver) => tokio::select! {
+                    accepted = listener.accept() => accepted
+                        .map(NextCallback::Connection)
+                        .map_err(|_| LoginError::CallbackListener)?,
+                    line = receiver.recv() => match line {
+                        Some(line) => NextCallback::Pasted(line),
+                        None => NextCallback::InputClosed,
+                    },
+                },
+                None => listener
+                    .accept()
+                    .await
+                    .map(NextCallback::Connection)
+                    .map_err(|_| LoginError::CallbackListener)?,
+            };
+            match next {
+                NextCallback::InputClosed => {
+                    pasted = None;
+                    continue;
+                }
+                NextCallback::Pasted(line) => {
+                    match pasted_callback(&line, allow_pasted_code, &validate_callback_url) {
+                        PastedOutcome::Accept(source) => return Ok(source),
+                        PastedOutcome::Denied => return Err(LoginError::AuthorizationFailed),
+                        PastedOutcome::Rejected => present_paste(PasteNotice::Rejected),
+                    }
+                }
+                NextCallback::Connection((mut stream, peer)) => {
+                    if peer.ip().is_loopback()
+                        && let Ok(callback_url) =
+                            read_callback_url(&mut stream, expected_host, expected_path, origin)
+                                .await
+                    {
+                        return Ok(CallbackSource::Loopback(CallbackConnection {
+                            stream,
+                            callback_url,
+                        }));
+                    }
+                    respond_to_callback(&mut stream, false).await;
+                }
+            }
+            rejected = rejected.saturating_add(1);
+            if rejected >= MAX_REJECTED_CALLBACKS {
+                return Err(LoginError::InvalidCallback);
             }
         }
     };
@@ -1189,9 +1381,21 @@ mod tests {
             .await
             .expect("write browser callback request");
 
-        let callback = wait_for_callback(&listener, &host, "/auth/callback", &origin)
-            .await
-            .expect("accept browser callback over loopback socket");
+        let callback = wait_for_callback(
+            &listener,
+            &host,
+            "/auth/callback",
+            &origin,
+            None,
+            false,
+            |_| {},
+            |_| Ok(()),
+        )
+        .await
+        .expect("accept browser callback over loopback socket");
+        let CallbackSource::Loopback(callback) = callback else {
+            panic!("a loopback request must not be reported as a paste");
+        };
         assert_eq!(
             callback.callback_url,
             format!(
@@ -1209,6 +1413,191 @@ mod tests {
             .await
             .expect("read callback response");
         assert!(response.starts_with(b"HTTP/1.1 200 OK\r\n"));
+    }
+
+    #[tokio::test]
+    async fn callback_reader_ignores_foreign_requests_until_the_transaction_matches() {
+        let listener = TcpListener::bind(("127.0.0.1", 0))
+            .await
+            .expect("loopback callback listener");
+        let address = listener.local_addr().expect("loopback callback address");
+        let host = format!("127.0.0.1:{}", address.port());
+        let origin = format!("http://{host}");
+        let host_for_wait = host.clone();
+        let origin_for_wait = origin.clone();
+        let waiting = tokio::spawn(async move {
+            wait_for_callback(
+                &listener,
+                &host_for_wait,
+                "/auth/callback",
+                &origin_for_wait,
+                None,
+                false,
+                |_| {},
+                |_| Ok(()),
+            )
+            .await
+        });
+
+        let mut stray = TcpStream::connect(address).await.expect("stray connection");
+        stray
+            .write_all(format!("GET /favicon.ico HTTP/1.1\r\nHost: {host}\r\n\r\n").as_bytes())
+            .await
+            .expect("write stray request");
+        let mut stray_response = Vec::new();
+        stray
+            .read_to_end(&mut stray_response)
+            .await
+            .expect("read stray response");
+        assert!(stray_response.starts_with(b"HTTP/1.1 400 Bad Request\r\n"));
+
+        let mut browser = TcpStream::connect(address)
+            .await
+            .expect("browser connection");
+        let request = format!(
+            "GET /auth/callback?code=fixture-code&state=fixture-state HTTP/1.1\r\nHost: {host}\r\nConnection: close\r\n\r\n"
+        );
+        browser
+            .write_all(request.as_bytes())
+            .await
+            .expect("write callback request");
+
+        let callback = waiting
+            .await
+            .expect("callback wait task")
+            .expect("the matching callback still completes the login");
+        let CallbackSource::Loopback(callback) = callback else {
+            panic!("a loopback request must not be reported as a paste");
+        };
+        assert_eq!(
+            callback.callback_url,
+            format!("{origin}/auth/callback?code=fixture-code&state=fixture-state")
+        );
+    }
+
+    #[tokio::test]
+    async fn a_pasted_callback_url_completes_the_wait_without_a_loopback_request() {
+        let listener = TcpListener::bind(("127.0.0.1", 0))
+            .await
+            .expect("loopback callback listener");
+        let (sender, receiver) = tokio::sync::mpsc::unbounded_channel();
+        let expected = "http://127.0.0.1:43123/auth/callback?code=pasted-code&state=pasted-state";
+        sender.send(expected.to_owned()).expect("paste queued");
+        let callback = wait_for_callback(
+            &listener,
+            "127.0.0.1:43123",
+            "/auth/callback",
+            "http://127.0.0.1:43123",
+            Some(receiver),
+            false,
+            |_| {},
+            |value| {
+                if value == expected {
+                    Ok(())
+                } else {
+                    Err(eggpass_auth::Error::CallbackMismatch)
+                }
+            },
+        )
+        .await
+        .expect("a matching paste completes the login");
+        assert!(matches!(callback, CallbackSource::PastedUrl(url) if url == expected));
+    }
+
+    #[tokio::test]
+    async fn a_pasted_code_is_only_accepted_for_a_fixed_client_id_profile() {
+        let listener = TcpListener::bind(("127.0.0.1", 0))
+            .await
+            .expect("loopback callback listener");
+        let address = listener.local_addr().expect("loopback callback address");
+        let host = format!("127.0.0.1:{}", address.port());
+        let origin = format!("http://{host}");
+        let (sender, receiver) = tokio::sync::mpsc::unbounded_channel();
+        sender
+            .send("SplxlOBeZQQYbYS6WxSbIA".to_owned())
+            .expect("code queued");
+        let notices = std::sync::Arc::new(std::sync::atomic::AtomicUsize::new(0));
+        let notice_seen = std::sync::Arc::new(tokio::sync::Notify::new());
+        let notices_for_wait = notices.clone();
+        let seen_for_wait = notice_seen.clone();
+        let host_for_wait = host.clone();
+        let origin_for_wait = origin.clone();
+        let waiting = tokio::spawn(async move {
+            wait_for_callback(
+                &listener,
+                &host_for_wait,
+                "/auth/callback",
+                &origin_for_wait,
+                Some(receiver),
+                false,
+                move |notice| {
+                    if matches!(notice, PasteNotice::Rejected) {
+                        notices_for_wait.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+                        seen_for_wait.notify_one();
+                    }
+                },
+                |_| Err(eggpass_auth::Error::CallbackMismatch),
+            )
+            .await
+        });
+        notice_seen.notified().await;
+        assert_eq!(notices.load(std::sync::atomic::Ordering::SeqCst), 1);
+
+        let mut browser = TcpStream::connect(address)
+            .await
+            .expect("browser connection");
+        let request = format!(
+            "GET /auth/callback?code=fixture-code&state=fixture-state HTTP/1.1\r\nHost: {host}\r\nConnection: close\r\n\r\n"
+        );
+        browser
+            .write_all(request.as_bytes())
+            .await
+            .expect("write callback request");
+        let callback = waiting
+            .await
+            .expect("callback wait task")
+            .expect("the loopback callback still completes the login");
+        assert!(matches!(callback, CallbackSource::Loopback(_)));
+    }
+
+    #[tokio::test]
+    async fn a_denied_paste_fails_the_login_instead_of_waiting() {
+        let listener = TcpListener::bind(("127.0.0.1", 0))
+            .await
+            .expect("loopback callback listener");
+        let (sender, receiver) = tokio::sync::mpsc::unbounded_channel();
+        sender
+            .send("http://127.0.0.1:43123/auth/callback?error=access_denied&state=state".to_owned())
+            .expect("denial queued");
+        let error = match wait_for_callback(
+            &listener,
+            "127.0.0.1:43123",
+            "/auth/callback",
+            "http://127.0.0.1:43123",
+            Some(receiver),
+            false,
+            |_| {},
+            |_| {
+                Err(eggpass_auth::Error::ProviderDenied(
+                    "access_denied".to_owned(),
+                ))
+            },
+        )
+        .await
+        {
+            Ok(_) => panic!("a provider denial ends the login"),
+            Err(error) => error,
+        };
+        assert!(matches!(error, LoginError::AuthorizationFailed));
+    }
+
+    #[test]
+    fn pasted_authorization_codes_are_recognised_by_shape() {
+        assert!(looks_like_authorization_code("SplxlOBeZQQYbYS6WxSbIA"));
+        assert!(looks_like_authorization_code("abc-123_DEF.456"));
+        assert!(!looks_like_authorization_code("short"));
+        assert!(!looks_like_authorization_code("two words here"));
+        assert!(!looks_like_authorization_code(&"x".repeat(513)));
     }
 
     #[test]

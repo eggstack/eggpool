@@ -545,10 +545,14 @@ accounts. The available flows are deliberately distinct:
 
 - Web UI: xAI device-code only.
 - Desktop CLI: OpenAI and xAI authorization-code/PKCE through an ephemeral
-  loopback listener bound to `127.0.0.1`; the browser must run on the same
-  machine. The CLI receives its self-only OAuth-write credential from the
-  authenticated Web UI and accepts it through a hidden prompt or stdin. There
-  is no OpenAI Web UI callback on EggPool's listener.
+  loopback listener bound to `127.0.0.1`. A browser on the same machine
+  completes the callback directly; in an interactive terminal the command also
+  accepts a pasted callback URL from another machine, and a standalone
+  authorization code for xAI, a fixed-client-ID provider. Both are validated
+  against the same pending transaction before the code is exchanged. The CLI
+  receives its self-only OAuth-write credential from the authenticated Web UI
+  and accepts it through a hidden prompt or stdin. There is no OpenAI Web UI
+  callback on EggPool's listener.
 
 Each completed grant belongs to one managed user, provider, and configured
 account. The credential set is stored outside SQLite in the private

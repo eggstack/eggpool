@@ -37,7 +37,7 @@ Command list verified against `eggpool help` (0.8.3).
 | `eggpool modelinfo aliases` | Show model aliases |
 | `eggpool modelinfo repair` | Repair legacy canonical model-info detail blocks |
 
-`accounts oauth-login` supports only configured OpenAI and xAI OAuth accounts. It binds an ephemeral callback listener to `127.0.0.1`, so the browser must run on the same machine; it never opens a public callback. The user's OAuth-write credential is issued through the authenticated Web UI and is not accepted in argv or environment variables. A failed, canceled, or timed-out login does not replace the previous credential. Local tests do not verify provider registration, live behavior, or provider terms.
+`accounts oauth-login` supports only configured OpenAI and xAI OAuth accounts. It binds an ephemeral callback listener to `127.0.0.1` and never opens a public callback. In an interactive terminal it also accepts a pasted callback URL from a browser on another machine, and a standalone authorization code for xAI, a fixed-client-ID provider; both are validated against the same pending transaction before the code is exchanged. The user's OAuth-write credential is issued through the authenticated Web UI and is not accepted in argv or environment variables. A failed, canceled, or timed-out login does not replace the previous credential. Local tests do not verify provider registration, live behavior, or provider terms.
 
 ## Stats & insight
 

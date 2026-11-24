@@ -1309,7 +1309,7 @@ async fn accounts(path: &Path, command: crate::cli::AccountsCommand) -> Result<(
                 _ => "OAuth provider",
             };
             println!(
-                "Starting {provider_label} authorization for configured account {}. Complete sign-in on this computer.",
+                "Starting {provider_label} authorization for configured account {}.",
                 args.account
             );
             let interactive_tty = io::stdin().is_terminal() && io::stdout().is_terminal();
@@ -1323,13 +1323,13 @@ async fn accounts(path: &Path, command: crate::cli::AccountsCommand) -> Result<(
                     crate::operations::oauth_login::BrowserPresentation::BrowserOpenerSucceeded => {}
                     crate::operations::oauth_login::BrowserPresentation::CopiedToClipboard => {
                         println!(
-                            "Browser launch could not be confirmed; the authorization URL was copied to the clipboard. Paste it into a browser on this computer."
+                            "Browser launch could not be confirmed; the authorization URL was copied to the clipboard. Paste it into a browser, then paste the resulting callback URL back here when prompted."
                         );
                     }
                     crate::operations::oauth_login::BrowserPresentation::ManualUrl => {
                         if io::stdin().is_terminal() && io::stdout().is_terminal() {
                             println!(
-                                "Browser launch could not be confirmed and clipboard access is unavailable. Open this authorization URL in a browser on this computer:\n{authorization_url}"
+                                "Browser launch could not be confirmed and clipboard access is unavailable. Open this authorization URL in a browser, then paste the resulting callback URL back here:\n{authorization_url}"
                             );
                         } else {
                             println!(
@@ -1337,6 +1337,14 @@ async fn accounts(path: &Path, command: crate::cli::AccountsCommand) -> Result<(
                             );
                         }
                     }
+                },
+                |notice| match notice {
+                    crate::operations::oauth_login::PasteNotice::Hint => println!(
+                        "If the browser runs on another machine, copy the complete callback URL from its address bar and paste it here."
+                    ),
+                    crate::operations::oauth_login::PasteNotice::Rejected => println!(
+                        "That value does not match this login. Paste the complete callback URL from the browser address bar."
+                    ),
                 },
             )
             .await
