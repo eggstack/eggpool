@@ -1,6 +1,6 @@
 # Provider OAuth Milestone 003 — Desktop CLI loopback PKCE login
 
-Status: active
+Status: implemented
 
 Repository baseline: 5b212d2d69137b99ed39f0dbeab10331c839e54e
 
@@ -188,3 +188,9 @@ Read ADR-0012, ADR-0013, M001’s account identity/credential-commit interface, 
 ## 17. Append-only flow-scope amendment — ADR-0014
 
 M003 remains the desktop loopback authorization-code/PKCE flow for both OpenAI and xAI. The OpenAI browser callback is hosted only by the CLI's ephemeral loopback listener; M002 no longer provides OpenAI Web UI login or any OpenAI callback route/configuration on EggPool's listener. This amendment supersedes conflicting M002 descriptions in this plan but does not change M003's owner-bound upload, loopback-only listener, PKCE/state, or M001 atomic-commit requirements. See `plans/adrs/ADR-0014-provider-oauth-web-ui-and-desktop-flow-boundary.md`.
+
+## 18. Append-only credential-refresh amendment — ADR-0015
+
+ADR-0015 is accepted and supersedes this plan's no-401-replay wording — §4's "Do not add a Web UI callback route, automatic HTTP 401 replay, or provider transport policy", §8's closing sentence, and §13's "No consumer-subscription pooling, cross-account fallback, or HTTP 401 replay is introduced". That wording remains historical and is not rewritten.
+
+An upstream HTTP 401 on an owner-bound OAuth account is now handled by M004's owner-scoped credential-refresh retry: the owner's credential for that same account is refreshed and the same request is retried against the same account exactly once. Nothing in this milestone's flow changes. The CLI still binds only 127.0.0.1 on an ephemeral port, still applies PKCE/state and exact-callback validation, still commits only through `POST /api/user/oauth-credentials` from the verified principal, and still preserves the previous credential on every failure path. The retry never reselects an account, never crosses a user or owner boundary, never pools credentials, and adds no provider transport policy or callback listener. This amendment makes no provider-support or provider-registration claim.

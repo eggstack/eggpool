@@ -102,7 +102,7 @@ Security hardening (2026-11-17, baseline `dcbd820e9b978d47bd43d237eded1f488d3449
 | Embedding routing | closing | [embedding routing roadmap](subsystems/embedding-routing-roadmap.md) | E001 conditionally closed; corrective E002 closed | E002 compatibility and full Rust/dependency verification are complete. Retrieval R002 is closed: embeddings stay and document retrieval is out of scope. SBC footprint evidence gates only device-specific deployment claims. |
 | Retrieval interoperability | closed | [retrieval interoperability roadmap](subsystems/retrieval-interoperability-roadmap.md) | R002 closed; R001 superseded for execution | R001's blocked closure stays historical. R002 is documentation only. No successor registered. |
 | Provider transport | closed | `plans/subsystems/provider-transport-roadmap.md` | M006 closed — Eggress 1.0.12 dependency refresh and requalification | M001–M006 closed; no successor registered. |
-| Provider OAuth | active | [provider OAuth roadmap](subsystems/provider-oauth-roadmap.md) | M001 closed — credential lifecycle/dispatch; M002 conditionally closed — xAI Web UI device-code; M003 active — xAI/OpenAI desktop loopback PKCE; M004 closed — owner-scoped OAuth 401 credential-refresh retry | ADR-0012/0013 remain historical accepted records; ADR-0014 supersedes only ADR-0012’s OpenAI M002 callback flow; ADR-0015 supersedes only the no-401-replay clause. M001 used the approved single-version Eggfetch 0.4.0 move and provider-transport requalification. |
+| Provider OAuth | active | [provider OAuth roadmap](subsystems/provider-oauth-roadmap.md) | M001 closed — credential lifecycle/dispatch; M002 conditionally closed — xAI Web UI device-code; M003 conditionally closed — xAI/OpenAI desktop loopback PKCE; M004 closed — owner-scoped OAuth 401 credential-refresh retry | ADR-0012/0013 remain historical accepted records; ADR-0014 supersedes only ADR-0012’s OpenAI M002 callback flow; ADR-0015 supersedes only the no-401-replay clause. M001 used the approved single-version Eggfetch 0.4.0 move and provider-transport requalification. |
 | Provider profile metadata corrective | closed | `plans/subsystems/provider-profile-metadata-corrective-roadmap.md` | M001 closed — provider template endpoint/source reconciliation | M001 terminal; no successor registered. |
 | Provider profile metadata planning/documentation reconciliation | closed | `plans/subsystems/provider-profile-metadata-planning-reconciliation-corrective-roadmap.md` | C001 closed — closed-roadmap/source-truth reconciliation | No successor registered. |
 | Security hardening | active | [security hardening roadmap](subsystems/security-hardening-roadmap.md) | M001–M005, M007, M009 active; M006, M008 blocked | Review baseline `dcbd820e9b`; M006 needs a signature-authority ADR and key custody; M008 needs an Eggress release permitting `russh >=0.65` or an approved vendoring/no-SSH ADR. |
@@ -341,7 +341,7 @@ persistence roadmap.
 | Subsystem | Milestone | Status | Implementation plan | Handoff note |
 |---|---|---|---|---|
 
-| Provider OAuth | M003 — desktop CLI loopback PKCE login | active | [M003](implementation/provider-oauth/003-desktop-loopback-browser-login.md) | Active against M001’s account and credential-commit interface. |
+No implementation plan is currently registered as active. Provider OAuth M001–M004 are recorded in the recently-closed table.
 
 Unblock audit (on-prem member access, 2026-11-10): M001–M005 are closed by their own records. ADR-0010 stays accepted. Searched the member-access roadmap, its implementation plans, and the ready, active, and blocked tables. No successor is registered. Nothing else was waiting on this roadmap, so nothing is promoted. On-prem user access M001–M024 stay closed.
 
@@ -502,6 +502,7 @@ Historical M007 blocker assessment at baseline `7e241ad` (`plans/closure/persist
 | Provider OAuth M004 — owner-scoped OAuth 401 credential-refresh retry | closed — an upstream 401 on an owner-bound OAuth account refreshes that owner's credential and retries the same request against the same account exactly once; the retry holds the account constant, re-offers the rejected wire surface, never reselects an account, never crosses an owner boundary, and never pools credentials; a failed refresh or a second rejection terminalizes the request and disables the account; the published retry vocabulary and the failure classifier's recorded output are unchanged; default and no-default serial suites and the exact-head CI run pass; no live provider support is claimed | `plans/closure/provider-oauth/004-status.md`; implementation `fe8be969`, review follow-up `49cb609b` |
 | Provider OAuth M001 — credential lifecycle and dispatch | closed — one complete credential set per managed user, provider, and account lives outside SQLite under `.eggpool-oauth/` with `0700`/`0600` permissions, a hashed filename bound to the owner tuple, per-identity OS locks, atomic rotation, interrupted-restore recovery, and backup/restore membership; `[oauth].enabled` defaults on and disabling blocks refresh and routing while retaining bytes; tokens resolve into owned values before synchronous attempt preparation and no cross-account, cross-user, or cross-owner replay or fallback exists; no login surface and no provider-registration claim | `plans/closure/provider-oauth/001-status.md`; implementation `a78d40be` |
 | Provider OAuth M002 — authenticated xAI Web UI device-code login | conditionally closed — the session-bound device flow starts, polls, cancels, commits, and reports bounded status only for the initiating managed user through M001's atomic store, with CSRF on every mutation, validated xAI verification hosts, grant-revocation discard, and no persisted flow state; the OpenAI Web UI callback and its configuration are absent per ADR-0014; exact xAI device-code registration and live behavior are unverified | `plans/closure/provider-oauth/002-status.md`; implementation `a78d40be` |
+| Provider OAuth M003 — desktop CLI loopback PKCE login | conditionally closed — `accounts oauth-login` completes authorization-code/PKCE for xAI and OpenAI on a `127.0.0.1:0` listener, validates the exact loopback callback, and uploads through the self-only `oauth_credentials_write` route that derives the owner only from the verified principal and commits through M001; failures, cancellation, and disablement preserve the prior credential; exact xAI/OpenAI loopback registration and live behavior are unverified | `plans/closure/provider-oauth/003-status.md`; implementation `a78d40be` |
 
 ## Unblock audit
 
@@ -1019,3 +1020,20 @@ blocked registry tables: M001 is closed, M003 remains `active` on its own
 provider-registration condition, and no other registered plan depends on M002,
 so nothing is promoted and the blocked-work table is unchanged. No corrective
 plan is registered.
+
+Provider OAuth M003 closure audit (2026-11-24, baseline `a78d40be`): M003 is
+conditionally closed through `plans/closure/provider-oauth/003-status.md`. The
+plan header moves from `active` to `implemented`; the M003 milestone-status row
+in the provider OAuth roadmap moves from `active` to `conditionally closed` and
+links the closure record; and the M003 row leaves the active
+implementation-plans table for the recently-closed table. The condition is
+exact xAI and OpenAI loopback redirect and PKCE client registration plus live
+loopback login evidence, which this environment cannot produce; the record
+names the risk and the exact future evidence, and no live provider support is
+claimed. Searched the registered Provider OAuth plans, the subsystem dependency
+graph, and the ready, active, and blocked registry tables: M001 is closed, M002
+is conditionally closed, no Provider OAuth implementation plan remains active,
+and no registered plan outside this subsystem depends on M003, so nothing is
+promoted and the blocked-work table is unchanged. The roadmap stays `active`
+only for the two conditional evidence conditions. No corrective plan is
+registered.

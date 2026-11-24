@@ -176,7 +176,7 @@ M001 closes with secure per-user storage, backup/restore, gate semantics, proact
 |---|---|---|---|---|
 | M001 | closed | ../implementation/provider-oauth/001-oauth-credential-lifecycle-and-dispatch.md | ../closure/provider-oauth/001-status.md | Closed; ADR-0015 supersedes only the plan's no-401-replay clause (§17) |
 | M002 | conditionally closed | ../implementation/provider-oauth/002-authenticated-web-ui-provider-login.md | ../closure/provider-oauth/002-status.md | Local fixtures pass; exact xAI device-code registration and live behavior remain (§11 condition) |
-| M003 | active | ../implementation/provider-oauth/003-desktop-loopback-browser-login.md | — | M001 account identity/commit interface plus scoped `oauth_credentials_write` route; verify exact provider loopback registrations before closure |
+| M003 | conditionally closed | ../implementation/provider-oauth/003-desktop-loopback-browser-login.md | ../closure/provider-oauth/003-status.md | Local fixtures pass; exact xAI and OpenAI loopback registration and live behavior remain (§11 condition) |
 | M004 | closed | ../implementation/provider-oauth/004-oauth-401-credential-refresh-retry.md | ../closure/provider-oauth/004-status.md | ADR-0015 supersedes the no-replay clause; local-stub evidence only, exact provider registration remains an M001–M003 condition |
 
 
@@ -240,3 +240,12 @@ This note records the M002 closure. It does not rewrite the earlier text, and it
 - ADR-0014's narrowing is in force: M002 is xAI Web UI device-code only. No OpenAI callback route and no callback-origin setting exists.
 - The condition is exact xAI device-code client registration plus live device-flow evidence. The closure record names the risk and the exact future evidence, and local stubs do not establish live provider support.
 - M001 is closed. M003 stays `active` and is neither promoted nor reopened.
+
+## 18. Append-only closure note — M003
+
+This note records the M003 closure. It does not rewrite the earlier text, and it does not change the M001 or M002 boundaries.
+
+- M003 is conditionally closed through `plans/closure/provider-oauth/003-status.md`. `eggpool accounts oauth-login` completes authorization-code/PKCE for xAI and OpenAI on a listener bound to `127.0.0.1:0`, validates the exact loopback callback, exchanges the code, and uploads through `POST /api/user/oauth-credentials`.
+- The self-only `oauth_credentials_write` scope and the two credential routes are part of this milestone. The route requires the single scope, derives the owner only from the verified principal, accepts no owner field, and commits through M001's atomic store.
+- The condition is exact xAI and OpenAI loopback redirect and PKCE client registration plus live loopback login evidence. The closure record names the risk and the exact future evidence; local stubs do not establish live provider support.
+- M001 is closed and M002 is conditionally closed. No Provider OAuth implementation plan remains active, and the roadmap stays `active` only for the two conditional evidence conditions.
