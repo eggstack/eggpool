@@ -287,6 +287,8 @@ impl StreamingCoordinator {
         let mut excluded_accounts = BTreeSet::new();
         let mut preferred_account = None;
         let mut attempted_wires: BTreeMap<String, BTreeSet<WireSurface>> = BTreeMap::new();
+        // The account and wire surface a credential-refresh retry must reuse.
+        let mut pinned_wire: Option<(String, WireSurface)> = None;
         let mut last_identity: Option<FinalizationIdentity> = None;
         let mut last_upstream: Option<LastUpstream> = None;
         // Last pre-handoff failure facts (effects, status, upstream
@@ -446,12 +448,31 @@ impl StreamingCoordinator {
             let attempted = attempted_wires
                 .entry(claim.account_name().to_owned())
                 .or_default();
-            let Some(candidate) = resolution
-                .candidates
-                .iter()
-                .find(|candidate| !attempted.contains(&candidate.surface()))
-                .cloned()
-            else {
+            // A credential-refresh retry holds the account and the wire
+            // surface constant: the provider rejected a stale credential, not
+            // the surface. The pinned surface is offered again whenever the
+            // resolver still has it; otherwise the account's next candidate
+            // is used.
+            let pinned = pinned_wire
+                .as_ref()
+                .filter(|(account, _)| account.as_str() == claim.account_name())
+                .map(|(_, surface)| *surface);
+            let selected = pinned
+                .and_then(|surface| {
+                    resolution
+                        .candidates
+                        .iter()
+                        .find(|candidate| candidate.surface() == surface)
+                        .cloned()
+                })
+                .or_else(|| {
+                    resolution
+                        .candidates
+                        .iter()
+                        .find(|candidate| !attempted.contains(&candidate.surface()))
+                        .cloned()
+                });
+            let Some(candidate) = selected else {
                 claim.rollback_claim()?;
                 excluded_accounts.insert(claim.account_name().to_owned());
                 preferred_account = None;
@@ -784,10 +805,17 @@ impl StreamingCoordinator {
                                 if refreshed.is_some() {
                                     oauth_credential_refreshed = true;
                                     // The wire surface was not the fault: the
-                                    // credential was. Clearing the account's
-                                    // attempted surfaces lets the retry reuse
-                                    // the same surface.
-                                    attempted_wires.remove(&identity.account_name);
+                                    // credential was. The retry re-offers the
+                                    // rejected surface and holds the account
+                                    // constant.
+                                    let failed_surface = candidate.surface();
+                                    if let Some(attempted) =
+                                        attempted_wires.get_mut(&identity.account_name)
+                                    {
+                                        attempted.remove(&failed_surface);
+                                    }
+                                    pinned_wire =
+                                        Some((identity.account_name.clone(), failed_surface));
                                     let healed =
                                         crate::coordinator::healed_credential_refresh_effects(
                                             &effects,
@@ -1502,18 +1530,15 @@ impl StreamingCoordinator {
         effects: &FailureEffects,
     ) {
         *attempt_number = (*attempt_number).saturating_add(1);
-        match effects.retry_scope {
-            // The alternate-wire retry holds the account constant while the
-            // failed wire candidate is retired; the credential-refresh retry
-            // holds the account constant and resubmits the same request with
-            // the refreshed credential.
-            RetryScope::Wire | RetryScope::AccountCredentialRefresh => {
-                *preferred_account = Some(identity.account_name.clone());
-            }
-            _ => {
-                excluded_accounts.insert(identity.account_name.clone());
-                *preferred_account = None;
-            }
+        // The alternate-wire retry holds the account constant while the failed
+        // wire candidate is retired. The credential-refresh retry reuses that
+        // scope because it resubmits the same request with the owner's
+        // refreshed credential, so the account must stay constant too.
+        if effects.retry_scope == RetryScope::Wire {
+            *preferred_account = Some(identity.account_name.clone());
+        } else {
+            excluded_accounts.insert(identity.account_name.clone());
+            *preferred_account = None;
         }
     }
 

@@ -35,6 +35,8 @@ const ACCESS_TOKEN: &str = "oauth-access-dispatch-sentinel";
 const USER_ID: &str = "oauth-owner";
 const ACCOUNT_NAME: &str = "oauth-account";
 const MODEL_ID: &str = "gpt-oauth-fixture";
+const STATIC_ACCOUNT_NAME: &str = "static-fallback-account";
+const STATIC_ACCOUNT_KEY: &str = "oauth-fallback-static-key-sentinel";
 
 #[derive(Clone)]
 struct CaptureLogs(Arc<Mutex<Vec<u8>>>);
@@ -201,9 +203,8 @@ async fn database_contains(database: &Database, secret: &'static str) -> bool {
     database
         .call(move |connection| {
             let tables = {
-                let mut statement = connection.prepare(
-                    "SELECT name FROM sqlite_master WHERE type = 'table' AND name NOT LIKE 'sqlite_%'",
-                )?;
+                let mut statement =
+                    connection.prepare("SELECT name FROM sqlite_master WHERE type = 'table'")?;
                 statement
                     .query_map([], |row| row.get::<_, String>(0))?
                     .collect::<Result<Vec<_>, _>>()?
@@ -221,7 +222,9 @@ async fn database_contains(database: &Database, secret: &'static str) -> bool {
                             _ => None,
                         };
                         if bytes.is_some_and(|value| {
-                            value.windows(secret.len()).any(|window| window == secret.as_slice())
+                            value
+                                .windows(secret.len())
+                                .any(|window| window == secret.as_slice())
                         }) {
                             return Ok(true);
                         }
@@ -232,6 +235,90 @@ async fn database_contains(database: &Database, secret: &'static str) -> bool {
         })
         .await
         .expect("database secret scan")
+}
+
+async fn database_table_contains(
+    database: &Database,
+    table: &'static str,
+    secret: &'static str,
+) -> bool {
+    let table = table.to_owned();
+    let secret = secret.as_bytes().to_vec();
+    database
+        .call(move |connection| {
+            let escaped = table.replace('"', r#""""#);
+            let mut statement = connection.prepare(&format!(r#"SELECT * FROM "{escaped}""#))?;
+            let columns = statement.column_count();
+            let mut rows = statement.query([])?;
+            while let Some(row) = rows.next()? {
+                for index in 0..columns {
+                    let bytes = match row.get_ref(index)? {
+                        tokio_rusqlite::rusqlite::types::ValueRef::Text(value)
+                        | tokio_rusqlite::rusqlite::types::ValueRef::Blob(value) => Some(value),
+                        _ => None,
+                    };
+                    if bytes.is_some_and(|value| {
+                        value
+                            .windows(secret.len())
+                            .any(|window| window == secret.as_slice())
+                    }) {
+                        return Ok(true);
+                    }
+                }
+            }
+            Ok(false)
+        })
+        .await
+        .expect("database attempt secret scan")
+}
+
+async fn database_account_scoped_rows(
+    database: &Database,
+    account_name: &'static str,
+) -> Vec<(String, i64)> {
+    let account_name = account_name.to_owned();
+    database
+        .call(move |connection| {
+            let account_id = connection.query_row(
+                "SELECT id FROM accounts WHERE name = ?1",
+                [&account_name],
+                |row| row.get::<_, i64>(0),
+            )?;
+            let tables = {
+                let mut statement =
+                    connection.prepare("SELECT name FROM sqlite_master WHERE type = 'table'")?;
+                statement
+                    .query_map([], |row| row.get::<_, String>(0))?
+                    .collect::<Result<Vec<_>, _>>()?
+            };
+            let mut counts = Vec::new();
+            for table in tables {
+                let escaped = table.replace('"', r#""""#);
+                let columns = {
+                    let mut statement =
+                        connection.prepare(&format!(r#"PRAGMA table_info("{escaped}")"#))?;
+                    statement
+                        .query_map([], |row| row.get::<_, String>(1))?
+                        .collect::<Result<Vec<_>, _>>()?
+                };
+                let usage_or_attempt_table = table.contains("usage")
+                    || table.contains("attempt")
+                    || table.contains("reservation");
+                if usage_or_attempt_table && columns.iter().any(|column| column == "account_id") {
+                    let count = connection.query_row(
+                        &format!(r#"SELECT COUNT(*) FROM "{escaped}" WHERE account_id = ?1"#),
+                        [account_id],
+                        |row| row.get::<_, i64>(0),
+                    )?;
+                    if count > 0 {
+                        counts.push((table, count));
+                    }
+                }
+            }
+            Ok(counts)
+        })
+        .await
+        .expect("database account row scan")
 }
 
 #[tokio::test(flavor = "current_thread")]
@@ -480,6 +567,21 @@ impl RejectingProviderFixture {
                         "application/json",
                         r#"{"access_token":"oauth-rotated-access-sentinel","refresh_token":"oauth-rotated-refresh-sentinel","id_token":"oauth-rotated-id-sentinel","token_type":"Bearer","expires_in":3600,"scope":"offline_access"}"#,
                     )
+                } else if request.starts_with("POST ") && request.contains("/embeddings") {
+                    if rejections < rejected_requests {
+                        rejections += 1;
+                        (
+                            "401 Unauthorized",
+                            "application/json",
+                            r#"{"error":{"message":"token expired","type":"invalid_request_error"}}"#,
+                        )
+                    } else {
+                        (
+                            "200 OK",
+                            "application/json",
+                            r#"{"object":"list","data":[{"object":"embedding","index":0,"embedding":[0.1,0.2]}],"model":"gpt-oauth-fixture","usage":{"prompt_tokens":1,"total_tokens":1}}"#,
+                        )
+                    }
                 } else if request.starts_with("POST ") && request.contains("chat/completions") {
                     if rejections < rejected_requests {
                         rejections += 1;
@@ -555,11 +657,27 @@ impl Drop for RejectingProviderFixture {
 struct OwnerBoundFixture {
     state: crate::coordinator::InferenceState,
     credential_root: std::path::PathBuf,
+    database: Database,
 }
 
 async fn owner_bound_fixture(
     fixture: &RejectingProviderFixture,
     directory: &std::path::Path,
+) -> OwnerBoundFixture {
+    owner_bound_fixture_with_accounts(fixture, directory, false).await
+}
+
+async fn owner_bound_fixture_with_static_account(
+    fixture: &RejectingProviderFixture,
+    directory: &std::path::Path,
+) -> OwnerBoundFixture {
+    owner_bound_fixture_with_accounts(fixture, directory, true).await
+}
+
+async fn owner_bound_fixture_with_accounts(
+    fixture: &RejectingProviderFixture,
+    directory: &std::path::Path,
+    include_static_account: bool,
 ) -> OwnerBoundFixture {
     let database = database(&directory.join("state.sqlite3")).await;
     let mut config = Config::default();
@@ -569,6 +687,14 @@ async fn owner_bound_fixture(
         auth_mode: AccountAuthMode::OAuth,
         ..Default::default()
     };
+    let mut accounts = vec![account];
+    if include_static_account {
+        accounts.push(AccountConfig {
+            name: STATIC_ACCOUNT_NAME.into(),
+            api_key: Some(STATIC_ACCOUNT_KEY.into()),
+            ..Default::default()
+        });
+    }
     let mut provider = ProviderConfig {
         id: "xai".into(),
         base_url: fixture.base_url.clone(),
@@ -577,7 +703,9 @@ async fn owner_bound_fixture(
         models_method: "GET".into(),
         models_path: "/models".into(),
         auth: ProviderAuthConfig::default(),
-        accounts: vec![account],
+        accounts,
+        embedding_models: std::collections::BTreeSet::from([MODEL_ID.to_owned()]),
+        embeddings_path: Some("/embeddings".into()),
         ..Default::default()
     };
     provider.models_endpoint = Some(ProviderModelsEndpointConfig {
@@ -587,16 +715,25 @@ async fn owner_bound_fixture(
     });
     config.providers.insert("xai".into(), provider);
     config.oauth.enabled = true;
+    let database_accounts = std::iter::once(DbAccountConfig {
+        name: ACCOUNT_NAME.into(),
+        api_key_env: "UNUSED_OAUTH_KEY".into(),
+        enabled: true,
+        weight: 1.0,
+        provider_id: "xai".into(),
+    })
+    .chain(include_static_account.then(|| DbAccountConfig {
+        name: STATIC_ACCOUNT_NAME.into(),
+        api_key_env: "UNUSED_STATIC_KEY".into(),
+        enabled: true,
+        weight: 1.0,
+        provider_id: "xai".into(),
+    }))
+    .collect();
     AccountRepository::new(&database)
-        .sync_from_config(vec![DbAccountConfig {
-            name: ACCOUNT_NAME.into(),
-            api_key_env: "UNUSED_OAUTH_KEY".into(),
-            enabled: true,
-            weight: 1.0,
-            provider_id: "xai".into(),
-        }])
+        .sync_from_config(database_accounts)
         .await
-        .expect("account row");
+        .expect("account rows");
     database
         .call(|connection| {
             connection.execute(
@@ -666,6 +803,7 @@ async fn owner_bound_fixture(
     OwnerBoundFixture {
         state,
         credential_root,
+        database,
     }
 }
 
@@ -922,4 +1060,239 @@ async fn finite_oauth_401_refreshes_the_owner_credential_and_retries_the_same_ac
         "the retry uses the refreshed credential"
     );
     assert_eq!(token_requests(&requests).len(), 1);
+}
+
+/// A healed owner OAuth rejection stays on its account instead of taking the
+/// ordinary static-key 401 failover path.
+#[tokio::test(flavor = "current_thread")]
+async fn oauth_401_retry_never_falls_back_to_a_static_account() {
+    let fixture = RejectingProviderFixture::start(1).await;
+    let directory = tempfile::tempdir().expect("test directory");
+    let owner = owner_bound_fixture_with_static_account(&fixture, directory.path()).await;
+    owner
+        .state
+        .catalog_service()
+        .expect("catalog service")
+        .refresh()
+        .await
+        .expect("catalog refresh");
+    // Catalog discovery can contact both configured accounts; only inspect the
+    // inference dispatches that follow it.
+    let dispatch_start = fixture.captured().len();
+
+    let outcome = execute_stream(&owner.state, "oauth-401-no-static-fallback").await;
+    assert!(
+        outcome.route_error.is_none(),
+        "the healed request is routed"
+    );
+    assert!(outcome.completed, "the healed request succeeds");
+    assert!(
+        String::from_utf8_lossy(&outcome.chunks).contains("ok"),
+        "the successful response is forwarded"
+    );
+
+    let requests = fixture.finish().await;
+    let dispatch = &requests[dispatch_start..];
+    let chat = chat_requests(dispatch);
+    assert_eq!(chat.len(), 2, "the OAuth account is retried exactly once");
+    assert_eq!(
+        token_requests(dispatch).len(),
+        1,
+        "one owner token refresh occurs"
+    );
+    assert!(
+        chat[0]
+            .to_ascii_lowercase()
+            .contains(&format!("authorization: bearer {STALE_ACCESS_TOKEN}")),
+        "the rejected first request identifies the OAuth account"
+    );
+    assert!(
+        chat[1]
+            .to_ascii_lowercase()
+            .contains(&format!("authorization: bearer {ROTATED_ACCESS_TOKEN}")),
+        "the retry identifies that same OAuth account with its rotated token"
+    );
+    assert!(
+        !chat[1]
+            .to_ascii_lowercase()
+            .contains(&format!("authorization: bearer {STALE_ACCESS_TOKEN}")),
+        "the retry does not reuse the rejected token"
+    );
+    assert!(
+        dispatch
+            .iter()
+            .all(|request| !request.contains(STATIC_ACCOUNT_KEY)),
+        "the static-key account receives no inference request"
+    );
+    let static_rows = database_account_scoped_rows(&owner.database, STATIC_ACCOUNT_NAME).await;
+    assert!(
+        static_rows.is_empty(),
+        "the static-key account has no usage or attempt rows: {static_rows:?}"
+    );
+}
+
+/// Rejected and rotated OAuth access tokens stay out of every SQLite table,
+/// persisted attempt details, and coordinator-produced diagnostics.
+#[tokio::test(flavor = "current_thread")]
+async fn oauth_401_retry_does_not_persist_or_diagnose_either_access_token() {
+    let captured_logs = Arc::new(Mutex::new(Vec::new()));
+    let subscriber = tracing_subscriber::fmt()
+        .with_max_level(tracing::Level::TRACE)
+        .with_ansi(false)
+        .with_writer(CaptureLogs(Arc::clone(&captured_logs)))
+        .finish();
+    let _log_guard = tracing::subscriber::set_default(subscriber);
+    let fixture = RejectingProviderFixture::start(1).await;
+    let directory = tempfile::tempdir().expect("test directory");
+    let owner = owner_bound_fixture(&fixture, directory.path()).await;
+    owner
+        .state
+        .catalog_service()
+        .expect("catalog service")
+        .refresh()
+        .await
+        .expect("catalog refresh");
+    let dispatch_start = fixture.captured().len();
+
+    let outcome = execute_stream(&owner.state, "oauth-401-token-hygiene").await;
+    assert!(
+        outcome.route_error.is_none(),
+        "the healed request is routed"
+    );
+    assert!(outcome.completed, "the healed request succeeds");
+    let requests = fixture.finish().await;
+    let dispatch = &requests[dispatch_start..];
+    assert_eq!(
+        chat_requests(dispatch).len(),
+        2,
+        "the request heals after one retry"
+    );
+    assert_eq!(
+        token_requests(dispatch).len(),
+        1,
+        "one token refresh occurs"
+    );
+
+    assert!(
+        !database_contains(&owner.database, STALE_ACCESS_TOKEN).await,
+        "the rejected token is absent from every SQLite table and column"
+    );
+    assert!(
+        !database_contains(&owner.database, ROTATED_ACCESS_TOKEN).await,
+        "the rotated token is absent from every SQLite table and column"
+    );
+    assert!(
+        !database_table_contains(&owner.database, "request_attempts", STALE_ACCESS_TOKEN).await,
+        "recorded attempt rows contain no rejected credential"
+    );
+    let diagnostic_text = format!(
+        "{:?}",
+        owner.state.streaming_coordinator().diagnostics_snapshot()
+    );
+    assert!(
+        !diagnostic_text.contains(STALE_ACCESS_TOKEN),
+        "coordinator diagnostics contain no rejected credential"
+    );
+    assert!(
+        !outcome
+            .route_error
+            .as_deref()
+            .unwrap_or_default()
+            .contains(STALE_ACCESS_TOKEN),
+        "coordinator error text contains no rejected credential"
+    );
+    let log_text =
+        String::from_utf8_lossy(&captured_logs.lock().expect("log capture lock").clone())
+            .into_owned();
+    assert!(
+        !log_text.contains(STALE_ACCESS_TOKEN),
+        "coordinator classification and error logs contain no rejected credential"
+    );
+}
+
+/// The finite embedding-status branch refreshes the owner credential once and
+/// retries the same embedding request with that account's rotated token.
+#[tokio::test(flavor = "current_thread")]
+async fn finite_embedding_oauth_401_refreshes_the_owner_credential_and_retries_once() {
+    let fixture = RejectingProviderFixture::start(1).await;
+    let directory = tempfile::tempdir().expect("test directory");
+    let owner = owner_bound_fixture(&fixture, directory.path()).await;
+    owner
+        .state
+        .catalog_service()
+        .expect("catalog service")
+        .refresh()
+        .await
+        .expect("catalog refresh");
+    let dispatch_start = fixture.captured().len();
+
+    let body = Bytes::from(
+        serde_json::json!({
+            "model": MODEL_ID,
+            "input": "hello"
+        })
+        .to_string(),
+    );
+    let embedding = crate::request::embeddings::EmbeddingRequest::parse(&body)
+        .expect("embedding request admission");
+    let mut routing_facts =
+        crate::routing::RoutingRequestFacts::from_model_id(MODEL_ID, owner.state.known_providers());
+    routing_facts.provider_id = Some("xai".into());
+    routing_facts.principal_user_id = Some(USER_ID.into());
+    routing_facts.requested_protocol = Some("openai".into());
+    routing_facts.client_protocol = Some("openai_embeddings".into());
+    routing_facts.request_surface = ClientSurface::ChatCompletions.as_str().into();
+    let execution = owner
+        .state
+        .finite_coordinator()
+        .execute_embedding_admitted(
+            "oauth-401-embedding".into(),
+            body,
+            HeaderMap::new(),
+            embedding,
+            routing_facts,
+            None,
+        )
+        .await
+        .expect("owner OAuth embedding dispatch");
+    assert_eq!(execution.response.status, StatusCode::OK);
+    let response: serde_json::Value =
+        serde_json::from_slice(&execution.response.body).expect("embedding response JSON");
+    assert_eq!(
+        response.get("object").and_then(serde_json::Value::as_str),
+        Some("list")
+    );
+
+    let requests = fixture.finish().await;
+    let dispatch = &requests[dispatch_start..];
+    let embeddings = dispatch
+        .iter()
+        .filter(|request| request.starts_with("POST ") && request.contains("/embeddings"))
+        .collect::<Vec<_>>();
+    assert_eq!(
+        embeddings.len(),
+        2,
+        "the same embedding request is retried once"
+    );
+    assert_eq!(
+        token_requests(dispatch).len(),
+        1,
+        "one owner token refresh occurs"
+    );
+    assert!(
+        chat_requests(dispatch).is_empty(),
+        "the provider receives embeddings, not chat"
+    );
+    assert!(
+        embeddings[0]
+            .to_ascii_lowercase()
+            .contains(&format!("authorization: bearer {STALE_ACCESS_TOKEN}")),
+        "the first embedding attempt uses the rejected owner token"
+    );
+    assert!(
+        embeddings[1]
+            .to_ascii_lowercase()
+            .contains(&format!("authorization: bearer {ROTATED_ACCESS_TOKEN}")),
+        "the embedding retry uses the rotated owner token"
+    );
 }

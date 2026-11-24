@@ -25,10 +25,12 @@ their own backoff and quarantine path instead of hijacking wire handling.
 `FailureSource` covers transport, provider response, client, client validation, local
 preparation, database, and cancellation origins. `FailureCategory` covers bad request,
 authentication, quota, rate limit, temporary, transient transport, model unavailable,
-wire-rejected, cancelled, and fatal outcomes. `RetryScope` (`None`/`Account`/`Wire`/`Wait`/
-`AccountCredentialRefresh`) says where a retry may go; `NextAction`
-(`Complete`/`RetryAccount`/`RetryWire`/`WaitRateLimit`/`RefreshCredential`/`Exhaust`) says what the
-loop does next. The string labels (`retry_action`, `retry_scope_label`,
+wire-rejected, cancelled, and fatal outcomes. `RetryScope` (`None`/`Account`/`Wire`/`Wait`) says
+where a retry may go; `NextAction`
+(`Complete`/`RetryAccount`/`RetryWire`/`WaitRateLimit`/`Exhaust`) says what the
+loop does next. Both enums are published library types and their variant sets are frozen: a new
+retry kind is expressed through the labels, not through a new variant. The string labels
+(`retry_action`, `retry_scope_label`,
 `evidence_class`, `client_outcome`, `account_effect`, `model_effect`, `circuit_effect`,
 `wire_effect`) are the stable contract consumed by later coordinator slices; the enums drive
 control flow.
@@ -58,9 +60,9 @@ same decision without applying account or model effects twice (`try_apply_once`/
 
 `prepare_next` is the only retry-state mutation: a wire-scoped decision pins `preferred_account` to the
 same account so the next iteration tries the next untried `WireSurface`, while an account-scoped decision
-excludes the failed account (`excluded_accounts`) and clears the pin. A credential-refresh-scoped
-decision also pins `preferred_account` to the same account, because the owner’s own credential is the
-only one that may answer the resubmitted request. `should_retry` admits only
+excludes the failed account (`excluded_accounts`) and clears the pin. The credential-refresh retry
+uses the same wire scope, because the owner’s own credential is the only one that may answer the
+resubmitted request, so `preferred_account` stays pinned to that account. `should_retry` admits only
 `RetryAccount` and `RetryWire`; any other action completes instead of redialing upstream.
 
 ## Owner-scoped credential refresh after an upstream 401
@@ -78,9 +80,12 @@ credential is returned without a second token request, so a rotated refresh toke
 The refresh runs under the same per-account OS lock as the proactive path, commits atomically before the
 lock is released, and is detached from request cancellation.
 
-The retry holds the account constant and the wire surface constant: `prepare_next` pins the account, and
-the coordinator clears that account’s attempted-surface entry so the resubmitted request uses the same
-surface, because the surface was not the fault. One refresh and one retry are allowed per request, inside
+The retry holds the account constant and re-offers the wire surface that was rejected, because the
+surface was not the fault: `prepare_next` pins the account, and the coordinator re-admits the
+rejected `WireSurface` for that account and pins it for the next attempt, so the resolver cannot
+silently move the resubmitted request to a different surface. The pin is a preference, not a bypass:
+if the shared resolver has since learned that the surface is rejecting, it is not offered again and
+the account’s next candidate is used instead. One refresh and one retry are allowed per request, inside
 the ordinary attempt budget. The account-health evidence is applied only when the refresh fails or the
 refreshed credential is rejected again, which keeps a healed stale credential from disabling the account
 while a genuinely rejected credential still does. The operator gate blocks the refresh exactly as it
@@ -90,6 +95,9 @@ The failure classifier is unchanged: `classify` still produces the same 401 effe
 class, and the same recorded labels, so the frozen compatibility observation fixture is unaffected. The
 recovery is coordinator-owned and contributes its own scope and action labels
 (`same_account_refreshed_credential`, `refresh_credential_same_account`) for the healed attempt only.
+Those two labels extend the `FailureEffects` string vocabulary; they are not new durable attempt
+columns, and the durable attempt rows keep their existing shape. The published `RetryScope` and
+`NextAction` variant sets are unchanged as well, so the library’s public API does not move.
 
 ## Finite retry loop
 

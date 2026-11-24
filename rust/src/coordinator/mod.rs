@@ -100,11 +100,18 @@ pub(crate) fn oauth_401_for_account(
 /// The account is held constant and no account health evidence is applied:
 /// the provider rejected a stale credential, not the account. The caller
 /// applies these effects only after the refresh actually succeeded.
+///
+/// The published failure vocabulary does not move: `RetryScope` and
+/// `NextAction` keep their public variants, so the library's public API is
+/// unchanged. The recovery is described by its own scope and action *labels*,
+/// which are the stable string contract, while the enums carry the control
+/// flow: the retry stays on the same account and is admitted like any other
+/// retry.
 pub(crate) fn healed_credential_refresh_effects(effects: &FailureEffects) -> FailureEffects {
     let mut healed = effects.clone();
     healed.retry = true;
-    healed.retry_scope = RetryScope::AccountCredentialRefresh;
-    healed.action = NextAction::RefreshCredential;
+    healed.retry_scope = RetryScope::Wire;
+    healed.action = NextAction::RetryWire;
     healed.retry_action = "refresh_credential_same_account".into();
     healed.retry_scope_label = "same_account_refreshed_credential".into();
     healed

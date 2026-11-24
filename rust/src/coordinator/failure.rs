@@ -85,10 +85,6 @@ pub enum RetryScope {
     Account,
     Wire,
     Wait,
-    /// The same account is retried with a refreshed owner-bound OAuth
-    /// credential. The account is held constant: no other account is ever
-    /// substituted for the owner's credential.
-    AccountCredentialRefresh,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -97,8 +93,6 @@ pub enum NextAction {
     RetryAccount,
     RetryWire,
     WaitRateLimit,
-    /// Refresh the owner's OAuth credential and retry the same account once.
-    RefreshCredential,
     Exhaust,
 }
 
@@ -669,13 +663,11 @@ pub fn classify(observation: &FailureObservation, policy: RetryPolicy) -> Failur
         RetryScope::Account => "other_account",
         RetryScope::Wire => "same_account_other_wire",
         RetryScope::Wait => "wait",
-        RetryScope::AccountCredentialRefresh => "same_account_refreshed_credential",
     };
     let retry_action = match action {
         NextAction::RetryAccount => "other_account_same_wire",
         NextAction::RetryWire => "alternate_wire_same_account",
         NextAction::WaitRateLimit => "wait_rate_limit",
-        NextAction::RefreshCredential => "refresh_credential_same_account",
         NextAction::Complete | NextAction::Exhaust => "none",
     };
     if matches!(
@@ -706,10 +698,7 @@ pub fn classify(observation: &FailureObservation, policy: RetryPolicy) -> Failur
         persist_backoff,
         retry: matches!(
             action,
-            NextAction::RetryAccount
-                | NextAction::RetryWire
-                | NextAction::WaitRateLimit
-                | NextAction::RefreshCredential
+            NextAction::RetryAccount | NextAction::RetryWire | NextAction::WaitRateLimit
         ),
         client_outcome: client_outcome.into(),
         account_effect: account_effect.into(),
