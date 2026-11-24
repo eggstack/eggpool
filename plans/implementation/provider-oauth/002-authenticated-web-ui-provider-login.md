@@ -1,6 +1,6 @@
 # Provider OAuth Milestone 002 — Authenticated Web UI provider login
 
-Status: active
+Status: implemented
 
 Repository baseline: 5b212d2d69137b99ed39f0dbeab10331c839e54e
 
@@ -207,3 +207,9 @@ This amendment is authoritative for current M002 work and supersedes conflicting
 - Keep exact provider-registration evidence as an implementation/closure requirement. The approved desktop loopback workflow is not evidence for a separate server-hosted HTTPS redirect.
 
 See `plans/adrs/ADR-0014-provider-oauth-web-ui-and-desktop-flow-boundary.md`. No other accepted ADR-0012 decision is changed.
+
+## 18. Append-only credential-refresh amendment — ADR-0015
+
+ADR-0015 is accepted and supersedes this plan's no-401-replay wording — §4's "No shared consumer-subscription pooling, HTTP 401 replay, or cross-account fallback" and §13's "No consumer-subscription pooling, cross-account fallback, or HTTP 401 replay is introduced". That wording remains historical and is not rewritten.
+
+An upstream HTTP 401 on an owner-bound OAuth account is now handled by M004's owner-scoped credential-refresh retry: the owner's credential for that same account is refreshed and the same request is retried against the same account exactly once. Nothing in this milestone's flow changes. The retry never reselects an account, never crosses a user or owner boundary, never pools credentials, and never relaxes the login, session, CSRF, operator-gate, redaction, previous-credential-preservation, or M001 atomic-commit requirements above. A refresh failure or a second rejection terminalizes the request and disables the account, so the owner re-authenticates through this milestone's flow. This amendment makes no provider-support or provider-registration claim.
