@@ -12,7 +12,7 @@ use std::{
 use eggpool::providers::{ProviderClientPool, ProviderClientPoolError};
 use eggpool::{
     Config,
-    agents::AgentTunnelSet,
+    agents::{AgentTunnelManager, AgentTunnelSet, AgentTunnelState},
     config::{
         AccountAuthMode, AccountConfig, AgentAccountConfig, AgentTlsConfig, ProviderConfig,
         ProviderStaticModelConfig,
@@ -812,4 +812,127 @@ async fn owner_agents_tunnel_finite_and_streaming_requests_and_terminalize_401()
     service_c.shutdown().await;
     fallback_service.shutdown().await;
     database.close().await.expect("test database closes");
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn an_agent_that_connected_then_dropped_is_offline_not_starting() {
+    let directory = tempfile::tempdir().expect("isolated Agent test directory");
+    let config_path = directory.path().join("config.toml");
+    tokio::fs::write(
+        directory.path().join(".env"),
+        format!("AGENT_A_TRANSPORT={AGENT_A_TRANSPORT}\n"),
+    )
+    .await
+    .expect("write isolated Agent transport credentials");
+    let (server_cert_pem, server_key_pem, ca_pem) = make_control_tls_material();
+    let server_cert_path = directory.path().join("agent-control-cert.pem");
+    let server_key_path = directory.path().join("agent-control-key.pem");
+    tokio::fs::write(&server_cert_path, server_cert_pem.as_bytes())
+        .await
+        .expect("write test control certificate");
+    tokio::fs::write(&server_key_path, server_key_pem.as_bytes())
+        .await
+        .expect("write test control key");
+
+    let service = FakeHttpService::start().await;
+    let mut used_addresses = Vec::new();
+    let control = unused_loopback_address(&used_addresses);
+    used_addresses.push(control);
+    let external = unused_loopback_address(&used_addresses);
+
+    let mut config = Config::default();
+    config.providers.insert(
+        "agent-provider".to_owned(),
+        ProviderConfig {
+            id: "agent-provider".to_owned(),
+            base_url: format!("http://{}/v1", service.address),
+            routing_priority: 100,
+            accounts: vec![agent_account(
+                "agent-a",
+                external,
+                control,
+                AGENT_A_KEY,
+                "AGENT_A_TRANSPORT",
+                &server_cert_path,
+                &server_key_path,
+            )],
+            static_models: vec![ProviderStaticModelConfig {
+                id: OWNER_MODEL.to_owned(),
+                protocol: Some("openai".to_owned()),
+                ..ProviderStaticModelConfig::default()
+            }],
+            ..ProviderConfig::default()
+        },
+    );
+
+    let manager = AgentTunnelManager::new();
+    let tunnels = manager
+        .prepare_for_generation(&config, Some(&config_path))
+        .await
+        .expect("Agent generation prepares before the reverse client starts");
+
+    let client = start_reverse_client(
+        control,
+        service.address,
+        "agent-a",
+        AGENT_A_TRANSPORT,
+        ca_pem.into_bytes(),
+    );
+
+    // The connection is observed through the reverse server's OWN counters, so
+    // the availability projection stays UNREAD while the agent is connected.
+    tokio::time::timeout(Duration::from_secs(5), async {
+        loop {
+            if tunnels
+                .connection_facts("agent-provider", "agent-a")
+                .control_connections_accepted
+                > 0
+            {
+                return;
+            }
+            tokio::time::sleep(Duration::from_millis(5)).await;
+        }
+    })
+    .await
+    .expect("the agent control connection authenticates");
+
+    // Consume the pooled control connection with an external client. The
+    // reverse server hands the pooled control to the external client and
+    // returns its active-control count to zero, which is the state an agent
+    // that has already connected looks like once it is no longer attached.
+    // No projection read happens before this point.
+    let external_client = TcpStream::connect(external)
+        .await
+        .expect("the account endpoint accepts an external client");
+    tokio::time::timeout(Duration::from_secs(5), async {
+        loop {
+            if tunnels
+                .connection_facts("agent-provider", "agent-a")
+                .active_control_connections
+                == 0
+            {
+                return;
+            }
+            tokio::time::sleep(Duration::from_millis(5)).await;
+        }
+    })
+    .await
+    .expect("the pooled control connection is handed to the external client");
+
+    // Only NOW is the projection read. An agent that has connected before and
+    // is no longer attached must not be reported as still waiting for its
+    // first connection.
+    assert_eq!(
+        tunnels
+            .availability()
+            .state_for("agent-provider", "agent-a"),
+        AgentTunnelState::Offline,
+        "an agent that connected and is no longer attached reports offline, not starting"
+    );
+
+    drop(external_client);
+    client.shutdown().await;
+    let close_report = tunnels.close(Duration::from_secs(5)).await;
+    assert_eq!(close_report.shutdown_timed_out, 0);
+    service.shutdown().await;
 }

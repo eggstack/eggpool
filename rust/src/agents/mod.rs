@@ -7,6 +7,6 @@ pub mod tunnel;
 pub use enrollment::{EnrollmentRegistryError, EnrollmentReservation, PendingEnrollmentRegistry};
 pub use ticket::{ControlAddress, EnrollmentTicket, TicketError};
 pub use tunnel::{
-    AgentTunnelCloseReport, AgentTunnelError, AgentTunnelManager, AgentTunnelSet,
-    AgentTunnelSnapshot, AgentTunnelStatus,
+    AgentTunnelAvailability, AgentTunnelCloseReport, AgentTunnelError, AgentTunnelManager,
+    AgentTunnelSet, AgentTunnelSnapshot, AgentTunnelState, AgentTunnelStatus,
 };

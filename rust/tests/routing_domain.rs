@@ -1,10 +1,17 @@
 use std::{
     collections::BTreeSet,
     fs,
+    net::TcpListener,
     path::PathBuf,
     time::{Duration, SystemTime, UNIX_EPOCH},
 };
 
+// This shared fixture carries ticket variants unused by this routing-only target.
+#[allow(dead_code)]
+#[path = "common/agent_ticket.rs"]
+mod agent_ticket;
+
+use agent_ticket::{SERVER_NAME, TestTicketProducer};
 use eggpool::{
     Config,
     accounts::{AccountIdentity, AccountRegistry, CredentialStore, QuotaOffsets, RequestSurface},
@@ -16,6 +23,10 @@ use eggpool::{
         EligibilityPolicy, FairnessMode, FairnessScope, LocalQuotaMode, RoutingRequestFacts,
         RoutingRouter,
     },
+};
+use eggress_protocol_reverse::{
+    client::{ReverseClient, ReverseClientConfig},
+    tls::ReverseClientTlsConfig,
 };
 
 fn temporary_database_path(label: &str) -> PathBuf {
@@ -471,7 +482,7 @@ fn _identity_type_is_explicitly_non_secret(_: AccountIdentity) {}
 
 /// A router with one credentialed Agent account, used to verify the process
 /// gate and owner-binding rules without starting listeners.
-fn agent_router(agents_enabled: bool) -> (RoutingRouter, HealthManager) {
+fn agent_router(agents_enabled: bool, include_shared: bool) -> (RoutingRouter, HealthManager) {
     let agent_account = eggpool::config::AccountConfig {
         name: "agent-a".into(),
         auth_mode: eggpool::config::AccountAuthMode::Agent,
@@ -483,6 +494,12 @@ fn agent_router(agents_enabled: bool) -> (RoutingRouter, HealthManager) {
             transport_secret_env: "AGENT_TRANSPORT_SECRET".into(),
             ..Default::default()
         }),
+        ..Default::default()
+    };
+    let shared_account = eggpool::config::AccountConfig {
+        name: "shared-a".into(),
+        api_key: Some("shared-static-key".into()),
+        api_key_env: "SHARED_A_KEY".into(),
         ..Default::default()
     };
     let mut config = Config::default();
@@ -497,30 +514,51 @@ fn agent_router(agents_enabled: bool) -> (RoutingRouter, HealthManager) {
                 mode: "none".into(),
                 ..Default::default()
             },
-            accounts: vec![agent_account],
+            accounts: if include_shared {
+                vec![agent_account, shared_account]
+            } else {
+                vec![agent_account]
+            },
             ..Default::default()
         },
     );
     let mut credentials = CredentialStore::default();
     credentials.insert("agent-a", "agent-upstream-key");
-    let registry = AccountRegistry::from_config(
-        &config,
-        &[durable_account(1, "agent-a", "agent-provider", true)],
-        &credentials,
-    )
-    .expect("Agent registry builds");
+    if include_shared {
+        credentials.insert("shared-a", "shared-static-key");
+    }
+    let mut durable = vec![durable_account(1, "agent-a", "agent-provider", true)];
+    if include_shared {
+        durable.push(durable_account(2, "shared-a", "agent-provider", true));
+    }
+    let registry = AccountRegistry::from_config(&config, &durable, &credentials)
+        .expect("Agent registry builds");
     let mut catalog = ModelCatalogCache::default();
-    catalog.set_account_provider("agent-a", "agent-provider");
-    let mut model = ModelInput::new("model-a");
-    model.protocol = Some("openai".into());
-    model.protocol_source = Some("fixture".into());
-    model.resolution_status = ProtocolResolutionStatus::Resolved;
-    catalog
-        .update_from_account("agent-a", "agent-provider", &[model], true, true)
-        .expect("Agent catalog account");
-    let estimator = QuotaEstimator::new([AccountQuota::new("agent-a")]);
+    let mut account_names = vec!["agent-a"];
+    if include_shared {
+        account_names.push("shared-a");
+    }
+    for account_name in account_names {
+        catalog.set_account_provider(account_name, "agent-provider");
+        let mut model = ModelInput::new("model-a");
+        model.protocol = Some("openai".into());
+        model.protocol_source = Some("fixture".into());
+        model.resolution_status = ProtocolResolutionStatus::Resolved;
+        catalog
+            .update_from_account(account_name, "agent-provider", &[model], true, true)
+            .expect("account catalog model");
+    }
+    let quotas = if include_shared {
+        vec![AccountQuota::new("agent-a"), AccountQuota::new("shared-a")]
+    } else {
+        vec![AccountQuota::new("agent-a")]
+    };
+    let estimator = QuotaEstimator::new(quotas);
     let health = HealthManager::new();
     health.register_account(1, "agent-a");
+    if include_shared {
+        health.register_account(2, "shared-a");
+    }
     let router = RoutingRouter::new(
         registry,
         catalog,
@@ -659,8 +697,245 @@ async fn an_authentication_failure_still_produces_no_timed_backoff() {
     assert_eq!(policy.cap, 0.0);
 }
 
+async fn wait_for_agent_control_count(tunnels: &eggpool::agents::AgentTunnelSet, expected: u32) {
+    let reached = tokio::time::timeout(Duration::from_secs(5), async {
+        loop {
+            let snapshot = tunnels.snapshot();
+            if snapshot.tunnels.len() == 1 && snapshot.tunnels[0].active_control == expected {
+                return;
+            }
+            tokio::time::sleep(Duration::from_millis(5)).await;
+        }
+    })
+    .await
+    .is_ok();
+    let snapshot = tunnels.snapshot();
+    assert!(
+        reached,
+        "reverse control count did not reach {expected}; snapshot={snapshot:?}"
+    );
+}
+
+async fn assert_account_claimed(
+    router: &RoutingRouter,
+    facts: &RoutingRequestFacts,
+    account_name: &str,
+) {
+    let sibling = if account_name == "agent-a" {
+        "shared-a"
+    } else {
+        "agent-a"
+    };
+    let excluded = [sibling.to_owned()].into_iter().collect();
+    let claim = router
+        .select_and_claim(facts, &excluded)
+        .await
+        .expect("account selection succeeds")
+        .unwrap_or_else(|| {
+            let plan = router.build_routing_plan(facts);
+            panic!(
+                "requested {account_name} account is not selectable; eligible={:?}, exclusions={:?}",
+                plan.eligible_account_names, plan.exclusions
+            );
+        });
+    assert_eq!(claim.account_name(), account_name);
+    drop(claim);
+}
+
 #[tokio::test(flavor = "current_thread")]
-async fn an_agent_account_is_selectable_only_by_its_owner_and_gate() {
+async fn online_agent_becomes_offline_without_affecting_shared_static_routing() {
+    let _ = rustls::crypto::ring::default_provider().install_default();
+    let directory = tempfile::tempdir().expect("temporary Agent TLS fixture");
+    let producer = TestTicketProducer::new();
+    let cert_path = directory.path().join("agent-server.pem");
+    let key_path = directory.path().join("agent-server-key.pem");
+    fs::write(&cert_path, producer.server_cert_pem()).expect("write Agent certificate");
+    fs::write(&key_path, producer.server_key_pem()).expect("write Agent private key");
+
+    let control_port = TcpListener::bind(("127.0.0.1", 0))
+        .expect("reserve control port")
+        .local_addr()
+        .expect("control address")
+        .port();
+    let external_port = loop {
+        let port = TcpListener::bind(("127.0.0.1", 0))
+            .expect("reserve external port")
+            .local_addr()
+            .expect("external address")
+            .port();
+        if port != control_port {
+            break port;
+        }
+    };
+    let transport_secret = "fixture-agent-transport-secret";
+    let tls = eggpool::config::AgentTlsConfig {
+        cert_path: cert_path.display().to_string(),
+        key_path: key_path.display().to_string(),
+        ..Default::default()
+    };
+    let account = eggpool::config::AccountConfig {
+        name: "agent-a".into(),
+        auth_mode: eggpool::config::AccountAuthMode::Agent,
+        api_key: Some("agent-upstream-key".into()),
+        api_key_env: "AGENT_UPSTREAM_KEY".into(),
+        base_url: Some(format!("http://127.0.0.1:{external_port}/v1")),
+        agent: Some(eggpool::config::AgentAccountConfig {
+            control_bind: format!("127.0.0.1:{control_port}"),
+            external_bind: format!("127.0.0.1:{external_port}"),
+            transport_secret_env: "AGENT_TRANSPORT_SECRET".into(),
+            tls: Some(tls),
+            ..Default::default()
+        }),
+        ..Default::default()
+    };
+    let mut tunnel_config = Config::default();
+    tunnel_config.agents.enabled = true;
+    tunnel_config.providers.insert(
+        "agent-provider".into(),
+        eggpool::config::ProviderConfig {
+            id: "agent-provider".into(),
+            base_url: "https://provider.example/v1".into(),
+            protocols: vec!["openai".into()],
+            auth: eggpool::config::ProviderAuthConfig {
+                mode: "none".into(),
+                ..Default::default()
+            },
+            accounts: vec![account.clone()],
+            ..Default::default()
+        },
+    );
+    let tunnels = eggpool::agents::AgentTunnelManager::new()
+        .start_account(
+            &tunnel_config,
+            "agent-provider",
+            &account,
+            None,
+            transport_secret,
+        )
+        .await
+        .expect("real reverse tunnel starts");
+    let (database, database_path) = database("agent-routing-transition").await;
+    database
+        .call(|connection| {
+            connection.execute(
+                "INSERT INTO personal_upstream_bindings(provider_id, account_name, user_id, state)
+                 VALUES ('agent-provider', 'agent-a', 'agent-owner', 'active')",
+                [],
+            )?;
+            Ok(())
+        })
+        .await
+        .expect("Agent owner binding inserts");
+    let bindings = eggpool::personal_upstream::load_snapshot(&database)
+        .await
+        .expect("Agent owner binding loads");
+    let (router, _) = agent_router(true, true);
+    let router = router.with_personal_bindings(bindings);
+    router.set_agent_tunnel_availability(tunnels.availability());
+    let mut facts = routing_facts("model-a");
+    facts.principal_user_id = Some("agent-owner".into());
+
+    // The shared account remains routable even while the Agent has not
+    // established its first control connection.
+    assert_eq!(
+        router.agent_tunnel_state("agent-provider", "agent-a"),
+        eggpool::agents::AgentTunnelState::Starting
+    );
+    assert_account_claimed(&router, &facts, "shared-a").await;
+    assert!(
+        router
+            .select_and_claim_for_account(&facts, "agent-a")
+            .await
+            .expect("offline Agent selection checks")
+            .is_none()
+    );
+
+    let provider_listener = tokio::net::TcpListener::bind("127.0.0.1:0")
+        .await
+        .expect("reverse client target binds");
+    let provider_address = provider_listener
+        .local_addr()
+        .expect("reverse client target address");
+    let client = ReverseClient::new(ReverseClientConfig {
+        server_addr: format!("127.0.0.1:{control_port}")
+            .parse()
+            .expect("control address parses"),
+        auth_username: Some("agent-a".into()),
+        auth_password: Some(transport_secret.to_owned()),
+        reconnect_initial_ms: 5,
+        reconnect_max_ms: 20,
+        default_target_host: Some(provider_address.ip().to_string()),
+        default_target_port: Some(provider_address.port()),
+        tls: Some(ReverseClientTlsConfig {
+            ca_pem: Some(producer.ca_pem().as_bytes().to_vec()),
+            server_name: SERVER_NAME.to_owned(),
+            client_cert_pem: None,
+            client_key_pem: None,
+        }),
+        ..ReverseClientConfig::default()
+    });
+    let cancel_client = client.cancel_token();
+    let mut client_task = tokio::spawn(async move { client.run().await });
+    tokio::select! {
+        _ = wait_for_agent_control_count(&tunnels, 1) => {},
+        result = &mut client_task => panic!("reverse client exited before connecting: {result:?}"),
+    }
+    let (provider_stream, _) =
+        tokio::time::timeout(Duration::from_secs(5), provider_listener.accept())
+            .await
+            .expect("reverse client connects to its local target before deadline")
+            .expect("local target accepts the reverse client connection");
+    assert_eq!(
+        router.agent_tunnel_state("agent-provider", "agent-a"),
+        eggpool::agents::AgentTunnelState::Online
+    );
+    assert_account_claimed(&router, &facts, "agent-a").await;
+    assert_account_claimed(&router, &facts, "shared-a").await;
+
+    // The reverse server queues authenticated idle control sessions until an
+    // external connection consumes one. Pair this real control session through
+    // its loopback listener, then close both sides to disconnect the client.
+    cancel_client.cancel();
+    let external_stream = tokio::net::TcpStream::connect(("127.0.0.1", external_port))
+        .await
+        .expect("external listener consumes the active control session");
+    drop(external_stream);
+    drop(provider_stream);
+    match tokio::time::timeout(Duration::from_secs(5), &mut client_task).await {
+        Ok(result) => result
+            .expect("reverse client task joins")
+            .expect("reverse client exits cleanly"),
+        Err(_) => {
+            // Match the other reverse-client integration fixtures: cancellation
+            // is best-effort, but aborting the owner must close the TCP tunnel.
+            client_task.abort();
+            let _ = client_task.await;
+        }
+    }
+    wait_for_agent_control_count(&tunnels, 0).await;
+    assert_eq!(
+        router.agent_tunnel_state("agent-provider", "agent-a"),
+        eggpool::agents::AgentTunnelState::Offline
+    );
+    assert!(
+        router
+            .select_and_claim_for_account(&facts, "agent-a")
+            .await
+            .expect("offline Agent selection checks")
+            .is_none()
+    );
+    assert_account_claimed(&router, &facts, "shared-a").await;
+    let closed = tunnels.close(Duration::from_secs(2)).await;
+    assert_eq!(closed.released, 1);
+    database
+        .close()
+        .await
+        .expect("owner binding database closes");
+    fs::remove_file(database_path).expect("owner binding database is removed");
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn offline_agent_exclusion_preserves_shared_routing_and_origin_ownership() {
     let (database, path) = database("agent-personal-binding").await;
     database
         .call(|connection| {
@@ -676,51 +951,80 @@ async fn an_agent_account_is_selectable_only_by_its_owner_and_gate() {
     let bindings = eggpool::personal_upstream::load_snapshot(&database)
         .await
         .expect("Agent owner binding loads");
-    let (router, _) = agent_router(true);
+    let (router, _) = agent_router(true, true);
     let router = router.with_personal_bindings(bindings);
 
     let mut owner = routing_facts("model-a");
     owner.principal_user_id = Some("owner-user".into());
-    let claim = router
+    let owner_plan = router.build_routing_plan(&owner);
+    assert!(
+        owner_plan
+            .eligible_account_names
+            .contains(&"shared-a".to_owned())
+    );
+    assert!(
+        !owner_plan
+            .eligible_account_names
+            .contains(&"agent-a".to_owned())
+    );
+    assert!(owner_plan.exclusions.iter().any(|exclusion| {
+        exclusion.account_name == "agent-a" && exclusion.reason_code == "agent_offline"
+    }));
+    let owner_origins = router.model_origins_for_user("model-a", "owner-user");
+    assert!(
+        owner_origins
+            .iter()
+            .any(|origin| origin.account_name == "agent-a")
+    );
+    assert!(
+        owner_origins
+            .iter()
+            .any(|origin| origin.account_name == "shared-a")
+    );
+
+    let owner_claim = router
         .select_and_claim(&owner, &BTreeSet::new())
         .await
         .expect("owner selection succeeds")
-        .expect("the Agent account is available to its owner");
-    assert_eq!(claim.account_name(), "agent-a");
-    drop(claim);
+        .expect("the unaffected shared account remains available");
+    assert_eq!(owner_claim.account_name(), "shared-a");
+    drop(owner_claim);
 
     let mut other = routing_facts("model-a");
     other.principal_user_id = Some("other-user".into());
+    let other_plan = router.build_routing_plan(&other);
     assert!(
-        router
-            .select_and_claim(&other, &BTreeSet::new())
-            .await
-            .expect("other-user selection succeeds")
-            .is_none(),
-        "another user cannot select the Agent account"
+        other_plan
+            .eligible_account_names
+            .contains(&"shared-a".to_owned())
     );
     assert!(
-        router
-            .select_and_claim(&routing_facts("model-a"), &BTreeSet::new())
-            .await
-            .expect("unattributed selection succeeds")
-            .is_none(),
-        "an unattributed request cannot select the Agent account"
+        !other_plan
+            .eligible_account_names
+            .contains(&"agent-a".to_owned())
     );
-
-    let bindings = eggpool::personal_upstream::load_snapshot(&database)
+    assert!(other_plan.exclusions.iter().any(|exclusion| {
+        exclusion.account_name == "agent-a" && exclusion.reason_code == "personal_upstream"
+    }));
+    let other_origins = router.model_origins_for_user("model-a", "other-user");
+    assert!(
+        !other_origins
+            .iter()
+            .any(|origin| origin.account_name == "agent-a")
+    );
+    assert!(
+        other_origins
+            .iter()
+            .any(|origin| origin.account_name == "shared-a")
+    );
+    let other_claim = router
+        .select_and_claim(&other, &BTreeSet::new())
         .await
-        .expect("Agent owner binding reloads");
-    let (disabled_router, _) = agent_router(false);
-    let disabled_router = disabled_router.with_personal_bindings(bindings);
-    assert!(
-        disabled_router
-            .select_and_claim(&owner, &BTreeSet::new())
-            .await
-            .expect("disabled-gate selection succeeds")
-            .is_none(),
-        "agents.enabled=false excludes the Agent account"
-    );
+        .expect("other-user selection succeeds")
+        .expect("the shared account remains available to other users");
+    assert_eq!(other_claim.account_name(), "shared-a");
+    drop(other_claim);
+
     database.close().await.expect("database closes");
     fs::remove_file(path).expect("temporary database removed");
 }

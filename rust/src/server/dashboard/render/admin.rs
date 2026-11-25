@@ -256,6 +256,27 @@ pub(in crate::server::dashboard) fn render_users_admin(
     )
 }
 
+pub(in crate::server::dashboard) fn render_member_model_origin(
+    origin: &crate::catalog::ModelOrigin,
+    agent_status: Option<&crate::agents::AgentTunnelStatus>,
+) -> String {
+    let state = agent_status.map_or_else(String::new, |status| {
+        let reason = status
+            .reason_code
+            .map_or_else(String::new, |code| format!(" ({})", html_escape(code)));
+        format!(
+            " <span class=\"agent-state\" data-agent-state=\"{}\">Agent: {}{reason}</span>",
+            status.state.as_str(),
+            status.state.as_str(),
+        )
+    });
+    format!(
+        "<li><span>{}</span> <small>{}</small>{state}</li>",
+        html_escape(&origin.display_label),
+        html_escape(&origin.provider_id),
+    )
+}
+
 pub(in crate::server::dashboard) fn render_member_upstream(
     allowed: bool,
     rows: &[(String, String, String)],

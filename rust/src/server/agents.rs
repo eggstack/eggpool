@@ -401,6 +401,19 @@ pub(super) async fn enroll(
             crate::security_events::SecurityEventOutcome::Denied,
         );
     }
+    if !ticket.has_safe_display_label() {
+        let close_report = tunnel.close(Duration::from_secs(5)).await;
+        if close_report.shutdown_timed_out > 0 {
+            reservation.retain_until_expiry();
+        }
+        return enrollment_error(
+            &state,
+            &session,
+            StatusCode::UNPROCESSABLE_ENTITY,
+            "ticket_optional_field_invalid",
+            crate::security_events::SecurityEventOutcome::Refused,
+        );
+    }
     let env_path = personal_upstream::personal_env_path(&config_path);
     match personal_upstream::add_personal_agent_account_publishing(
         &state.database,

@@ -175,7 +175,8 @@ impl EnrollmentTicket {
                 || label.contains("://")
                 || label.to_ascii_lowercase().starts_with("bearer ")
                 || label.starts_with("sk-")
-        }) || raw.providers.len() > 32
+        }) || raw.agent.as_deref() == Some(enroll.as_str())
+            || raw.providers.len() > 32
             || raw
                 .providers
                 .iter()
@@ -205,6 +206,14 @@ impl EnrollmentTicket {
     /// Borrow the credential only for tunnel startup and secret-file staging.
     pub fn enroll_secret(&self) -> &str {
         self.enroll.as_str()
+    }
+
+    /// Recheck the display label at the configuration publication boundary.
+    pub fn has_safe_display_label(&self) -> bool {
+        !self
+            .agent_label
+            .as_deref()
+            .is_some_and(|label| label == self.enroll.as_str())
     }
 
     pub fn control_address(&self) -> Result<ControlAddress, TicketError> {
@@ -458,6 +467,24 @@ mod tests {
         bad["enroll"] = json!(URL_SAFE_NO_PAD.encode(b"short"));
         assert_eq!(decode_error(&encode(&bad)), TicketError::EnrollmentSecret);
         assert!(!valid.is_empty());
+    }
+
+    #[test]
+    fn enrollment_credential_cannot_be_used_as_the_agent_display_label() {
+        let mut value = payload();
+        value["enroll"] = json!(SECRET);
+        value["agent"] = json!(SECRET);
+        assert_eq!(decode_error(&encode(&value)), TicketError::OptionalField);
+
+        value["agent"] = json!("safe display label");
+        let mut ticket = EnrollmentTicket::decode(&encode(&value), NOW)
+            .expect("distinct display label is accepted");
+        assert!(ticket.has_safe_display_label());
+        ticket.agent_label = Some(ticket.enroll_secret().to_owned());
+        assert!(
+            !ticket.has_safe_display_label(),
+            "publication-boundary recheck refuses a credential-bearing label"
+        );
     }
 
     #[test]

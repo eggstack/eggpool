@@ -12,7 +12,10 @@ use std::collections::{BTreeMap, BTreeSet};
 use serde::{Deserialize, Serialize};
 use serde_json::{Map, Value};
 
-use crate::health::{AccountHealthSnapshot, BackoffReason};
+use crate::{
+    agents::AgentTunnelSnapshot,
+    health::{AccountHealthSnapshot, BackoffReason},
+};
 
 /// Stable machine contract version for `eggpool status --json` and
 /// `GET /api/status`.
@@ -22,6 +25,9 @@ pub const STATUS_SCHEMA_VERSION: u32 = 1;
 /// Provider cardinality is small in EggPool deployments; this is a safety
 /// ceiling, not a pagination contract.
 pub const MAX_STATUS_PROVIDERS: usize = 256;
+
+/// Upper bound for per-account Agent tunnel rows in one status response.
+pub const MAX_STATUS_AGENT_TUNNELS: usize = 256;
 
 /// Maximum chars retained for a provider identifier in status output.
 pub const MAX_PROVIDER_ID_CHARS: usize = 96;
@@ -146,6 +152,14 @@ pub struct ProviderHealthSummary {
     pub reason_code: Option<String>,
 }
 
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct AgentTunnelHealthSummary {
+    pub provider_id: String,
+    pub account_name: String,
+    pub state: String,
+    pub reason_code: Option<String>,
+}
+
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct RuntimeHealthSummary {
     pub generation: Option<u64>,
@@ -162,6 +176,8 @@ pub struct ProxyStatusSnapshot {
     pub observed_at: String,
     pub proxy: ProxyHealthSummary,
     pub providers: Vec<ProviderHealthSummary>,
+    #[serde(default)]
+    pub agent_tunnels: Vec<AgentTunnelHealthSummary>,
     pub runtime: RuntimeHealthSummary,
 }
 
@@ -240,6 +256,7 @@ pub fn offline_snapshot(
             reason_code: Some("server unreachable".to_owned()),
         },
         providers: rows,
+        agent_tunnels: Vec::new(),
         runtime: RuntimeHealthSummary {
             generation: None,
             digest_prefix: String::new(),
@@ -312,6 +329,25 @@ pub struct ProviderStatusInput {
 
 pub fn truncate_id(value: &str) -> String {
     value.chars().take(MAX_PROVIDER_ID_CHARS).collect()
+}
+
+/// Project live Agent tunnel facts into a bounded, secret-free status view.
+pub fn project_agent_tunnels(snapshot: &AgentTunnelSnapshot) -> Vec<AgentTunnelHealthSummary> {
+    let mut rows = snapshot
+        .tunnels
+        .iter()
+        .map(|tunnel| AgentTunnelHealthSummary {
+            provider_id: truncate_id(&tunnel.provider_id),
+            account_name: truncate_id(&tunnel.account_name),
+            state: tunnel.state.as_str().to_owned(),
+            reason_code: tunnel.state.reason_code().map(str::to_owned),
+        })
+        .collect::<Vec<_>>();
+    rows.sort_by(|left, right| {
+        (&left.provider_id, &left.account_name).cmp(&(&right.provider_id, &right.account_name))
+    });
+    rows.truncate(MAX_STATUS_AGENT_TUNNELS);
+    rows
 }
 
 fn bounded_reason(value: impl Into<String>) -> String {

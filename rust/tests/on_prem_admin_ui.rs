@@ -1802,6 +1802,16 @@ async fn a_member_lands_on_the_member_landing_page_and_reaches_the_member_surfac
     for path in ["/my-account", "/my-account/models", "/usage"] {
         let page = http_request(address, "GET", path, "", Some(&member_cookies), None, None).await;
         assert!(page.starts_with("HTTP/1.1 200"), "{path}: {page}");
+        if path == "/my-account/models" {
+            assert!(
+                page.contains("Each row shows a backing-account origin label"),
+                "{page}"
+            );
+            assert!(
+                page.contains("Non-online Agents are excluded individually from routing"),
+                "{page}"
+            );
+        }
         for forbidden in [
             "href=\"/users",
             "href=\"/accounts",

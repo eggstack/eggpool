@@ -247,6 +247,17 @@ pub struct CacheSnapshot {
     pub account_provider_keys: BTreeMap<String, Vec<(String, String)>>,
 }
 
+/// Presentation-only account origin for one canonical model ID.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ModelOrigin {
+    pub provider_id: String,
+    pub account_name: String,
+    /// Unsuffixed configured/enrolled display label.
+    pub label: String,
+    /// Stable per-model presentation label; never used for dispatch.
+    pub display_label: String,
+}
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) struct CacheDiffProjection {
     pub model_ids: BTreeSet<String>,
@@ -809,6 +820,72 @@ impl ModelCatalogCache {
     }
     pub fn model_count(&self) -> usize {
         self.models.len()
+    }
+
+    /// Project supported account origins for a canonical model ID. Labels and
+    /// collision suffixes are presentation-only; dispatch keeps the model ID.
+    pub fn model_origins(&self, model_id: &str) -> Vec<ModelOrigin> {
+        self.project_model_origins(model_id, None)
+    }
+
+    /// Filter account visibility before suffix assignment so hidden accounts
+    /// cannot affect another user's visible labels.
+    pub fn model_origins_for_accounts(
+        &self,
+        model_id: &str,
+        visible_accounts: &BTreeSet<String>,
+    ) -> Vec<ModelOrigin> {
+        self.project_model_origins(model_id, Some(visible_accounts))
+    }
+
+    fn project_model_origins(
+        &self,
+        model_id: &str,
+        visible_accounts: Option<&BTreeSet<String>>,
+    ) -> Vec<ModelOrigin> {
+        let mut origins = self
+            .supporting_accounts(model_id)
+            .into_iter()
+            .filter(|account| visible_accounts.is_none_or(|visible| visible.contains(*account)))
+            .filter_map(|account_name| {
+                let provider_id = self.provider_for_account(account_name)?;
+                let account = self
+                    .config
+                    .as_ref()
+                    .and_then(|config| config.providers.get(provider_id))
+                    .and_then(|provider| {
+                        provider
+                            .accounts
+                            .iter()
+                            .find(|account| account.name == account_name)
+                    });
+                let label = account
+                    .filter(|account| account.auth_mode == crate::config::AccountAuthMode::Agent)
+                    .and_then(|account| account.label.as_deref())
+                    .filter(|label| !label.trim().is_empty())
+                    .map_or_else(|| account_name.to_owned(), str::to_owned);
+                Some(ModelOrigin {
+                    provider_id: provider_id.to_owned(),
+                    account_name: account_name.to_owned(),
+                    display_label: label.clone(),
+                    label,
+                })
+            })
+            .collect::<Vec<_>>();
+        // Assign collision suffixes by the total, stable lexicographic
+        // (provider_id, account_name) key.
+        origins.sort_by(|left, right| {
+            (&left.provider_id, &left.account_name).cmp(&(&right.provider_id, &right.account_name))
+        });
+        let mut occurrences = BTreeMap::<String, usize>::new();
+        for origin in &mut origins {
+            let occurrence = occurrences.entry(origin.label.clone()).or_default();
+            *occurrence += 1;
+            if *occurrence > 1 {
+                origin.display_label = format!("{} {}", origin.label, occurrence);
+            }
+        }
+        origins
     }
 
     fn provider_models_get(
@@ -1587,5 +1664,49 @@ mod borrowed_lookup_tests {
         let mut owned_keys: Vec<_> = owned.keys().cloned().collect();
         owned_keys.sort();
         assert_eq!(keys, owned_keys);
+    }
+
+    fn origin_cache(order: &[(&str, &str)]) -> ModelCatalogCache {
+        let mut config = crate::Config::default();
+        let mut cache = ModelCatalogCache::default();
+        for (provider_id, account_name) in order {
+            config
+                .providers
+                .entry((*provider_id).to_owned())
+                .or_default()
+                .accounts
+                .push(crate::config::AccountConfig {
+                    name: (*account_name).to_owned(),
+                    auth_mode: crate::config::AccountAuthMode::Agent,
+                    label: Some("Workshop agent".into()),
+                    ..Default::default()
+                });
+            cache.set_account_provider(*account_name, *provider_id);
+            let mut model = ModelInput::new("shared-model");
+            model.protocol = Some("openai".into());
+            model.protocol_source = Some("fixture".into());
+            model.resolution_status = ProtocolResolutionStatus::Resolved;
+            cache
+                .update_from_account(account_name, provider_id, &[model], true, true)
+                .expect("agent catalog model");
+        }
+        cache.set_config(&config);
+        cache
+    }
+
+    #[test]
+    fn agent_origin_labels_are_sorted_stable_and_display_only() {
+        let forward = origin_cache(&[("provider-z", "account-a"), ("provider-a", "account-z")]);
+        let reverse = origin_cache(&[("provider-a", "account-z"), ("provider-z", "account-a")]);
+        let projected = forward.model_origins("shared-model");
+        assert_eq!(projected, reverse.model_origins("shared-model"));
+        assert_eq!(projected[0].display_label, "Workshop agent");
+        assert_eq!(projected[1].display_label, "Workshop agent 2");
+        assert_eq!(forward.snapshot().model_ids, vec!["shared-model"]);
+
+        let visible = BTreeSet::from(["account-a".to_owned()]);
+        let filtered = forward.model_origins_for_accounts("shared-model", &visible);
+        assert_eq!(filtered.len(), 1);
+        assert_eq!(filtered[0].display_label, "Workshop agent");
     }
 }

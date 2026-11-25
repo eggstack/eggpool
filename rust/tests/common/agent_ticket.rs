@@ -18,6 +18,7 @@ pub enum TicketVariant {
     MalformedExpiry,
     BadCa,
     ShortEnrollment,
+    LabelMatchesEnrollment,
     Tampered,
 }
 
@@ -108,6 +109,9 @@ impl TestTicketProducer {
         });
         match variant {
             TicketVariant::Valid => {}
+            TicketVariant::LabelMatchesEnrollment => {
+                payload["agent"] = json!(enrollment_secret);
+            }
             TicketVariant::WrongVersion => payload["version"] = json!(9),
             TicketVariant::Oversized => payload["agent"] = json!("x".repeat(3000)),
             TicketVariant::Expired => payload["expires_at"] = json!(now_unix - 1),

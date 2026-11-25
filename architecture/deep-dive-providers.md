@@ -126,6 +126,26 @@ to direct transport. Credentials are rendered only while constructing dispatch
 headers. The closed wire registry under `rust/src/wire/` accepts only compiled
 codec IDs and does not probe in the background.
 
+## Provider Agent availability
+
+`AgentTunnelManager` owns the reverse-control listeners and publishes bounded
+availability from their live control state. An active control connection is
+`online`; a newly started listener awaiting its first connection is `starting`; a
+lost control connection or absent tunnel is `offline`; and a stopped listener is
+`failed`. Routing excludes every non-online Agent account after personal-owner
+visibility is checked, so the signal affects only that Agent account and cannot
+select another user's bound account. The status/dashboard projections expose
+fixed state and reason vocabulary only. There are no active probes, and model
+IDs and wire dispatch remain unchanged. Catalog discovery is account-scoped;
+see [Catalog and Pricing](deep-dive-catalog.md#discovery-bootstrap).
+
+`AgentTunnelManager` reads the reverse server's own counters: its
+authenticated-accept counter is the connection-state owner for "this Agent has
+connected at least once", and the active-control counter is the number of
+pooled control connections. The pinned Eggress `1.0.12` reverse server does not
+observe an idle control disconnect, so a dropped control is observed on that
+Agent's next use.
+
 The pool publishes one immutable `ClientTopology` per generation. Provider
 defaults are keyed by provider ID and account-specific clients are nested by
 provider ID and account name, so ordinary lookup borrows both keys without a

@@ -104,6 +104,7 @@ struct RoutingState {
     recovery_min_interval_s: f64,
     recovery_callback: Option<RecoveryCallback>,
     personal_bindings: crate::personal_upstream::PersonalUpstreamSnapshot,
+    agent_availability: Arc<arc_swap::ArcSwap<crate::agents::AgentTunnelAvailability>>,
 }
 
 /// Owns the in-memory routing state for one migration generation.
@@ -165,9 +166,78 @@ impl RoutingRouter {
                 recovery_min_interval_s: 60.0,
                 recovery_callback: None,
                 personal_bindings: crate::personal_upstream::PersonalUpstreamSnapshot::default(),
+                agent_availability: Arc::new(arc_swap::ArcSwap::from_pointee(
+                    crate::agents::AgentTunnelAvailability::default(),
+                )),
             }),
             selection_lock: Arc::new(AsyncMutex::new(())),
         }
+    }
+
+    pub fn set_agent_tunnel_availability(
+        &self,
+        availability: crate::agents::AgentTunnelAvailability,
+    ) {
+        self.state.agent_availability.store(Arc::new(availability));
+    }
+
+    pub fn agent_tunnel_state(
+        &self,
+        provider_id: &str,
+        account_name: &str,
+    ) -> crate::agents::AgentTunnelState {
+        self.state
+            .agent_availability
+            .load()
+            .state_for(provider_id, account_name)
+    }
+
+    pub fn agent_tunnel_status(
+        &self,
+        provider_id: &str,
+        account_name: &str,
+    ) -> crate::agents::AgentTunnelStatus {
+        self.state
+            .agent_availability
+            .load()
+            .status_for(provider_id, account_name)
+    }
+
+    pub fn agent_tunnel_snapshot(&self) -> crate::agents::AgentTunnelSnapshot {
+        self.state.agent_availability.load().snapshot()
+    }
+
+    pub fn model_origins_for_user(
+        &self,
+        model_id: &str,
+        user_id: &str,
+    ) -> Vec<crate::catalog::ModelOrigin> {
+        let visible_accounts = self
+            .state
+            .registry
+            .all()
+            .filter(|identity| {
+                !self.state.personal_bindings.excludes(
+                    &identity.provider_id,
+                    &identity.account_name,
+                    Some(user_id),
+                ) && (!matches!(
+                    identity.auth_mode,
+                    crate::config::AccountAuthMode::OAuth | crate::config::AccountAuthMode::Agent
+                ) || self.state.personal_bindings.is_active_owner(
+                    &identity.provider_id,
+                    &identity.account_name,
+                    user_id,
+                ))
+            })
+            .map(|identity| identity.account_name.clone())
+            .collect::<std::collections::BTreeSet<_>>();
+        let catalog = self
+            .state
+            .catalog
+            .lock()
+            .unwrap_or_else(|error| error.into_inner());
+        catalog.model_origins_for_accounts(model_id, &visible_accounts)
     }
 
     pub fn with_random_source(mut self, random: Arc<dyn FairnessRandom>) -> Self {
@@ -237,6 +307,7 @@ impl RoutingRouter {
 
     pub fn build_routing_plan(&self, facts: &RoutingRequestFacts) -> RoutingPlan {
         let active = claim::active_snapshot(&self.state.claims);
+        let agent_availability = self.state.agent_availability.load_full();
         let catalog = self
             .state
             .catalog
@@ -252,6 +323,7 @@ impl RoutingRouter {
             &self.state.policy,
             &active,
             &self.state.personal_bindings,
+            &agent_availability,
         );
         drop(catalog);
         self.plan_from_candidates(facts, candidates, exclusions)
@@ -410,6 +482,7 @@ impl RoutingRouter {
         self.maybe_recover_missing_support(facts, exclude_accounts);
         let _guard = self.selection_lock.lock().await;
         let active = claim::active_snapshot(&self.state.claims);
+        let agent_availability = self.state.agent_availability.load_full();
         let catalog = self
             .state
             .catalog
@@ -425,6 +498,7 @@ impl RoutingRouter {
             &self.state.policy,
             &active,
             &self.state.personal_bindings,
+            &agent_availability,
         );
         candidates.retain(|candidate| !exclude_accounts.contains(&candidate.account_name));
         if let Some(preferred_account) = preferred_account {

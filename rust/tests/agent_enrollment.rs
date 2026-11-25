@@ -477,6 +477,74 @@ async fn browser_form_post(
     String::from_utf8_lossy(&response).into_owned()
 }
 
+async fn authenticated_status(address: SocketAddr, cookies: &str) -> String {
+    let mut stream = TcpStream::connect(address)
+        .await
+        .expect("connect for live status request");
+    let request = format!(
+        "GET /api/status HTTP/1.1\r\nHost: {address}\r\nCookie: {cookies}\r\nConnection: close\r\n\r\n"
+    );
+    stream
+        .write_all(request.as_bytes())
+        .await
+        .expect("write live status request");
+    let mut response = Vec::new();
+    tokio::time::timeout(Duration::from_secs(5), stream.read_to_end(&mut response))
+        .await
+        .expect("live status response completes")
+        .expect("read live status response");
+    String::from_utf8_lossy(&response).into_owned()
+}
+
+async fn browser_get(address: SocketAddr, path: &str, cookies: &str) -> String {
+    let mut stream = TcpStream::connect(address)
+        .await
+        .expect("connect for member page request");
+    let request = format!(
+        "GET {path} HTTP/1.1\r\nHost: {address}\r\nCookie: {cookies}\r\nConnection: close\r\n\r\n"
+    );
+    stream
+        .write_all(request.as_bytes())
+        .await
+        .expect("write member page request");
+    let mut response = Vec::new();
+    tokio::time::timeout(Duration::from_secs(5), stream.read_to_end(&mut response))
+        .await
+        .expect("member page response completes")
+        .expect("read member page response");
+    String::from_utf8_lossy(&response).into_owned()
+}
+
+fn live_agent_status(response: &str, account_name: &str) -> (String, Option<String>) {
+    assert!(
+        response.starts_with("HTTP/1.1 200"),
+        "live status request failed: {}",
+        response.lines().next().unwrap_or("<empty response>")
+    );
+    let (_, body) = response
+        .split_once("\r\n\r\n")
+        .expect("live status response has a body");
+    let document: serde_json::Value = serde_json::from_str(body).expect("live status is JSON");
+    let agent = document["agent_tunnels"]
+        .as_array()
+        .expect("live status includes Agent tunnel rows")
+        .iter()
+        .find(|row| row["account_name"].as_str() == Some(account_name))
+        .expect("live status includes the expected Agent account");
+    let state = agent["state"]
+        .as_str()
+        .expect("Agent state is a string")
+        .to_owned();
+    let reason_code = agent["reason_code"].as_str().map(str::to_owned);
+    if let Some(reason) = &reason_code {
+        assert!(
+            reason.chars().count() <= eggpool::operations::status::MAX_REASON_CODE_CHARS,
+            "Agent status reason is bounded"
+        );
+    }
+    (state, reason_code)
+}
+
 fn cookie(response: &str, name: &str) -> String {
     response
         .lines()
@@ -642,8 +710,12 @@ impl ReverseClientTask {
         }
     }
 
-    async fn shutdown(mut self) {
+    fn request_cancel(&self) {
         (self.cancel)();
+    }
+
+    async fn shutdown(mut self) {
+        self.request_cancel();
         match tokio::time::timeout(Duration::from_secs(5), &mut self.task).await {
             Ok(result) => result
                 .expect("reverse client task joins")
@@ -657,7 +729,7 @@ impl ReverseClientTask {
 }
 
 async fn wait_for_control_count(tunnels: &AgentTunnelSet, expected: u32) {
-    tokio::time::timeout(Duration::from_secs(5), async {
+    let reached = tokio::time::timeout(Duration::from_secs(5), async {
         loop {
             let snapshot = tunnels.snapshot();
             if snapshot.tunnels.len() == 1 && snapshot.tunnels[0].active_control == expected {
@@ -667,7 +739,12 @@ async fn wait_for_control_count(tunnels: &AgentTunnelSet, expected: u32) {
         }
     })
     .await
-    .expect("Agent control count reaches its expected state before deadline");
+    .is_ok();
+    let snapshot = tunnels.snapshot();
+    assert!(
+        reached,
+        "Agent control count did not reach {expected}; snapshot={snapshot:?}"
+    );
 }
 
 async fn inference_request(address: SocketAddr, token: &str) -> String {
@@ -1137,6 +1214,10 @@ fn test_ticket_producer_emits_ca_bound_valid_and_rejectable_tickets() {
             TicketVariant::ShortEnrollment,
             TicketError::EnrollmentSecret,
         ),
+        (
+            TicketVariant::LabelMatchesEnrollment,
+            TicketError::OptionalField,
+        ),
         (TicketVariant::Tampered, TicketError::Base64),
     ] {
         let invalid = producer.ticket(now, 7443, variant);
@@ -1151,6 +1232,47 @@ fn test_ticket_producer_emits_ca_bound_valid_and_rejectable_tickets() {
         .verify_server_ca(ca_path.to_str())
         .expect_err("fixture bad CA does not match");
     assert_eq!(error, TicketError::CaMismatch);
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn credential_equal_agent_label_is_not_published_or_rendered() {
+    let app = TestApp::start(true, false, true, false).await;
+    let secret = app.producer.enroll_secret_token().to_owned();
+    let response = app
+        .enroll(
+            &app.member,
+            "credential-label-agent",
+            &app.ticket(TicketVariant::LabelMatchesEnrollment),
+        )
+        .await;
+    assert!(
+        !response.starts_with("HTTP/1.1 200"),
+        "credential-equal display label is refused: {}",
+        response_summary(&response)
+    );
+    assert!(response.contains("ticket_optional_field_invalid"));
+    assert!(
+        !response.contains(&secret),
+        "refusal must not reveal the credential"
+    );
+
+    let page = browser_get(app.address, "/my-account/models", &app.member.cookies).await;
+    assert!(
+        page.starts_with("HTTP/1.1 200"),
+        "member model page renders"
+    );
+    assert!(
+        !page.contains(&secret),
+        "a credential-equal Agent label must not reach rendered model origins"
+    );
+    let config = fs::read_to_string(&app.config_path).expect("operator config reads");
+    assert!(!config.contains("credential-label-agent"));
+    assert!(!config.contains(&secret));
+    assert!(
+        !app.env_path.exists(),
+        "rejected enrollment creates no credential file"
+    );
+    app.shutdown().await;
 }
 
 #[tokio::test(flavor = "current_thread")]
@@ -1393,6 +1515,12 @@ async fn enrolled_agent_routes_inference_through_reverse_client() {
         app.producer.ca_pem().as_bytes().to_vec(),
     );
     wait_for_control_count(&monitor, 1).await;
+    let online_status = authenticated_status(app.address, &app.admin.cookies).await;
+    assert!(!online_status.contains(app.producer.enroll_secret_token()));
+    let (online_state, online_reason) = live_agent_status(&online_status, "inference-agent");
+    assert_eq!(online_state, "online");
+    assert_eq!(online_reason, None);
+
     let inference = inference_request(app.address, &app.api_token).await;
     assert!(
         inference.starts_with("HTTP/1.1 200"),
@@ -1405,7 +1533,23 @@ async fn enrolled_agent_routes_inference_through_reverse_client() {
     assert_eq!(provider.requests.load(Ordering::Acquire), 1);
     assert!(!inference.contains(app.producer.enroll_secret_token()));
 
+    client.request_cancel();
+    let external_address: SocketAddr = agent
+        .external_bind
+        .parse()
+        .expect("Agent external bind is valid");
+    let external_stream = TcpStream::connect(external_address)
+        .await
+        .expect("loopback external listener consumes the idle control session");
+    drop(external_stream);
     client.shutdown().await;
+    wait_for_control_count(&monitor, 0).await;
+    let offline_status = authenticated_status(app.address, &app.admin.cookies).await;
+    assert!(!offline_status.contains(app.producer.enroll_secret_token()));
+    let (offline_state, offline_reason) = live_agent_status(&offline_status, "inference-agent");
+    assert_eq!(offline_state, "offline");
+    assert_eq!(offline_reason.as_deref(), Some("control_disconnected"));
+
     let close_report = monitor.close(Duration::from_secs(2)).await;
     assert_eq!(
         close_report.shared, 1,

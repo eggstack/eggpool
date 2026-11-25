@@ -25,22 +25,38 @@ impl FixtureServer {
         responses: Vec<(u16, &'static str)>,
         requests: Arc<Mutex<Vec<String>>>,
     ) -> Self {
+        Self::start_sequence_with_path(responses, requests, None).await
+    }
+
+    async fn start_sequence_with_path(
+        responses: Vec<(u16, &'static str)>,
+        requests: Arc<Mutex<Vec<String>>>,
+        expected_path: Option<&'static str>,
+    ) -> Self {
         let listener = TcpListener::bind((std::net::Ipv4Addr::LOCALHOST, 0))
             .await
             .expect("fixture listener");
         let address = format!("http://{}", listener.local_addr().expect("fixture address"));
         let observed_requests = Arc::clone(&requests);
         let task = tokio::spawn(async move {
-            for (status, body) in responses {
+            for (expected_status, expected_body) in responses {
                 let Ok((mut stream, _)) = listener.accept().await else {
                     break;
                 };
                 let mut request = vec![0; 16 * 1024];
                 let size = stream.read(&mut request).await.unwrap_or_default();
+                let request = String::from_utf8_lossy(&request[..size]).into_owned();
                 observed_requests
                     .lock()
                     .expect("request mutex")
-                    .push(String::from_utf8_lossy(&request[..size]).into_owned());
+                    .push(request.clone());
+                let path_matches =
+                    expected_path.is_none_or(|path| request.starts_with(&format!("GET {path} ")));
+                let (status, body) = if path_matches {
+                    (expected_status, expected_body)
+                } else {
+                    (404, r#"{"error":"unexpected path"}"#)
+                };
                 let response = format!(
                     "HTTP/1.1 {status} Test\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}",
                     body.len()
@@ -109,6 +125,38 @@ async fn service(
     let registry =
         AccountRegistry::from_config(&config, &accounts, &credentials).expect("registry");
     let pool = ProviderClientPool::from_config(&config).expect("client pool");
+    CatalogService::with_credentials(config, registry, database.clone(), pool, credentials)
+}
+
+async fn service_for_accounts(
+    config: Config,
+    database: &Database,
+    credentials: CredentialStore,
+) -> CatalogService {
+    let rows = config
+        .providers
+        .iter()
+        .flat_map(|(provider_id, provider)| {
+            provider.accounts.iter().map(|account| AccountConfig {
+                name: account.name.clone(),
+                api_key_env: account.api_key_env.clone(),
+                enabled: account.enabled,
+                weight: account.weight,
+                provider_id: provider_id.clone(),
+            })
+        })
+        .collect();
+    AccountRepository::new(database)
+        .sync_from_config(rows)
+        .await
+        .expect("Agent account sync");
+    let accounts = AccountRepository::new(database)
+        .list_all()
+        .await
+        .expect("Agent accounts load");
+    let registry =
+        AccountRegistry::from_config(&config, &accounts, &credentials).expect("Agent registry");
+    let pool = ProviderClientPool::from_config(&config).expect("Agent client pool");
     CatalogService::with_credentials(config, registry, database.clone(), pool, credentials)
 }
 
@@ -327,6 +375,101 @@ async fn malformed_and_empty_responses_preserve_prior_support() {
     assert_eq!(result.outcomes["account-a"], RefreshOutcome::Failed);
     let snapshot_after = recovered.cache_snapshot().await;
     assert!(snapshot_after.account_support["gpt-one"].contains(&"account-a".into()));
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn agent_discovery_uses_account_endpoint_and_failure_retains_isolated_support() {
+    let requests_a = Arc::new(Mutex::new(Vec::new()));
+    let requests_b = Arc::new(Mutex::new(Vec::new()));
+    let server_a = FixtureServer::start_sequence_with_path(
+        vec![
+            (200, r#"{"data":[{"id":"agent-a-model"}]}"#),
+            (503, r#"{"error":"unavailable"}"#),
+        ],
+        requests_a.clone(),
+        Some("/v1/models"),
+    )
+    .await;
+    let server_b = FixtureServer::start_sequence_with_path(
+        vec![
+            (200, r#"{"data":[{"id":"agent-b-model"}]}"#),
+            (200, r#"{"data":[{"id":"agent-b-model"}]}"#),
+        ],
+        requests_b.clone(),
+        Some("/v1/models"),
+    )
+    .await;
+    let (database, _directory) = database().await;
+    let mut config = Config::default();
+    config.agents.enabled = true;
+    config.models.catalog_withdrawal_policy = "confirmed_once".into();
+    let account = |name: &str, api_key_env: &str, base_url: String| ConfigAccount {
+        name: name.into(),
+        auth_mode: eggpool::config::AccountAuthMode::Agent,
+        api_key_env: api_key_env.into(),
+        base_url: Some(base_url),
+        agent: Some(Default::default()),
+        label: Some("Test agent".into()),
+        ..Default::default()
+    };
+    config.providers.insert(
+        "agent-provider".into(),
+        ProviderConfig {
+            id: "agent-provider".into(),
+            base_url: "http://127.0.0.1:1".into(),
+            protocols: vec!["openai".into()],
+            auth: ProviderAuthConfig {
+                mode: "bearer".into(),
+                ..Default::default()
+            },
+            accounts: vec![
+                account("agent-a", "AGENT_A_KEY", format!("{}/v1", server_a.address)),
+                account("agent-b", "AGENT_B_KEY", format!("{}/v1", server_b.address)),
+            ],
+            ..Default::default()
+        },
+    );
+    let mut credentials = CredentialStore::default();
+    credentials.insert("agent-a", "agent-a-key");
+    credentials.insert("agent-b", "agent-b-key");
+    let catalog = service_for_accounts(config, &database, credentials).await;
+
+    let first = catalog.refresh().await.expect("Agent discovery succeeds");
+    assert_eq!(first.outcomes["agent-a"], RefreshOutcome::SuccessPartial);
+    assert_eq!(first.outcomes["agent-b"], RefreshOutcome::SuccessPartial);
+    let before_failure = catalog.cache_snapshot().await;
+    assert!(before_failure.account_support["agent-a-model"].contains(&"agent-a".into()));
+    assert!(before_failure.account_support["agent-b-model"].contains(&"agent-b".into()));
+
+    let second = catalog
+        .refresh()
+        .await
+        .expect("Agent failure is a normal outcome");
+    assert_eq!(second.outcomes["agent-a"], RefreshOutcome::Failed);
+    assert_eq!(second.outcomes["agent-b"], RefreshOutcome::SuccessPartial);
+    let after_failure = catalog.cache_snapshot().await;
+    assert!(after_failure.account_support["agent-a-model"].contains(&"agent-a".into()));
+    assert!(after_failure.account_support["agent-b-model"].contains(&"agent-b".into()));
+    assert_eq!(after_failure.outcomes["agent-a"], RefreshOutcome::Failed);
+
+    for request in requests_a.lock().expect("Agent A requests").iter() {
+        assert!(request.starts_with("GET /v1/models "), "{request}");
+        assert!(
+            request
+                .to_ascii_lowercase()
+                .contains("authorization: bearer agent-a-key")
+        );
+    }
+    for request in requests_b.lock().expect("Agent B requests").iter() {
+        assert!(request.starts_with("GET /v1/models "), "{request}");
+        assert!(
+            request
+                .to_ascii_lowercase()
+                .contains("authorization: bearer agent-b-key")
+        );
+    }
+    server_a.finish().await;
+    server_b.finish().await;
 }
 
 #[tokio::test(flavor = "current_thread")]

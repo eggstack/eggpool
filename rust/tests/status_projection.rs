@@ -88,6 +88,7 @@ fn live_snapshot() -> status_service::ProxyStatusSnapshot {
             reason_code: None,
         },
         providers,
+        agent_tunnels: Vec::new(),
         runtime: status_service::RuntimeHealthSummary {
             generation: Some(7),
             digest_prefix: "abc123".to_owned(),
@@ -112,6 +113,47 @@ fn offline_facts() -> Vec<status_service::OfflineProviderFacts> {
             enabled_accounts: 1,
         },
     ]
+}
+
+#[test]
+fn agent_tunnel_status_is_sorted_bounded_and_secret_free() {
+    let tunnels = (0..=status_service::MAX_STATUS_AGENT_TUNNELS)
+        .rev()
+        .map(|index| eggpool::agents::AgentTunnelStatus {
+            provider_id: format!("provider-{index:03}"),
+            account_name: "a".repeat(status_service::MAX_PROVIDER_ID_CHARS + 20),
+            state: eggpool::agents::AgentTunnelState::Offline,
+            reason_code: Some("control_disconnected"),
+            active_control: 0,
+            control_connected: false,
+            active_streams: 0,
+        })
+        .collect();
+    let projected =
+        status_service::project_agent_tunnels(&eggpool::agents::AgentTunnelSnapshot { tunnels });
+
+    assert_eq!(projected.len(), status_service::MAX_STATUS_AGENT_TUNNELS);
+    assert_eq!(projected[0].provider_id, "provider-000");
+    assert_eq!(projected.last().unwrap().provider_id, "provider-255");
+    assert_eq!(projected[0].state, "offline");
+    assert_eq!(
+        projected[0].reason_code.as_deref(),
+        Some("control_disconnected")
+    );
+    assert!(projected[0].account_name.chars().count() <= status_service::MAX_PROVIDER_ID_CHARS);
+    let value = serde_json::to_value(&projected[0]).expect("Agent status serializes");
+    assert_eq!(
+        object_keys(&value),
+        BTreeSet::from([
+            "account_name".to_owned(),
+            "provider_id".to_owned(),
+            "reason_code".to_owned(),
+            "state".to_owned(),
+        ])
+    );
+    let serialized = value.to_string();
+    assert!(!serialized.contains("endpoint"));
+    assert!(!serialized.contains("credential"));
 }
 
 fn object_keys(value: &Value) -> BTreeSet<String> {

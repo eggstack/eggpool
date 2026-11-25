@@ -13,6 +13,7 @@ use std::{
 
 use eggress_protocol_reverse::{
     ProtocolError,
+    metrics::ReverseMetrics,
     server::{ReverseServer, ReverseServerConfig, ReverseServerState},
     tls::ReverseServerTlsConfig,
 };
@@ -73,10 +74,56 @@ pub struct AgentTunnelCloseReport {
     pub shutdown_timed_out: usize,
 }
 
+/// Raw connection facts for one Agent account, straight from the reverse
+/// server's own counters.
+///
+/// These are deliberately separate from the availability projection: reading
+/// them does NOT change or latch any projected state. The accepted counter
+/// rises only after a control connection has AUTHENTICATED, so EggPool's own
+/// startup readiness probe never counts.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct AgentTunnelConnectionFacts {
+    /// Control connections that authenticated since the listener started.
+    pub control_connections_accepted: u64,
+    /// Control connections that are open right now.
+    pub active_control_connections: u32,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum AgentTunnelState {
+    Online,
+    Starting,
+    Offline,
+    Failed,
+}
+
+impl AgentTunnelState {
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            Self::Online => "online",
+            Self::Starting => "starting",
+            Self::Offline => "offline",
+            Self::Failed => "failed",
+        }
+    }
+
+    pub const fn reason_code(self) -> Option<&'static str> {
+        match self {
+            Self::Online => None,
+            Self::Starting => Some("waiting_for_agent"),
+            Self::Offline => Some("control_disconnected"),
+            Self::Failed => Some("tunnel_failed"),
+        }
+    }
+}
+
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 pub struct AgentTunnelStatus {
     pub provider_id: String,
     pub account_name: String,
+    pub state: AgentTunnelState,
+    pub reason_code: Option<&'static str>,
     pub active_control: u32,
     pub control_connected: bool,
     pub active_streams: u32,
@@ -85,6 +132,132 @@ pub struct AgentTunnelStatus {
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 pub struct AgentTunnelSnapshot {
     pub tunnels: Vec<AgentTunnelStatus>,
+}
+
+#[derive(Clone, Default)]
+pub struct AgentTunnelAvailability {
+    tunnels: BTreeMap<String, BTreeMap<String, AgentTunnelAvailabilityEntry>>,
+}
+
+#[derive(Clone)]
+struct AgentTunnelAvailabilityEntry {
+    state: Arc<ReverseServerState>,
+    running: Arc<AtomicBool>,
+    metrics: Arc<ReverseMetrics>,
+}
+
+impl std::fmt::Debug for AgentTunnelAvailability {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        formatter
+            .debug_struct("AgentTunnelAvailability")
+            .field(
+                "tunnel_count",
+                &self.tunnels.values().map(BTreeMap::len).sum::<usize>(),
+            )
+            .finish()
+    }
+}
+
+impl AgentTunnelAvailability {
+    fn state_for_entry(entry: &AgentTunnelAvailabilityEntry) -> (AgentTunnelState, u32, u32) {
+        let snapshot = entry.state.snapshot();
+        // The reverse server increments this counter only after a control
+        // connection has AUTHENTICATED, so EggPool's own startup readiness
+        // probe never counts. It is therefore the connection-state owner for
+        // "this agent has connected at least once", and it survives a
+        // connection that appeared and dropped before the first read.
+        let ever_connected = entry
+            .metrics
+            .control_connections_accepted_total
+            .load(Ordering::Acquire)
+            > 0;
+        let state = if snapshot.active_control > 0 {
+            AgentTunnelState::Online
+        } else if !entry.running.load(Ordering::Acquire) {
+            AgentTunnelState::Failed
+        } else if ever_connected {
+            AgentTunnelState::Offline
+        } else {
+            AgentTunnelState::Starting
+        };
+        (state, snapshot.active_control, snapshot.active_streams)
+    }
+
+    pub fn state_for(&self, provider_id: &str, account_name: &str) -> AgentTunnelState {
+        self.tunnels
+            .get(provider_id)
+            .and_then(|accounts| accounts.get(account_name))
+            .map_or(AgentTunnelState::Offline, |entry| {
+                Self::state_for_entry(entry).0
+            })
+    }
+
+    /// Raw connection facts for one account, read from the reverse server.
+    ///
+    /// Reading these does not latch or otherwise change the projected state.
+    pub fn connection_facts(
+        &self,
+        provider_id: &str,
+        account_name: &str,
+    ) -> AgentTunnelConnectionFacts {
+        self.tunnels
+            .get(provider_id)
+            .and_then(|accounts| accounts.get(account_name))
+            .map_or(
+                AgentTunnelConnectionFacts {
+                    control_connections_accepted: 0,
+                    active_control_connections: 0,
+                },
+                |entry| AgentTunnelConnectionFacts {
+                    control_connections_accepted: entry
+                        .metrics
+                        .control_connections_accepted_total
+                        .load(Ordering::Acquire),
+                    active_control_connections: entry.state.snapshot().active_control,
+                },
+            )
+    }
+
+    pub fn status_for(&self, provider_id: &str, account_name: &str) -> AgentTunnelStatus {
+        let Some(entry) = self
+            .tunnels
+            .get(provider_id)
+            .and_then(|accounts| accounts.get(account_name))
+        else {
+            return AgentTunnelStatus {
+                provider_id: provider_id.to_owned(),
+                account_name: account_name.to_owned(),
+                state: AgentTunnelState::Offline,
+                reason_code: Some("tunnel_unavailable"),
+                active_control: 0,
+                control_connected: false,
+                active_streams: 0,
+            };
+        };
+        let (state, active_control, active_streams) = Self::state_for_entry(entry);
+        AgentTunnelStatus {
+            provider_id: provider_id.to_owned(),
+            account_name: account_name.to_owned(),
+            state,
+            reason_code: state.reason_code(),
+            active_control,
+            control_connected: active_control > 0,
+            active_streams,
+        }
+    }
+
+    pub fn snapshot(&self) -> AgentTunnelSnapshot {
+        let tunnels = self
+            .tunnels
+            .iter()
+            .flat_map(|(provider_id, accounts)| {
+                accounts
+                    .keys()
+                    .map(|account_name| self.status_for(provider_id, account_name))
+            })
+            .collect();
+        AgentTunnelSnapshot { tunnels }
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord)]
@@ -292,25 +465,35 @@ impl AgentTunnelSet {
         self.tunnels.is_empty()
     }
 
+    /// Raw connection facts for one account, read from the reverse server.
+    ///
+    /// Reading these does not latch or otherwise change the projected state.
+    pub fn connection_facts(
+        &self,
+        provider_id: &str,
+        account_name: &str,
+    ) -> AgentTunnelConnectionFacts {
+        self.availability()
+            .connection_facts(provider_id, account_name)
+    }
+
+    pub fn availability(&self) -> AgentTunnelAvailability {
+        let mut tunnels = BTreeMap::<String, BTreeMap<String, AgentTunnelAvailabilityEntry>>::new();
+        for (key, server) in &self.tunnels {
+            tunnels.entry(key.provider_id.clone()).or_default().insert(
+                key.account_name.clone(),
+                AgentTunnelAvailabilityEntry {
+                    state: Arc::clone(&server.state),
+                    running: Arc::clone(&server.running),
+                    metrics: Arc::clone(&server.metrics),
+                },
+            );
+        }
+        AgentTunnelAvailability { tunnels }
+    }
+
     pub fn snapshot(&self) -> AgentTunnelSnapshot {
-        let mut tunnels = self
-            .tunnels
-            .iter()
-            .map(|(key, server)| {
-                let snapshot = server.state.snapshot();
-                AgentTunnelStatus {
-                    provider_id: key.provider_id.clone(),
-                    account_name: key.account_name.clone(),
-                    active_control: snapshot.active_control,
-                    control_connected: snapshot.active_control > 0,
-                    active_streams: snapshot.active_streams,
-                }
-            })
-            .collect::<Vec<_>>();
-        tunnels.sort_by(|left, right| {
-            (&left.provider_id, &left.account_name).cmp(&(&right.provider_id, &right.account_name))
-        });
-        AgentTunnelSnapshot { tunnels }
+        self.availability().snapshot()
     }
 
     /// Release all listener references. The last generation owner cancels and
@@ -334,6 +517,7 @@ struct ManagedTunnel {
     state: Arc<ReverseServerState>,
     cancel: Box<dyn Fn() + Send + Sync>,
     running: Arc<AtomicBool>,
+    metrics: Arc<ReverseMetrics>,
     task: Mutex<Option<JoinHandle<Result<(), ProtocolError>>>>,
 }
 
@@ -475,7 +659,12 @@ async fn start_server(
     key: &AgentKey,
 ) -> Result<Arc<ManagedTunnel>, AgentTunnelError> {
     let control_bind = config.control_bind;
-    let server = ReverseServer::new(config);
+    let mut server = ReverseServer::new(config);
+    // The reverse server's own metrics record an accepted control connection
+    // only after that connection authenticates. That counter is the
+    // connection-state owner for "this agent has connected at least once".
+    let metrics = Arc::new(ReverseMetrics::new());
+    server.set_metrics(Arc::clone(&metrics));
     let state = server.state_handle();
     let cancel_token = server.cancel_token();
     let cancel_for_startup = cancel_token.clone();
@@ -504,6 +693,7 @@ async fn start_server(
         state,
         cancel: Box::new(move || cancel_token.cancel()),
         running,
+        metrics,
         task: Mutex::new(Some(task)),
     }))
 }

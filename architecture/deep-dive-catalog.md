@@ -102,7 +102,11 @@ URL plus its model-discovery path is the initial discovery target; live
 responses remain the source of truth afterward and refresh failures never erase
 usable catalog state. Discovery output is catalog state, not credential proof:
 a provider that publishes its model list without a credential still has an
-unverified credential until real inference demonstrates acceptance.
+unverified credential until real inference demonstrates acceptance. Agent accounts
+use their own account credential and tunneled HTTP endpoint for `GET /v1/models`;
+the Agent branch does not consult OAuth state. Failed Agent fetches record a
+bounded failed outcome and preserve that account's prior catalog support, without
+withdrawing a sibling account's support.
 
 ## Invariants
 

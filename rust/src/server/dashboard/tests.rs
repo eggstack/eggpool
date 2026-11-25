@@ -1311,6 +1311,36 @@ fn the_users_roster_shows_the_current_assignment_without_secrets() {
 }
 
 #[test]
+fn member_model_origin_row_shows_display_label_and_bounded_agent_state() {
+    let origin = crate::catalog::ModelOrigin {
+        provider_id: "agent-provider".to_owned(),
+        account_name: "agent-a".to_owned(),
+        label: "Workshop agent".to_owned(),
+        display_label: "Workshop agent 2".to_owned(),
+    };
+    let status = crate::agents::AgentTunnelStatus {
+        provider_id: "agent-provider".to_owned(),
+        account_name: "agent-a".to_owned(),
+        state: crate::agents::AgentTunnelState::Offline,
+        reason_code: Some("control_disconnected"),
+        active_control: 0,
+        control_connected: false,
+        active_streams: 0,
+    };
+
+    let html = super::render::render_member_model_origin(&origin, Some(&status));
+    assert!(html.contains("Workshop agent 2"));
+    assert!(html.contains("agent-provider"));
+    assert!(html.contains("data-agent-state=\"offline\""));
+    assert!(html.contains("control_disconnected"));
+    assert!(!html.contains("endpoint"));
+    assert!(!html.contains("credential"));
+
+    let shared = super::render::render_member_model_origin(&origin, None);
+    assert!(!shared.contains("agent-state"));
+}
+
+#[test]
 fn member_upstream_form_hides_the_key_until_self_service_is_allowed() {
     let providers = vec!["opencode-go".to_owned()];
     let rows = vec![(

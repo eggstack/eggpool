@@ -1,3 +1,4 @@
+use super::render::render_member_model_origin;
 use super::*;
 use axum::{
     Extension, Form,
@@ -667,9 +668,36 @@ pub(in crate::server) async fn my_models_page(
     } else {
         "This list is filtered by your current model policy."
     };
+    let router = inference.router_handle();
+    let identities = router.all_account_identities();
     let models = available_models
         .into_iter()
-        .map(|model| format!("<li><code>{}</code></li>", html_escape(&model)))
+        .map(|model| {
+            let origins = router.model_origins_for_user(&model, &session.user_id);
+            if origins.is_empty() {
+                return format!("<li><code>{}</code></li>", html_escape(&model));
+            }
+            let origin_rows = origins
+                .into_iter()
+                .map(|origin| {
+                    let agent_status = identities
+                        .iter()
+                        .any(|identity| {
+                            identity.provider_id == origin.provider_id
+                                && identity.account_name == origin.account_name
+                                && identity.auth_mode == crate::config::AccountAuthMode::Agent
+                        })
+                        .then(|| {
+                            router.agent_tunnel_status(&origin.provider_id, &origin.account_name)
+                        });
+                    render_member_model_origin(&origin, agent_status.as_ref())
+                })
+                .collect::<String>();
+            format!(
+                "<li><code>{}</code><ul>{origin_rows}</ul></li>",
+                html_escape(&model)
+            )
+        })
         .collect::<String>();
     let theme = selected_theme(
         query
@@ -687,7 +715,7 @@ pub(in crate::server) async fn my_models_page(
         },
         theme,
         &format!(
-            "<section class=\"panel\"><h1>My accessible models</h1><p>{explanation}</p><ul>{models}</ul><p><a href=\"/my-account\">My account</a></p></section>"
+            "<section class=\"panel\"><h1>My accessible models</h1><p>{explanation}</p><p class=\"sub\">Each row shows a backing-account origin label; numeric collision suffixes only distinguish display labels and never change the model ID. Agent state reflects control connectivity: online is connected, starting awaits its first connection, offline has no live connection, and failed means the listener stopped. Non-online Agents are excluded individually from routing; unrelated accounts remain available. Reason codes are fixed and contain no endpoint or credential data.</p><ul>{models}</ul><p><a href=\"/my-account\">My account</a></p></section>"
         ),
     ))
 }

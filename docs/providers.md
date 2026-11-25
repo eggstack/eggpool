@@ -548,7 +548,28 @@ credential to that Agent's HTTP endpoint, and the Agent presents it as the
 reverse control-channel password with the account name as username. Agent
 accounts require an active personal upstream binding; they are not shared. A
 provider-side Agent HTTP 401 is terminal: EggPool neither refreshes it as OAuth
-nor retries through a shared fallback account.
+nor retries through a shared fallback account. An enrolled Agent base URL ends
+in `/v1`; discovery uses the relative target `/models`, producing the effective
+request `GET /v1/models` with the Agent account's credential. A failed refresh
+records failure without withdrawing previously known support or affecting another
+account. The upstream model ID remains the dispatch and policy ID. My models shows
+one origin label per backing account; collision suffixes are display-only. The
+ticket's display label is refused if it equals the enrollment credential.
+
+Tunnel availability is based on control-channel state, not active probes:
+`online` means connected, `starting` means the listener awaits its first
+Agent connection, `offline` means no live control connection, and `failed` means
+the listener stopped. Non-online Agents are excluded individually from routing;
+unrelated shared accounts remain eligible. Status and member pages expose only
+bounded state/reason codes, never endpoint or credential data.
+
+The pinned Eggress `1.0.12` reverse server does not observe an idle
+control-channel disconnect: its active-control count is the number of pooled
+control connections, and it drops only when one is handed to an external
+request. A dropped Agent control is therefore detected on that Agent's next use,
+so `offline` follows the first failed request rather than the disconnect
+itself. EggPool reports what the pinned server actually exposes and does not
+probe a sleeping machine.
 
 `[agents].enabled` defaults to `true`. Setting it to `false` prevents Agent
 tunnel listeners from starting and excludes Agent accounts from routing while

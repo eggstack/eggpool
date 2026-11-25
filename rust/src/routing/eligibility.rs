@@ -244,6 +244,7 @@ pub fn build_eligible_candidates(
     policy: &EligibilityPolicy,
     active_requests: &BTreeMap<String, i64>,
     personal_bindings: &crate::personal_upstream::PersonalUpstreamSnapshot,
+    agent_availability: &crate::agents::AgentTunnelAvailability,
 ) -> (Vec<RoutingCandidate>, Vec<RoutingExclusion>) {
     let mut eligible = Vec::new();
     let mut exclusions = Vec::new();
@@ -273,6 +274,22 @@ pub fn build_eligible_candidates(
                 reason_code: "personal_upstream".into(),
             });
             continue;
+        }
+        if identity.auth_mode == crate::config::AccountAuthMode::Agent {
+            let state = agent_availability.state_for(&identity.provider_id, &identity.account_name);
+            if state != crate::agents::AgentTunnelState::Online {
+                let reason_code = match state {
+                    crate::agents::AgentTunnelState::Online => unreachable!(),
+                    crate::agents::AgentTunnelState::Starting => "agent_starting",
+                    crate::agents::AgentTunnelState::Offline => "agent_offline",
+                    crate::agents::AgentTunnelState::Failed => "agent_failed",
+                };
+                exclusions.push(RoutingExclusion {
+                    account_name: identity.account_name.clone(),
+                    reason_code: reason_code.into(),
+                });
+                continue;
+            }
         }
         let Some(candidate) = candidate_for_account(
             identity,

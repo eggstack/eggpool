@@ -747,6 +747,9 @@ impl RuntimeGenerationFactory {
                 });
             }
         };
+        inference
+            .router_handle()
+            .set_agent_tunnel_availability(agent_tunnels.availability());
         let finalization = inference.finalization_supervisor();
         let generation = Arc::new(RuntimeGeneration::new(
             generation_id,

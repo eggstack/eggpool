@@ -6,8 +6,8 @@ mod refresh;
 pub use cache::{
     AccountCatalogOutcome, AccountCatalogUpdateResult, AccountFreshness, CacheSnapshot,
     CapabilityStatus, CatalogCacheError, EffectiveModelLimits, ModelCapabilities,
-    ModelCatalogCache, ModelIdentity, ModelInput, ProtocolResolutionStatus, ProviderModelIdentity,
-    ThinkingCapability,
+    ModelCatalogCache, ModelIdentity, ModelInput, ModelOrigin, ProtocolResolutionStatus,
+    ProviderModelIdentity, ThinkingCapability,
 };
 pub use refresh::{
     AccountCatalogFetch, CatalogModelEvent, CatalogRefreshError, CatalogRefreshResult,

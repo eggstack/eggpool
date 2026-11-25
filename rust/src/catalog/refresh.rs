@@ -321,14 +321,29 @@ impl CatalogService {
                         }
                     }
                 }
-                crate::config::AccountAuthMode::Agent => {
-                    outcomes.insert(identity.account_name.clone(), RefreshOutcome::Skipped);
-                    continue;
-                }
+                crate::config::AccountAuthMode::Agent => self
+                    .credentials
+                    .get(&identity.account_name)
+                    .filter(|key| !key.trim().is_empty())
+                    .map(crate::config::SecretString::from),
             };
             let Some(api_key) = api_key else {
                 outcomes.insert(identity.account_name.clone(), RefreshOutcome::Skipped);
                 continue;
+            };
+            let provider = if identity.auth_mode == crate::config::AccountAuthMode::Agent {
+                provider.map(|mut provider| {
+                    provider.models_method = "GET".into();
+                    provider.models_path = "/models".into();
+                    provider.models_endpoint = Some(crate::config::ProviderModelsEndpointConfig {
+                        method: "GET".into(),
+                        path: "/models".into(),
+                        ..Default::default()
+                    });
+                    provider
+                })
+            } else {
+                provider
             };
             let client = match self
                 .client_pool

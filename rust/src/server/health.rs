@@ -509,6 +509,7 @@ pub(super) async fn build_status_snapshot(state: &AppState) -> status_service::P
                     reason_code: Some("runtime unavailable".to_owned()),
                 },
                 providers: Vec::new(),
+                agent_tunnels: Vec::new(),
                 runtime: status_service::RuntimeHealthSummary {
                     generation: None,
                     digest_prefix: String::new(),
@@ -523,6 +524,7 @@ pub(super) async fn build_status_snapshot(state: &AppState) -> status_service::P
     let generation = lease.generation();
     let config = generation.config();
     let router = generation.inference().router_handle();
+    let agent_tunnels = status_service::project_agent_tunnels(&router.agent_tunnel_snapshot());
     let base_url = format!("http://{}:{}", config.server.host, config.server.port);
     let stale_after = status_service::stale_after_secs(config.models.stale_after_s);
 
@@ -735,6 +737,7 @@ pub(super) async fn build_status_snapshot(state: &AppState) -> status_service::P
             reason_code: reason,
         },
         providers,
+        agent_tunnels,
         runtime: status_service::RuntimeHealthSummary {
             generation: Some(generation_id),
             digest_prefix: digest,
