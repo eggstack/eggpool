@@ -1,6 +1,6 @@
 # Provider Agents Milestone 003 — Agent Model Origin, Discovery, and Health
 
-Status: blocked
+Status: ready
 
 Repository baseline: `c4d774aeb883307f28ef94f6143dc688b3098946`
 
@@ -27,9 +27,16 @@ an offline agent visible and route-excluded instead of a mysterious failure.
 
 ## 2. Why this milestone is ready
 
-Blocked.
+Ready.
 
-- Hard: M001 (agent account and tunnel) and M002 (enrollment) must be closed.
+- Hard: satisfied. M001 is implemented and conditionally closed through
+  `plans/closure/provider-agents/001-status.md`, and M002 is implemented and
+  conditionally closed through `plans/closure/provider-agents/002-status.md`.
+  Both outstanding conditions are external to this milestone — a repo-wide
+  dependency-audit gate owned by Security hardening M008, and the live ticket
+  producer in `eggstack/eggpass#10` — and neither is an interface dependency of
+  the catalog, routing, status, or dashboard work here, so neither blocks
+  implementation.
 - Hard: ADR-0016 acceptance is satisfied (2026-11-24).
 
 ## 3. Current implementation evidence

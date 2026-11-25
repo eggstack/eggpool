@@ -1,6 +1,6 @@
 # Provider Agents Milestone 002 — One-Time Enrollment and Owner Attach
 
-Status: ready
+Status: implemented
 
 Repository baseline: `c4d774aeb883307f28ef94f6143dc688b3098946`
 
@@ -29,18 +29,22 @@ credential and no provider token ever reaching the server.
 
 ## 2. Why this milestone is ready
 
-Ready.
+Implemented and conditionally closed.
 
-- Hard: satisfied. M001 is implemented and conditionally closed through
-  `plans/closure/provider-agents/001-status.md`; the agent account kind and the
-  tunnel manager exist and are verified. M001's outstanding condition is the
-  repository-wide dependency-audit gate on a pre-existing SSH advisory owned by
-  Security hardening M008, which is not an interface dependency of this
-  milestone, so it does not block implementation here.
-- Interface: the ticket format in `eggstack/eggpass#10` must be agreed. Tests can
-  use an in-repository ticket producer, but the milestone cannot be closed as a
-  user capability until the real producer exists.
-- Hard: ADR-0016 acceptance is satisfied (2026-11-24).
+- Hard: satisfied. ADR-0016 acceptance is satisfied (2026-11-24), and M001 is
+  implemented and conditionally closed through
+  `plans/closure/provider-agents/001-status.md`; the agent account kind, the
+  tunnel manager, and the owner gate exist and are verified.
+- Interface: the ticket format in `eggstack/eggpass#10` is agreed and
+  implemented in-repository as a fixture producer, which exercises the whole
+  path including a real reverse client authenticating with the adopted
+  credential. The live producer does not exist yet, so the milestone is
+  conditionally closed: the capability is complete and verified, and the named
+  outstanding condition is the live producer. See
+  `plans/closure/provider-agents/002-status.md`.
+- Hard: the repository-wide dependency-audit gate and the live ticket producer
+  are both external to this milestone's implementation; neither is an M002
+  interface defect.
 
 ## 3. Current implementation evidence
 

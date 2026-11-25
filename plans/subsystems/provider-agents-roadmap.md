@@ -176,8 +176,8 @@ Ownership:
 | ADR-0016 acceptance → M001 | hard | satisfied |
 | Eggress `1.0.12` reverse server/client availability → M001 | hard | available on the pinned line |
 | M001 → M002 | hard | satisfied |
-| `eggstack/eggpass#10` ticket producer → M002 end-to-end acceptance | interface (fixture) / operational (live) | open |
-| M001, M002 → M003 | hard | planned |
+| `eggstack/eggpass#10` ticket producer → M002 end-to-end acceptance | interface (fixture) / operational (live) | fixture satisfied; live producer outstanding |
+| M001, M002 → M003 | hard | satisfied |
 | M002, M003, migration evidence → M004 | hard | planned |
 | Provider OAuth roadmap → superseded | soft | on M004 closure |
 
@@ -344,6 +344,6 @@ Deferred work: none; this is the subsystem's terminal milestone.
 | Milestone | Status | Implementation plan | Closure record | Blockers |
 |---|---|---|---|---|
 | 1 | conditionally closed | [001](../implementation/provider-agents/001-agent-account-and-reverse-tunnel.md) | [001](../closure/provider-agents/001-status.md) | Capability complete and verified; the dependency-audit gate on a pre-existing SSH advisory owned by Security hardening M008 remains |
-| 2 | ready | [002](../implementation/provider-agents/002-owner-enrollment-and-revocation.md) | — | `eggstack/eggpass#10` live ticket producer for closure |
-| 3 | not started | [003](../implementation/provider-agents/003-agent-model-origin-and-health.md) | — | M002 |
+| 2 | conditionally closed | [002](../implementation/provider-agents/002-owner-enrollment-and-revocation.md) | [002](../closure/provider-agents/002-status.md) | Capability complete and verified; the live ticket producer in `eggstack/eggpass#10` remains |
+| 3 | ready | [003](../implementation/provider-agents/003-agent-model-origin-and-health.md) | — | M001 and M002 are implemented and conditionally closed |
 | 4 | not started | [004](../implementation/provider-agents/004-retire-direct-oauth-custody.md) | — | M003 and migration evidence |
