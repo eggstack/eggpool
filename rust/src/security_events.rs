@@ -40,10 +40,12 @@ pub(crate) enum SecurityEventCode {
     TransportRejected,
     AdminAccessDenied,
     ScopeDenied,
+    AgentEnrollment,
+    AgentRevocation,
 }
 
 impl SecurityEventCode {
-    pub(crate) const ALL: [Self; 12] = [
+    pub(crate) const ALL: [Self; 14] = [
         Self::SignInSucceeded,
         Self::SignInFailed,
         Self::SignInThrottled,
@@ -56,6 +58,8 @@ impl SecurityEventCode {
         Self::TransportRejected,
         Self::AdminAccessDenied,
         Self::ScopeDenied,
+        Self::AgentEnrollment,
+        Self::AgentRevocation,
     ];
 
     pub(crate) const fn as_str(self) -> &'static str {
@@ -72,6 +76,8 @@ impl SecurityEventCode {
             Self::TransportRejected => "transport_rejected",
             Self::AdminAccessDenied => "admin_access_denied",
             Self::ScopeDenied => "scope_denied",
+            Self::AgentEnrollment => "agent_enrollment",
+            Self::AgentRevocation => "agent_revocation",
         }
     }
 

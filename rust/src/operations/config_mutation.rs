@@ -58,6 +58,8 @@ pub enum MutationError {
     Interrupted,
     #[error("configuration mutation is already in progress")]
     Busy,
+    #[error("personal account rollback failed; operator repair is required")]
+    RollbackFailed,
     #[error("{0}")]
     Config(#[from] ConfigError),
     #[error("invalid configuration mutation: {0}")]
@@ -915,6 +917,31 @@ fn provider_exists(text: &str, provider_id: &str) -> bool {
         .any(|line| line_header(line) == Some(&format!("providers.{provider_id}")))
 }
 
+fn remove_empty_accounts_array(text: &str, provider_id: &str) -> String {
+    let provider_header = format!("providers.{provider_id}");
+    let mut in_provider_table = false;
+    text.lines()
+        .filter(|line| {
+            if let Some(header) = line_header(line) {
+                in_provider_table = header == provider_header;
+            }
+            let is_empty_accounts = in_provider_table
+                && line.split_once('=').is_some_and(|(key, value)| {
+                    key.trim() == "accounts"
+                        && value.split('#').next().is_some_and(|value| {
+                            value
+                                .chars()
+                                .filter(|c| !c.is_whitespace())
+                                .collect::<String>()
+                                == "[]"
+                        })
+                });
+            !is_empty_accounts
+        })
+        .collect::<Vec<_>>()
+        .join("\n")
+}
+
 fn append_account(
     text: &str,
     provider_id: &str,
@@ -1258,8 +1285,19 @@ fn remove_account_block(text: &str, account: &AccountMatch) -> Result<String, Mu
         }
         let start = index;
         let mut end = index + 1;
-        while end < lines.len() && line_header(&lines[end]).is_none() {
-            end += 1;
+        while end < lines.len() {
+            let Some(header) = line_header(&lines[end]) else {
+                end += 1;
+                continue;
+            };
+            if header == account_header && lines[end].starts_with("[[") {
+                break;
+            }
+            if header.starts_with(&format!("{account_header}.")) {
+                end += 1;
+                continue;
+            }
+            break;
         }
         let block = &lines[start..end];
         let name_matches = block.iter().any(|line| {
@@ -1416,24 +1454,26 @@ pub struct PersonalFileRollback {
 impl PersonalFileRollback {
     pub fn restore(self) -> Result<(), MutationError> {
         let _guard = lock_mutation(&self.config_path)?;
-        atomic_replace(
-            &self.config_path,
-            &self.previous_config,
-            existing_mode(&self.config_path)?,
-        )?;
-        match &self.previous_env {
+        let config_result = existing_mode(&self.config_path)
+            .and_then(|mode| atomic_replace(&self.config_path, &self.previous_config, mode));
+        let env_result = match &self.previous_env {
             Some(bytes) => {
                 #[cfg(unix)]
                 let mode = Some(fs::Permissions::from_mode(0o600));
                 #[cfg(not(unix))]
                 let mode = None;
-                atomic_replace(&self.env_path, bytes, mode)?;
+                atomic_replace(&self.env_path, bytes, mode)
             }
             None => {
                 if self.env_path.exists() {
-                    fs::remove_file(&self.env_path).map_err(MutationError::Write)?;
+                    fs::remove_file(&self.env_path).map_err(MutationError::Write)
+                } else {
+                    Ok(())
                 }
             }
+        };
+        if config_result.is_err() || env_result.is_err() {
+            return Err(MutationError::RollbackFailed);
         }
         Ok(())
     }
@@ -1498,6 +1538,355 @@ fn personal_account_text(
         );
         Ok(format!("{}\n", lines.join("\n")))
     }
+}
+
+fn agent_account_value(
+    account_name: &str,
+    api_key_env: &str,
+    base_url: &str,
+    label: Option<&str>,
+    agent: &crate::config::AgentAccountConfig,
+) -> Result<Value, MutationError> {
+    let tls = agent.tls.as_ref().ok_or_else(|| {
+        MutationError::Invalid("agent server TLS configuration is missing".into())
+    })?;
+    let control_endpoint = agent
+        .control_endpoint
+        .as_deref()
+        .ok_or_else(|| MutationError::Invalid("agent control endpoint is missing".into()))?;
+    let server_name = agent
+        .server_name
+        .as_deref()
+        .ok_or_else(|| MutationError::Invalid("agent TLS server name is missing".into()))?;
+    let server_ca_path = tls
+        .server_ca_path
+        .as_deref()
+        .ok_or_else(|| MutationError::Invalid("agent server CA authority is missing".into()))?;
+    let mut tls_table = Map::new();
+    tls_table.insert("cert_path".into(), Value::String(tls.cert_path.clone()));
+    tls_table.insert("key_path".into(), Value::String(tls.key_path.clone()));
+    tls_table.insert(
+        "server_ca_path".into(),
+        Value::String(server_ca_path.to_owned()),
+    );
+    if let Some(path) = &tls.client_ca_path {
+        tls_table.insert("client_ca_path".into(), Value::String(path.clone()));
+    }
+    tls_table.insert(
+        "require_client_cert".into(),
+        Value::Boolean(tls.require_client_cert),
+    );
+    let mut agent_table = Map::new();
+    agent_table.insert(
+        "control_bind".into(),
+        Value::String(agent.control_bind.clone()),
+    );
+    agent_table.insert(
+        "control_endpoint".into(),
+        Value::String(control_endpoint.to_owned()),
+    );
+    agent_table.insert("server_name".into(), Value::String(server_name.to_owned()));
+    agent_table.insert(
+        "external_bind".into(),
+        Value::String(agent.external_bind.clone()),
+    );
+    agent_table.insert(
+        "transport_secret_env".into(),
+        Value::String(agent.transport_secret_env.clone()),
+    );
+    agent_table.insert(
+        "max_streams".into(),
+        Value::Integer(i64::from(agent.max_streams)),
+    );
+    agent_table.insert(
+        "heartbeat_interval_s".into(),
+        Value::Integer(agent.heartbeat_interval_s.min(i64::MAX as u64) as i64),
+    );
+    agent_table.insert("tls".into(), Value::Table(tls_table));
+    let mut account_table = Map::new();
+    account_table.insert("name".into(), Value::String(account_name.to_owned()));
+    account_table.insert("auth_mode".into(), Value::String("agent".into()));
+    account_table.insert("api_key_env".into(), Value::String(api_key_env.to_owned()));
+    account_table.insert("base_url".into(), Value::String(base_url.to_owned()));
+    if let Some(label) = label {
+        account_table.insert("label".into(), Value::String(label.to_owned()));
+    }
+    account_table.insert("agent".into(), Value::Table(agent_table));
+    Ok(Value::Table(account_table))
+}
+
+fn agent_account_block(
+    provider_id: &str,
+    account_name: &str,
+    api_key_env: &str,
+    base_url: &str,
+    label: Option<&str>,
+    agent: &crate::config::AgentAccountConfig,
+) -> Result<String, MutationError> {
+    let tls = agent.tls.as_ref().ok_or_else(|| {
+        MutationError::Invalid("agent server TLS configuration is missing".into())
+    })?;
+    let control_endpoint = agent
+        .control_endpoint
+        .as_deref()
+        .ok_or_else(|| MutationError::Invalid("agent control endpoint is missing".into()))?;
+    let server_name = agent
+        .server_name
+        .as_deref()
+        .ok_or_else(|| MutationError::Invalid("agent TLS server name is missing".into()))?;
+    let server_ca_path = tls
+        .server_ca_path
+        .as_deref()
+        .ok_or_else(|| MutationError::Invalid("agent server CA authority is missing".into()))?;
+    let mut lines = vec![
+        String::new(),
+        format!("[[providers.{provider_id}.accounts]]"),
+        format!("name = {}", render_string(account_name)),
+        format!("auth_mode = {}", render_string("agent")),
+        format!("api_key_env = {}", render_string(api_key_env)),
+        format!("base_url = {}", render_string(base_url)),
+    ];
+    if let Some(label) = label {
+        lines.push(format!("label = {}", render_string(label)));
+    }
+    lines.extend([
+        String::new(),
+        format!("[providers.{provider_id}.accounts.agent]"),
+        format!("control_bind = {}", render_string(&agent.control_bind)),
+        format!("control_endpoint = {}", render_string(control_endpoint)),
+        format!("server_name = {}", render_string(server_name)),
+        format!("external_bind = {}", render_string(&agent.external_bind)),
+        format!(
+            "transport_secret_env = {}",
+            render_string(&agent.transport_secret_env)
+        ),
+        format!("max_streams = {}", agent.max_streams),
+        format!("heartbeat_interval_s = {}", agent.heartbeat_interval_s),
+        String::new(),
+        format!("[providers.{provider_id}.accounts.agent.tls]"),
+        format!("cert_path = {}", render_string(&tls.cert_path)),
+        format!("key_path = {}", render_string(&tls.key_path)),
+        format!("server_ca_path = {}", render_string(server_ca_path)),
+        format!("require_client_cert = {}", tls.require_client_cert),
+    ]);
+    if let Some(path) = &tls.client_ca_path {
+        lines.push(format!("client_ca_path = {}", render_string(path)));
+    }
+    Ok(lines.join("\n"))
+}
+
+/// Inputs for one Agent account's atomic config and environment-file update.
+pub struct PersonalAgentAccountFileWrite<'a> {
+    pub config_path: &'a Path,
+    pub env_path: &'a Path,
+    pub provider_id: &'a str,
+    pub account_name: &'a str,
+    pub secret_env: &'a str,
+    pub secret: &'a str,
+    pub base_url: &'a str,
+    pub label: Option<&'a str>,
+    pub agent: &'a crate::config::AgentAccountConfig,
+}
+
+/// Prepared file contents for an Agent account, held behind the config mutation lock.
+///
+/// Dropping this value publishes nothing; the caller inserts the owner binding
+/// before calling publish.
+pub struct PreparedPersonalAgentAccountFiles {
+    _guard: MutationGuard,
+    config_path: PathBuf,
+    previous_config: Vec<u8>,
+    updated_config: Vec<u8>,
+    config_mode: Option<fs::Permissions>,
+    env_path: PathBuf,
+    previous_env: Option<Vec<u8>>,
+    updated_env: Vec<u8>,
+    env_mode: Option<fs::Permissions>,
+    candidate: Config,
+    transition: ConfigTransition,
+}
+
+impl PreparedPersonalAgentAccountFiles {
+    /// Atomically publish the prepared credential and config after the caller
+    /// has inserted its owner binding.
+    pub fn publish(self) -> Result<(PersonalFileRollback, ConfigTransition), MutationError> {
+        let Self {
+            _guard,
+            config_path,
+            previous_config,
+            updated_config,
+            config_mode,
+            env_path,
+            previous_env,
+            updated_env,
+            env_mode,
+            candidate,
+            transition,
+        } = self;
+        atomic_replace(&env_path, &updated_env, env_mode.clone())?;
+        if let Err(error) = candidate.validate_account_credentials_near(Some(&config_path)) {
+            if restore_env(&env_path, previous_env.as_deref(), env_mode).is_err() {
+                return Err(MutationError::RollbackFailed);
+            }
+            return Err(error.into());
+        }
+        if let Err(error) = atomic_replace(&config_path, &updated_config, config_mode) {
+            if restore_env(&env_path, previous_env.as_deref(), env_mode).is_err() {
+                return Err(MutationError::RollbackFailed);
+            }
+            return Err(error);
+        }
+        let rollback = PersonalFileRollback {
+            config_path,
+            previous_config,
+            env_path,
+            previous_env,
+        };
+        drop(_guard);
+        Ok((rollback, transition))
+    }
+}
+
+/// Prepare an Agent account and adopted enrollment credential without publishing either file.
+pub fn prepare_personal_agent_account_files(
+    write: PersonalAgentAccountFileWrite<'_>,
+) -> Result<PreparedPersonalAgentAccountFiles, MutationError> {
+    let PersonalAgentAccountFileWrite {
+        config_path,
+        env_path,
+        provider_id,
+        account_name,
+        secret_env,
+        secret,
+        base_url,
+        label,
+        agent,
+    } = write;
+    let _guard = lock_mutation(config_path)?;
+    if !valid_identifier(provider_id)
+        || !valid_identifier(account_name)
+        || !valid_env_name(secret_env)
+    {
+        return Err(MutationError::Invalid(
+            "provider, account, or environment name contains unsafe characters".into(),
+        ));
+    }
+    if secret.is_empty() || secret.chars().any(char::is_control) {
+        return Err(MutationError::Invalid(
+            "agent enrollment secret was rejected".into(),
+        ));
+    }
+    let previous_config = if config_path.exists() {
+        read_bounded(config_path)?
+    } else {
+        Vec::new()
+    };
+    let original_text = String::from_utf8(previous_config.clone()).map_err(|error| {
+        MutationError::Invalid(format!("configuration is not valid UTF-8: {error}"))
+    })?;
+    if account_names(&original_text)
+        .iter()
+        .any(|name| name == account_name)
+    {
+        return Err(MutationError::Invalid(
+            "account name is already configured".into(),
+        ));
+    }
+    let account = agent_account_value(account_name, secret_env, base_url, label, agent)?;
+    let updated = if provider_exists(&original_text, provider_id) {
+        let original_text = remove_empty_accounts_array(&original_text, provider_id);
+        format!(
+            "{}\n{}\n",
+            original_text.trim_end(),
+            agent_account_block(
+                provider_id,
+                account_name,
+                secret_env,
+                base_url,
+                label,
+                agent
+            )?
+        )
+    } else {
+        let profile = crate::provider_profile::bundled_profile(provider_id)
+            .map_err(|_| MutationError::Invalid("provider is not a bundled profile".into()))?;
+        let mut provider = crate::provider_profile::provider_config_table(profile);
+        provider.insert("routing_priority".into(), Value::Integer(0));
+        provider.insert("accounts".into(), Value::Array(vec![account]));
+        let mut providers = Map::new();
+        providers.insert(provider_id.to_owned(), Value::Table(provider));
+        let mut root = Map::new();
+        root.insert("providers".into(), Value::Table(providers));
+        let block = toml::to_string_pretty(&Value::Table(root)).map_err(|error| {
+            MutationError::TemplateParse(format!("agent provider render failed: {error}"))
+        })?;
+        let mut lines: Vec<String> = original_text.lines().map(str::to_owned).collect();
+        let index = lines
+            .iter()
+            .position(|line| {
+                line_header(line).is_some_and(|header| header.starts_with("providers."))
+            })
+            .unwrap_or(lines.len());
+        let block_lines: Vec<String> = block.lines().map(str::to_owned).collect();
+        lines.splice(
+            index..index,
+            block_lines
+                .into_iter()
+                .chain(std::iter::once(String::new())),
+        );
+        format!("{}\n", lines.join("\n"))
+    };
+    let old_config = Config::from_toml_bytes(config_path, original_text.as_bytes())?;
+    // The adopted credential is not in the adjacent .env until after the
+    // candidate is classified and staged below. Parse and validate its config
+    // shape here, then validate env-backed credentials after the atomic env write.
+    let candidate = Config::from_toml_bytes(config_path, updated.as_bytes())?;
+    let transition = classify_transition(&old_config, &candidate).map_err(|error| {
+        MutationError::Invalid(format!(
+            "configuration transition could not be classified: {error}"
+        ))
+    })?;
+    if transition.has_restart_required() {
+        return Err(MutationError::Invalid(
+            "personal agent publication is restart-required".into(),
+        ));
+    }
+    let previous_env = if env_path.exists() {
+        Some(read_bounded(env_path)?)
+    } else {
+        None
+    };
+    let env_text = String::from_utf8(previous_env.clone().unwrap_or_default())
+        .map_err(|_| MutationError::Invalid("environment file is not valid UTF-8".into()))?;
+    let updated_env = upsert_env(&env_text, secret_env, secret)?;
+    // Resolve the config destination and its safe replacement mode before
+    // staging the adopted credential in the environment file.
+    let config_mode = existing_mode(config_path)?;
+    #[cfg(unix)]
+    let env_mode = Some(fs::Permissions::from_mode(0o600));
+    #[cfg(not(unix))]
+    let env_mode = None;
+    Ok(PreparedPersonalAgentAccountFiles {
+        _guard,
+        config_path: config_path.to_path_buf(),
+        previous_config,
+        updated_config: updated.into_bytes(),
+        config_mode,
+        env_path: env_path.to_path_buf(),
+        previous_env,
+        updated_env: updated_env.into_bytes(),
+        env_mode,
+        candidate,
+        transition,
+    })
+}
+
+fn valid_env_name(value: &str) -> bool {
+    let mut bytes = value.bytes();
+    bytes
+        .next()
+        .is_some_and(|byte| byte.is_ascii_alphabetic() || byte == b'_')
+        && bytes.all(|byte| byte.is_ascii_alphanumeric() || byte == b'_')
 }
 
 fn env_assignment(name: &str, secret: &str) -> Result<String, MutationError> {
@@ -1632,6 +2021,51 @@ pub fn install_personal_account_files(
     ))
 }
 
+/// Remove an Agent credential assignment without changing config. This is
+/// used to revoke an owner binding that survived while its account was never
+/// published.
+pub fn omit_personal_agent_credential_files(
+    config_path: &Path,
+    env_path: &Path,
+    secret_env: &str,
+) -> Result<(PersonalFileRollback, ConfigTransition), MutationError> {
+    let _guard = lock_mutation(config_path)?;
+    if !valid_env_name(secret_env) {
+        return Err(MutationError::Invalid(
+            "environment name contains unsafe characters".into(),
+        ));
+    }
+    let previous_config = read_bounded(config_path)?;
+    let config = Config::from_toml_bytes(config_path, &previous_config)?;
+    let transition = classify_transition(&config, &config).map_err(|error| {
+        MutationError::Invalid(format!(
+            "configuration transition could not be classified: {error}"
+        ))
+    })?;
+    let previous_env = if env_path.exists() {
+        Some(read_bounded(env_path)?)
+    } else {
+        None
+    };
+    let env_text = String::from_utf8(previous_env.clone().unwrap_or_default())
+        .map_err(|_| MutationError::Invalid("environment file is not valid UTF-8".into()))?;
+    let updated_env = omit_env_assignment(&env_text, secret_env);
+    #[cfg(unix)]
+    let env_mode = Some(fs::Permissions::from_mode(0o600));
+    #[cfg(not(unix))]
+    let env_mode = None;
+    atomic_replace(env_path, updated_env.as_bytes(), env_mode)?;
+    Ok((
+        PersonalFileRollback {
+            config_path: config_path.to_path_buf(),
+            previous_config,
+            env_path: env_path.to_path_buf(),
+            previous_env,
+        },
+        transition,
+    ))
+}
+
 /// Omit a personal account and its environment assignment.
 pub fn omit_personal_account_files(
     config_path: &Path,
@@ -1680,11 +2114,9 @@ pub fn omit_personal_account_files(
     #[cfg(not(unix))]
     let env_mode = None;
     if let Err(error) = atomic_replace(env_path, updated_env.as_bytes(), env_mode) {
-        let _ = atomic_replace(
-            config_path,
-            &previous_config,
-            existing_mode(config_path).ok().flatten(),
-        );
+        if atomic_replace(config_path, &previous_config, existing_mode(config_path)?).is_err() {
+            return Err(MutationError::RollbackFailed);
+        }
         return Err(error);
     }
     Ok((

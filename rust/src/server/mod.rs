@@ -6,6 +6,7 @@
 //! Handlers invoke one coordinator entry point; routing/retry/finalization
 //! live in the coordinator, not here.
 
+mod agents;
 mod auth;
 mod dashboard;
 mod health;
@@ -194,6 +195,8 @@ pub enum ServerError {
     CandidateTransfer(String),
     #[error("startup crash reconciliation failed: {0}")]
     StartupRecovery(#[from] StartupRecoveryError),
+    #[error("Agent binding startup reconciliation failed: {0}")]
+    AgentBindingRecovery(#[from] crate::personal_upstream::PersonalUpstreamError),
     #[error("runtime task installation failed: {0}")]
     TaskSetup(#[from] TaskSpecError),
     #[error("local control listener failed: {0}")]
@@ -490,6 +493,7 @@ impl ServerRuntime {
             runtime: Arc::clone(&self.inner.manager),
             process: Some(self.inner.process.clone()),
             oauth_flows: oauth_login::FlowRegistry::default(),
+            agent_enrollments: crate::agents::PendingEnrollmentRegistry::default(),
             body_tasks: self.inner.body_tasks.clone(),
             admission_fairness: crate::request::AdmissionFairnessLimiter::default(),
         });
@@ -818,6 +822,7 @@ pub struct AppState {
     pub runtime: Arc<RuntimeManager>,
     process: Option<ProcessRuntime>,
     oauth_flows: oauth_login::FlowRegistry,
+    agent_enrollments: crate::agents::PendingEnrollmentRegistry,
     body_tasks: BodyTaskTracker,
     admission_fairness: crate::request::AdmissionFairnessLimiter,
 }
@@ -857,6 +862,7 @@ impl AppState {
             runtime,
             process: None,
             oauth_flows: oauth_login::FlowRegistry::default(),
+            agent_enrollments: crate::agents::PendingEnrollmentRegistry::default(),
             body_tasks: BodyTaskTracker::new(),
             admission_fairness: crate::request::AdmissionFairnessLimiter::default(),
         }
@@ -884,6 +890,7 @@ impl AppState {
             runtime: Arc::new(RuntimeManager::new(generation)),
             process: None,
             oauth_flows: oauth_login::FlowRegistry::default(),
+            agent_enrollments: crate::agents::PendingEnrollmentRegistry::default(),
             body_tasks: BodyTaskTracker::new(),
             admission_fairness: crate::request::AdmissionFairnessLimiter::default(),
         }
@@ -978,7 +985,7 @@ pub async fn run_with_digest(
         let _ = database.close().await;
         return Err(error);
     }
-    let process_result = match config_path {
+    let process_result = match config_path.clone() {
         Some(path) => ProcessRuntime::with_config_path_and_config(database.clone(), path, &config),
         None => ProcessRuntime::new_with_config(database.clone(), &config),
     };
@@ -989,6 +996,16 @@ pub async fn run_with_digest(
             return Err(error.into());
         }
     };
+    if let Err(error) = crate::personal_upstream::reconcile_agent_bindings(
+        &database,
+        &config,
+        config_path.as_deref(),
+    )
+    .await
+    {
+        let _ = database.close().await;
+        return Err(ServerError::AgentBindingRecovery(error));
+    }
     if let Err(error) = process.reconcile_startup().await {
         let _ = database.close().await;
         return Err(error.into());
@@ -1045,6 +1062,7 @@ pub async fn run_with_digest(
         runtime: Arc::clone(&manager),
         process: Some(process.clone()),
         oauth_flows: oauth_login::FlowRegistry::default(),
+        agent_enrollments: crate::agents::PendingEnrollmentRegistry::default(),
         body_tasks: BodyTaskTracker::new(),
         admission_fairness: crate::request::AdmissionFairnessLimiter::default(),
     };
@@ -1216,6 +1234,12 @@ pub async fn serve_listener(
         let _ = database.close().await;
         return Err(error);
     }
+    if let Err(error) =
+        crate::personal_upstream::reconcile_agent_bindings(&database, &config, None).await
+    {
+        let _ = database.close().await;
+        return Err(ServerError::AgentBindingRecovery(error));
+    }
     if let Err(error) = process.reconcile_startup().await {
         let _ = database.close().await;
         return Err(error.into());
@@ -1377,6 +1401,16 @@ pub fn build_router(state: AppState) -> Router {
         .route("/account/password", post(password_change))
         .route("/my-account", get(my_account_page))
         .route("/my-account/models", get(my_models_page))
+        .route(
+            "/my-account/agents/enroll",
+            post(agents::enroll)
+                .layer(axum::extract::DefaultBodyLimit::max(agents::MAX_FORM_BYTES)),
+        )
+        .route(
+            "/my-account/agents/revoke",
+            post(agents::revoke)
+                .layer(axum::extract::DefaultBodyLimit::max(agents::MAX_FORM_BYTES)),
+        )
         .route("/account/tokens", post(create_personal_token))
         .route(
             "/account/tokens/oauth",

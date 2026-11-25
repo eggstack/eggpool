@@ -27,6 +27,8 @@ const STARTUP_POLL_INTERVAL: Duration = Duration::from_millis(5);
 
 #[derive(Debug, thiserror::Error)]
 pub enum AgentTunnelError {
+    #[error("agent support is disabled")]
+    Disabled,
     #[error(
         "agent account {account_name:?} for provider {provider_id:?} has no transport credential"
     )]
@@ -140,7 +142,7 @@ impl AgentTunnelManager {
                     provider_id: provider_id.clone(),
                     account_name: account.name.clone(),
                 };
-                let result = build_server_config(config, provider_id, account, config_path)
+                let result = build_server_config(config, provider_id, account, config_path, None)
                     .map(|(server_config, fingerprint)| (server_config, fingerprint, key.clone()));
                 let (server_config, fingerprint, key) = match result {
                     Ok(value) => value,
@@ -159,6 +161,40 @@ impl AgentTunnelManager {
             }
         }
         Ok(set)
+    }
+
+    /// Start one account's tunnel before its configuration is published.
+    /// The returned set owns the listener until a live generation acquires it
+    /// or rollback closes it. The supplied ticket credential is never logged.
+    pub async fn start_account(
+        &self,
+        config: &Config,
+        provider_id: &str,
+        account: &crate::config::AccountConfig,
+        config_path: Option<&Path>,
+        transport_secret: &str,
+    ) -> Result<AgentTunnelSet, AgentTunnelError> {
+        if !config.agents.enabled {
+            return Err(AgentTunnelError::Disabled);
+        }
+        let key = AgentKey {
+            provider_id: provider_id.to_owned(),
+            account_name: account.name.clone(),
+        };
+        let (server_config, fingerprint) = build_server_config(
+            config,
+            provider_id,
+            account,
+            config_path,
+            Some(transport_secret),
+        )?;
+        let server = self
+            .acquire(key.clone(), fingerprint, server_config)
+            .await?;
+        Ok(AgentTunnelSet {
+            manager: self.clone(),
+            tunnels: vec![server],
+        })
     }
 
     async fn acquire(
@@ -330,6 +366,7 @@ fn build_server_config(
     provider_id: &str,
     account: &crate::config::AccountConfig,
     config_path: Option<&Path>,
+    transport_secret_override: Option<&str>,
 ) -> Result<(ReverseServerConfig, String), AgentTunnelError> {
     let invalid = || AgentTunnelError::InvalidConfiguration {
         provider_id: provider_id.to_owned(),
@@ -348,7 +385,11 @@ fn build_server_config(
         return Err(invalid());
     }
     let tls_config = agent.tls.as_ref().ok_or_else(invalid)?;
-    let password = crate::config::account_secret_from_env(config_path, &agent.transport_secret_env)
+    let password = transport_secret_override
+        .map(str::to_owned)
+        .or_else(|| {
+            crate::config::account_secret_from_env(config_path, &agent.transport_secret_env)
+        })
         .filter(|value| !value.trim().is_empty())
         .ok_or_else(|| AgentTunnelError::MissingTransportCredential {
             provider_id: provider_id.to_owned(),

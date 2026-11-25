@@ -824,6 +824,37 @@ const FIELD_DISPOSITIONS: &[(&str, ReloadDisposition)] = &[
         ReloadDisposition::RestartRequired,
     ),
     ("agents.enabled", ReloadDisposition::RestartRequired),
+    (
+        "agents.control_bind_host",
+        ReloadDisposition::RestartRequired,
+    ),
+    (
+        "agents.advertised_control_host",
+        ReloadDisposition::RestartRequired,
+    ),
+    (
+        "agents.control_port_min",
+        ReloadDisposition::RestartRequired,
+    ),
+    (
+        "agents.control_port_max",
+        ReloadDisposition::RestartRequired,
+    ),
+    ("agents.single_host", ReloadDisposition::RestartRequired),
+    ("agents.tls.cert_path", ReloadDisposition::RestartRequired),
+    ("agents.tls.key_path", ReloadDisposition::RestartRequired),
+    (
+        "agents.tls.server_ca_path",
+        ReloadDisposition::RestartRequired,
+    ),
+    (
+        "agents.tls.client_ca_path",
+        ReloadDisposition::RestartRequired,
+    ),
+    (
+        "agents.tls.require_client_cert",
+        ReloadDisposition::RestartRequired,
+    ),
     ("oauth.enabled", ReloadDisposition::RestartRequired),
     ("pricing.fallback", ReloadDisposition::RestartRequired),
     ("providers", ReloadDisposition::Live),
@@ -1000,7 +1031,10 @@ pub fn disposition_for(path: &str) -> ReloadDisposition {
         let Some(suffix) = rule.strip_prefix("accounts.<provider_id>/<account_name>") else {
             continue;
         };
-        if !suffix.is_empty() && path.starts_with("accounts.") && path.ends_with(suffix) {
+        if !suffix.is_empty()
+            && path.starts_with("accounts.")
+            && (path.ends_with(suffix) || path.contains(&format!("{suffix}.")))
+        {
             return *disposition;
         }
     }

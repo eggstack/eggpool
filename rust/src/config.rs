@@ -515,6 +515,8 @@ pub enum AccountAuthMode {
 #[serde(deny_unknown_fields, default)]
 pub struct AgentAccountConfig {
     pub control_bind: String,
+    pub control_endpoint: Option<String>,
+    pub server_name: Option<String>,
     pub external_bind: String,
     pub transport_secret_env: String,
     pub tls: Option<AgentTlsConfig>,
@@ -526,6 +528,8 @@ impl Default for AgentAccountConfig {
     fn default() -> Self {
         Self {
             control_bind: String::new(),
+            control_endpoint: None,
+            server_name: None,
             external_bind: String::new(),
             transport_secret_env: String::new(),
             tls: None,
@@ -540,6 +544,8 @@ impl Default for AgentAccountConfig {
 pub struct AgentTlsConfig {
     pub cert_path: String,
     pub key_path: String,
+    /// The CA that issued the configured EggPool server certificate.
+    pub server_ca_path: Option<String>,
     pub client_ca_path: Option<String>,
     pub require_client_cert: bool,
 }
@@ -1042,11 +1048,30 @@ impl Default for OAuthConfig {
 #[serde(deny_unknown_fields, default)]
 pub struct AgentsConfig {
     pub enabled: bool,
+    /// IP address on which per-agent control listeners bind.
+    pub control_bind_host: String,
+    /// DNS name or IP that the operator publishes for agent connections.
+    pub advertised_control_host: String,
+    /// Operator-assigned control-port interval, inclusive.
+    pub control_port_min: u16,
+    pub control_port_max: u16,
+    /// Permit loopback control endpoints for explicitly single-host installs.
+    pub single_host: bool,
+    /// Shared server certificate/CA policy used for newly enrolled agents.
+    pub tls: Option<AgentTlsConfig>,
 }
 
 impl Default for AgentsConfig {
     fn default() -> Self {
-        Self { enabled: true }
+        Self {
+            enabled: true,
+            control_bind_host: "0.0.0.0".into(),
+            advertised_control_host: String::new(),
+            control_port_min: 7443,
+            control_port_max: 7542,
+            single_host: false,
+            tls: None,
+        }
     }
 }
 
@@ -1720,6 +1745,42 @@ impl Config {
     }
 
     pub fn validate(&mut self) -> Result<(), ConfigError> {
+        let control_bind_ip = self
+            .agents
+            .control_bind_host
+            .parse::<IpAddr>()
+            .map_err(|_| {
+                ConfigError::validation("agents.control_bind_host must be an IP address")
+            })?;
+        if self.agents.control_port_min == 0
+            || self.agents.control_port_min > self.agents.control_port_max
+        {
+            return Err(ConfigError::validation(
+                "agents control port range must be non-zero and ordered",
+            ));
+        }
+        if control_bind_ip.is_loopback() && !self.agents.single_host {
+            return Err(ConfigError::validation(
+                "loopback agents.control_bind_host requires agents.single_host = true",
+            ));
+        }
+        if self.agents.tls.as_ref().is_some_and(|tls| {
+            tls.cert_path.trim().is_empty()
+                || tls.key_path.trim().is_empty()
+                || tls
+                    .server_ca_path
+                    .as_ref()
+                    .is_some_and(|path| path.trim().is_empty())
+                || tls
+                    .client_ca_path
+                    .as_ref()
+                    .is_some_and(|path| path.trim().is_empty())
+                || (tls.require_client_cert && tls.client_ca_path.is_none())
+        }) {
+            return Err(ConfigError::validation(
+                "agents.tls certificate, key, CA paths, or client-certificate policy are invalid",
+            ));
+        }
         for (name, rate) in [
             (
                 "admission_fairness.requests_per_minute_per_principal",
@@ -3049,6 +3110,7 @@ mod tests {
                         tls: Some(AgentTlsConfig {
                             cert_path: "/certs/server.pem".into(),
                             key_path: "/certs/server-key.pem".into(),
+                            server_ca_path: None,
                             client_ca_path: None,
                             require_client_cert: false,
                         }),
@@ -3187,6 +3249,7 @@ mod tests {
         agent.tls = Some(AgentTlsConfig {
             cert_path: "/certs/server.pem".into(),
             key_path: "/certs/server-key.pem".into(),
+            server_ca_path: None,
             client_ca_path: Some("/certs/client-ca.pem".into()),
             require_client_cert: true,
         });
@@ -3336,6 +3399,7 @@ mod tests {
         agent_account_mut(&mut config).agent.as_mut().unwrap().tls = Some(AgentTlsConfig {
             cert_path: "/cert.pem".into(),
             key_path: "/key.pem".into(),
+            server_ca_path: None,
             client_ca_path: None,
             require_client_cert: true,
         });

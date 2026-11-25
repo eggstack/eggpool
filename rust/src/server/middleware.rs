@@ -297,7 +297,13 @@ fn requires_browser_session(path: &str) -> bool {
 }
 
 fn personal_upstream_member_path(path: &str) -> bool {
-    path == "/my-account/upstreams" || path == "/my-account/upstreams/remove"
+    matches!(
+        path,
+        "/my-account/upstreams"
+            | "/my-account/upstreams/remove"
+            | "/my-account/agents/enroll"
+            | "/my-account/agents/revoke"
+    )
 }
 
 fn sign_in_handoff_applies(path: &str, method: &http::Method, access_state: &str) -> bool {

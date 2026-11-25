@@ -541,13 +541,14 @@ only a fallback if live discovery is unavailable.
 ## Provider Agent accounts
 
 Agent accounts connect an owner-bound provider account through an EggPool
-reverse tunnel. Each account has a local bearer API key plus a separate
-transport secret for its reverse client. The reverse client authenticates with
-the configured account name and transport secret, then forwards requests to
-that account's external listener. Agent accounts require an active personal
-upstream binding; they are not shared. A provider-side Agent HTTP 401 is
-terminal: EggPool neither refreshes it as OAuth nor retries through a shared
-fallback account.
+reverse tunnel. For a ticket-enrolled account, the ticket's one-time `enroll`
+value is the single credential: EggPool stores it under both the account's
+`api_key_env` and `agent.transport_secret_env` names, sends it as the bearer
+credential to that Agent's HTTP endpoint, and the Agent presents it as the
+reverse control-channel password with the account name as username. Agent
+accounts require an active personal upstream binding; they are not shared. A
+provider-side Agent HTTP 401 is terminal: EggPool neither refreshes it as OAuth
+nor retries through a shared fallback account.
 
 `[agents].enabled` defaults to `true`. Setting it to `false` prevents Agent
 tunnel listeners from starting and excludes Agent accounts from routing while
@@ -587,9 +588,41 @@ key_path = "/etc/eggpool/agent-control-key.pem"
 # require_client_cert = true
 ```
 
-Keep `AGENT_UPSTREAM_API_KEY` and `AGENT_TRANSPORT_SECRET` outside version
-control. The upstream API key is sent to the provider through the configured
-account endpoint; the transport secret authenticates only the reverse tunnel.
+The names in the manual example are operator-managed environment variables.
+For the member enrollment flow below, EggPool instead writes the one ticket
+credential to the config-adjacent `.env` and references that same value from
+`api_key_env` and `agent.transport_secret_env`.
+
+## Agent enrollment
+
+A signed-in managed member with an effective self-service grant can submit an
+`eggpass eggpool` ticket to `POST /my-account/agents/enroll`. The ticket uses
+the `epagent1.<base64url-JSON>` format, is short-lived and single-use, and
+contains the Agent-produced `enroll` credential, control endpoint, TLS server
+name, and EggPool agent-server CA pin. The endpoint also requires the normal
+browser CSRF checks and the operator gate `[agents].enabled`. The member
+identity comes from the authenticated session, not from request fields.
+
+EggPool adopts the ticket's `enroll` value as the one per-Agent credential; it
+does not mint a second secret. EggPool stores the value only in the private
+config-adjacent `.env` and stores environment-variable names (not the value) in
+TOML. The same credential is the account bearer credential sent to that
+Agent's HTTP endpoint and the reverse control-channel password the Agent
+presents with its account name. This is not a provider API token: the Agent
+retains and uses its own provider credentials, and provider access, refresh, or
+ID tokens and PKCE material are never submitted to or stored by EggPool.
+
+Tickets are accepted for at most two minutes. Replay reservations are held in
+bounded, process-local memory: the one-time guarantee is process-lifetime only;
+restarting EggPool while the ticket remains valid can permit ticket reuse.
+Enrollment and revocation are available to signed-in managed members with the
+effective self-service grant; administrator-role sessions are explicitly
+denied. To remove an Agent, submit `POST /my-account/agents/revoke` with its
+provider and account name. Revocation removes the Agent account, owner binding,
+and credential and stops its tunnel. It can also remove a stranded owner
+binding and credential when the account was never published, while startup
+reconciliation removes stale Agent bindings absent from the published config.
+Repeating revocation after removal is an idempotent no-op.
 
 ## Per-user OAuth accounts
 

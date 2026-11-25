@@ -173,8 +173,19 @@ fn serialized_schema_projection_is_the_coverage_guard() {
         .into_iter()
         .map(|(path, _)| path)
         .collect::<Vec<_>>();
-    expected.push("agents.enabled".to_owned());
-    expected.push("oauth.enabled".to_owned());
+    expected.extend(
+        [
+            "agents.advertised_control_host",
+            "agents.control_bind_host",
+            "agents.control_port_max",
+            "agents.control_port_min",
+            "agents.enabled",
+            "agents.single_host",
+            "agents.tls",
+            "oauth.enabled",
+        ]
+        .map(str::to_owned),
+    );
     expected.sort();
     assert_eq!(schema_paths().expect("schema projection"), expected);
 }
