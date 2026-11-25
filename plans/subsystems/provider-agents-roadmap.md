@@ -178,7 +178,7 @@ Ownership:
 | M001 → M002 | hard | satisfied |
 | `eggstack/eggpass#10` ticket producer → M002 end-to-end acceptance | interface (fixture) / operational (live) | fixture satisfied; live producer outstanding |
 | M001, M002 → M003 | hard | satisfied |
-| M002, M003, migration evidence → M004 | hard | planned |
+| M002, M003, migration evidence → M004 | hard | satisfied; the migration evidence is M004's own deliverable |
 | Provider OAuth roadmap → superseded | soft | on M004 closure |
 
 ## 7. Milestones
@@ -345,5 +345,5 @@ Deferred work: none; this is the subsystem's terminal milestone.
 |---|---|---|---|---|
 | 1 | conditionally closed | [001](../implementation/provider-agents/001-agent-account-and-reverse-tunnel.md) | [001](../closure/provider-agents/001-status.md) | Capability complete and verified; the dependency-audit gate on a pre-existing SSH advisory owned by Security hardening M008 remains |
 | 2 | conditionally closed | [002](../implementation/provider-agents/002-owner-enrollment-and-revocation.md) | [002](../closure/provider-agents/002-status.md) | Capability complete and verified; the live ticket producer in `eggstack/eggpass#10` remains |
-| 3 | ready | [003](../implementation/provider-agents/003-agent-model-origin-and-health.md) | — | M001 and M002 are implemented and conditionally closed |
-| 4 | not started | [004](../implementation/provider-agents/004-retire-direct-oauth-custody.md) | — | M003 and migration evidence |
+| 3 | conditionally closed | [003](../implementation/provider-agents/003-agent-model-origin-and-health.md) | [003](../closure/provider-agents/003-status.md) | Capability complete and verified; the live ticket producer in `eggstack/eggpass#10` remains, and the pinned reverse server does not observe an idle control disconnect |
+| 4 | ready | [004](../implementation/provider-agents/004-retire-direct-oauth-custody.md) | — | M002 and M003 are implemented and conditionally closed; the migration evidence is this milestone's own deliverable |

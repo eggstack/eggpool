@@ -1,6 +1,6 @@
 # Provider Agents Milestone 004 — Retire Direct OAuth Custody
 
-Status: blocked
+Status: ready
 
 Repository baseline: `c4d774aeb883307f28ef94f6143dc688b3098946`
 
@@ -32,12 +32,21 @@ never silently loses a user's credential or strands an account.
 
 ## 2. Why this milestone is ready
 
-Blocked.
+Ready.
 
-- Hard: M002 and M003 closed (enrollment and origin/health).
-- Hard: migration evidence that every existing OAuth account has a documented
-  destination (agent enrollment or static key) and that removal leaves no user
-  without a path.
+- Hard: satisfied. M002 and M003 are implemented and conditionally closed
+  through `plans/closure/provider-agents/002-status.md` and
+  `plans/closure/provider-agents/003-status.md`. Their outstanding conditions
+  are external to this milestone — the repository-wide dependency-audit gate
+  owned by Security hardening M008, and the live ticket producer in
+  `eggstack/eggpass#10` — and neither is an interface dependency of the
+  removal, the migration command, or the backup format here, so neither blocks
+  implementation.
+- Hard: the migration evidence this milestone requires — that every existing
+  OAuth account has a documented destination (agent enrollment or static key)
+  and that removal leaves no user without a path — is this milestone's OWN
+  deliverable, produced by its migration command and its restore report.
+- Hard: ADR-0016 acceptance is satisfied (2026-11-24).
 - Hard: ADR-0016 acceptance is satisfied (2026-11-24).
 - Operational: the live Eggpass ticket producer exists (`eggstack/eggpass#10`);
   a fixture-only path is not sufficient to retire a user capability.

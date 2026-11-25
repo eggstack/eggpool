@@ -1,6 +1,6 @@
 # Provider Agents Milestone 003 — Agent Model Origin, Discovery, and Health
 
-Status: ready
+Status: implemented
 
 Repository baseline: `c4d774aeb883307f28ef94f6143dc688b3098946`
 
@@ -27,17 +27,20 @@ an offline agent visible and route-excluded instead of a mysterious failure.
 
 ## 2. Why this milestone is ready
 
-Ready.
+Implemented and conditionally closed.
 
-- Hard: satisfied. M001 is implemented and conditionally closed through
-  `plans/closure/provider-agents/001-status.md`, and M002 is implemented and
-  conditionally closed through `plans/closure/provider-agents/002-status.md`.
-  Both outstanding conditions are external to this milestone — a repo-wide
-  dependency-audit gate owned by Security hardening M008, and the live ticket
-  producer in `eggstack/eggpass#10` — and neither is an interface dependency of
-  the catalog, routing, status, or dashboard work here, so neither blocks
-  implementation.
-- Hard: ADR-0016 acceptance is satisfied (2026-11-24).
+- Hard: satisfied. ADR-0016 acceptance is satisfied (2026-11-24), and M001 and
+  M002 are implemented and conditionally closed through
+  `plans/closure/provider-agents/001-status.md` and
+  `plans/closure/provider-agents/002-status.md`.
+- Interface: none. The origin projection, the Agent discovery branch, the
+  availability projection, and the routing exclusion are implemented in
+  `rust/src/catalog/`, `rust/src/agents/tunnel.rs`, `rust/src/routing/`, and
+  `rust/src/operations/status.rs`, and are verified in both feature
+  configurations. The milestone's own outstanding conditions are recorded in
+  `plans/closure/provider-agents/003-status.md`: the live ticket producer in
+  `eggstack/eggpass#10`, the repository-wide dependency-audit gate, and the
+  pinned reverse server's inability to observe an idle control disconnect.
 
 ## 3. Current implementation evidence
 
