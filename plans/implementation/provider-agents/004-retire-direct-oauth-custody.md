@@ -1,6 +1,6 @@
 # Provider Agents Milestone 004 — Retire Direct OAuth Custody
 
-Status: ready
+Status: implemented
 
 Repository baseline: `c4d774aeb883307f28ef94f6143dc688b3098946`
 

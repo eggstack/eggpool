@@ -1,6 +1,6 @@
 # Provider OAuth Roadmap
 
-Status: active
+Status: superseded
 
 Long-term references:
 
@@ -268,3 +268,36 @@ stand. This roadmap stays `active` while the OAuth surfaces exist and becomes
 `superseded` when Provider Agents M004 closes. Nothing in this note removes a
 route, a configuration key, a credential file, or the ADR-0015 retry path; direct
 OAuth custody remains in force.
+
+
+## 21. Append-only supersession note — Provider Agents M004
+
+This note records the supersession of this roadmap. It does not rewrite the
+earlier text, and the M001–M004 closure records, their conditional evidence
+conditions, and the accepted ADRs remain historical.
+
+- Provider Agents M004 is implemented and conditionally closed through
+  `plans/closure/provider-agents/004-status.md`. The direct provider-OAuth
+  path is retired: the `[oauth]` configuration, the
+  `AccountAuthMode::OAuth` account kind, the server-side credential store,
+  the Web UI and CLI login surfaces, the `oauth_credentials_write` identity
+  scope, the backup members, and the ADR-0015 owner-scoped refresh retry are
+  all removed.
+- A configuration that still carries a removed OAuth surface now fails closed
+  with a typed error that names `eggpool accounts migrate-oauth`. A legacy
+  `.eggpool-oauth/` credential directory is detected, reported, and preserved;
+  it is never read, moved, or deleted implicitly.
+- The explicit `eggpool accounts migrate-oauth` command reports every legacy
+  OAuth account and its owner, requires confirmation, refuses to run against a
+  live server without coordination, removes only the legacy OAuth configuration
+  entries and credential files, and is idempotent. No OAuth account is
+  converted into an agent account: a provider grant cannot be transferred to
+  an agent without the user's local login.
+- New backups are format 2 and carry no OAuth member. A legacy archive restores
+  safely: its OAuth credential members are discarded and the omission is
+  reported, and a restored configuration that still carries legacy OAuth
+  material is restored byte-exact and reported with the same remediation
+  command.
+- This roadmap is `superseded`. Its M001–M004 closure records stand with the
+  dispositions they were written with, and no historical record, accepted ADR,
+  or canonical long-term document is rewritten by this note.
