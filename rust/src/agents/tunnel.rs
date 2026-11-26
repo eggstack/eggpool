@@ -67,6 +67,12 @@ pub enum AgentTunnelError {
     },
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum AgentTunnelAuthMode {
+    ConfiguredAccount,
+    EnrollmentBootstrap,
+}
+
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
 pub struct AgentTunnelCloseReport {
     pub released: usize,
@@ -315,8 +321,15 @@ impl AgentTunnelManager {
                     provider_id: provider_id.clone(),
                     account_name: account.name.clone(),
                 };
-                let result = build_server_config(config, provider_id, account, config_path, None)
-                    .map(|(server_config, fingerprint)| (server_config, fingerprint, key.clone()));
+                let result = build_server_config(
+                    config,
+                    provider_id,
+                    account,
+                    config_path,
+                    AgentTunnelAuthMode::ConfiguredAccount,
+                    None,
+                )
+                .map(|(server_config, fingerprint)| (server_config, fingerprint, key.clone()));
                 let (server_config, fingerprint, key) = match result {
                     Ok(value) => value,
                     Err(error) => {
@@ -345,6 +358,7 @@ impl AgentTunnelManager {
         provider_id: &str,
         account: &crate::config::AccountConfig,
         config_path: Option<&Path>,
+        auth_mode: AgentTunnelAuthMode,
         transport_secret: &str,
     ) -> Result<AgentTunnelSet, AgentTunnelError> {
         if !config.agents.enabled {
@@ -354,12 +368,14 @@ impl AgentTunnelManager {
             provider_id: provider_id.to_owned(),
             account_name: account.name.clone(),
         };
+        let transport_secret_override = (!transport_secret.is_empty()).then_some(transport_secret);
         let (server_config, fingerprint) = build_server_config(
             config,
             provider_id,
             account,
             config_path,
-            Some(transport_secret),
+            auth_mode,
+            transport_secret_override,
         )?;
         let server = self
             .acquire(key.clone(), fingerprint, server_config)
@@ -496,6 +512,26 @@ impl AgentTunnelSet {
         self.availability().snapshot()
     }
 
+    /// Wait until this tunnel has an authenticated control connection.
+    pub async fn wait_for_control_connection(
+        &self,
+        provider_id: &str,
+        account_name: &str,
+        timeout: Duration,
+    ) -> bool {
+        tokio::time::timeout(timeout, async {
+            while self
+                .connection_facts(provider_id, account_name)
+                .active_control_connections
+                == 0
+            {
+                tokio::time::sleep(Duration::from_millis(25)).await;
+            }
+        })
+        .await
+        .is_ok()
+    }
+
     /// Release all listener references. The last generation owner cancels and
     /// joins each reverse server within the supplied aggregate grace period.
     pub async fn close(mut self, timeout: Duration) -> AgentTunnelCloseReport {
@@ -550,6 +586,7 @@ fn build_server_config(
     provider_id: &str,
     account: &crate::config::AccountConfig,
     config_path: Option<&Path>,
+    auth_mode: AgentTunnelAuthMode,
     transport_secret_override: Option<&str>,
 ) -> Result<(ReverseServerConfig, String), AgentTunnelError> {
     let invalid = || AgentTunnelError::InvalidConfiguration {
@@ -569,19 +606,40 @@ fn build_server_config(
         return Err(invalid());
     }
     let tls_config = agent.tls.as_ref().ok_or_else(invalid)?;
-    let password = transport_secret_override
-        .map(str::to_owned)
-        .or_else(|| {
-            crate::config::account_secret_from_env(config_path, &agent.transport_secret_env)
-        })
-        .filter(|value| !value.trim().is_empty())
-        .ok_or_else(|| AgentTunnelError::MissingTransportCredential {
-            provider_id: provider_id.to_owned(),
-            account_name: account.name.clone(),
-        })?;
-    if !valid_reverse_auth_field(&account.name) || !valid_reverse_auth_field(&password) {
-        return Err(invalid());
-    }
+    let auth_username = match auth_mode {
+        AgentTunnelAuthMode::ConfiguredAccount => account.name.as_str(),
+        AgentTunnelAuthMode::EnrollmentBootstrap => "enroll",
+    };
+    let password = if tls_config.require_client_cert {
+        if auth_mode == AgentTunnelAuthMode::EnrollmentBootstrap
+            || transport_secret_override.is_some()
+            || !agent.transport_secret_env.is_empty()
+        {
+            return Err(invalid());
+        }
+        None
+    } else {
+        let configured_password = match auth_mode {
+            AgentTunnelAuthMode::ConfiguredAccount => {
+                transport_secret_override.map(str::to_owned).or_else(|| {
+                    crate::config::account_secret_from_env(config_path, &agent.transport_secret_env)
+                })
+            }
+            AgentTunnelAuthMode::EnrollmentBootstrap => {
+                transport_secret_override.map(str::to_owned)
+            }
+        };
+        let password = configured_password
+            .filter(|value| !value.trim().is_empty())
+            .ok_or_else(|| AgentTunnelError::MissingTransportCredential {
+                provider_id: provider_id.to_owned(),
+                account_name: account.name.clone(),
+            })?;
+        if !valid_reverse_auth_field(auth_username) || !valid_reverse_auth_field(&password) {
+            return Err(invalid());
+        }
+        Some(password)
+    };
 
     let read_material = |path: &str| {
         std::fs::read(Config::runtime_path(path)).map_err(|_| AgentTunnelError::TlsMaterial {
@@ -614,11 +672,14 @@ fn build_server_config(
     };
     add(provider_id.as_bytes());
     add(account.name.as_bytes());
+    add(auth_username.as_bytes());
     add(agent.control_bind.as_bytes());
     add(agent.external_bind.as_bytes());
     add(agent.max_streams.to_be_bytes().as_slice());
     add(agent.heartbeat_interval_s.to_be_bytes().as_slice());
-    add(password.as_bytes());
+    if let Some(password) = &password {
+        add(password.as_bytes());
+    }
     if let Some(material) = &tls {
         add(&material.cert_pem);
         add(&material.key_pem);
@@ -631,8 +692,8 @@ fn build_server_config(
     let config = ReverseServerConfig {
         control_bind,
         external_bind: Some(external_bind),
-        auth_username: Some(account.name.clone()),
-        auth_password: Some(password),
+        auth_username: password.as_ref().map(|_| auth_username.to_owned()),
+        auth_password: password,
         max_control_connections: 8,
         read_timeout_ms: agent.heartbeat_interval_s.saturating_mul(3_000),
         allow_bind: Some(vec![external_bind]),
@@ -677,7 +738,7 @@ async fn start_server(
     });
     let ready = tokio::time::timeout(
         STARTUP_TIMEOUT,
-        wait_for_listener(control_bind, &state, &mut task, &running),
+        wait_for_listener(control_bind, &mut task, &running),
     )
     .await
     .is_ok_and(|result| result.is_ok());
@@ -700,42 +761,19 @@ async fn start_server(
 
 async fn wait_for_listener(
     control_bind: SocketAddr,
-    state: &ReverseServerState,
     task: &mut JoinHandle<Result<(), ProtocolError>>,
     running: &AtomicBool,
 ) -> Result<(), ()> {
-    let mut probe = None;
     loop {
-        if state.snapshot().active_control > 0 {
-            drop(probe.take());
-            break;
-        }
         if !running.load(Ordering::Acquire) {
             return Err(());
         }
-        if probe.is_none()
-            && let Ok(stream) = TcpStream::connect(control_bind).await
-        {
-            probe = Some(stream);
-        }
-        tokio::select! {
-            result = &mut *task => {
-                let _ = result;
-                return Err(());
-            }
-            _ = tokio::time::sleep(STARTUP_POLL_INTERVAL) => {}
-        }
-    }
-    // Closing the readiness probe makes the reverse server discard it. Wait
-    // for the control counter to drain rather than leaving a phantom client in
-    // the accept queue.
-    drop(probe.take());
-    loop {
-        if state.snapshot().active_control == 0 {
+        if let Ok(probe) = TcpStream::connect(control_bind).await {
+            // A completed TCP connect proves the listener is bound. Closing
+            // immediately is intentional: this readiness probe cannot
+            // authenticate, especially when the listener requires TLS/mTLS.
+            drop(probe);
             return Ok(());
-        }
-        if !running.load(Ordering::Acquire) {
-            return Err(());
         }
         tokio::select! {
             result = &mut *task => {

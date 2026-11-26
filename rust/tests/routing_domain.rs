@@ -810,6 +810,7 @@ async fn online_agent_becomes_offline_without_affecting_shared_static_routing() 
             "agent-provider",
             &account,
             None,
+            eggpool::agents::AgentTunnelAuthMode::ConfiguredAccount,
             transport_secret,
         )
         .await

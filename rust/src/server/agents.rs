@@ -164,16 +164,6 @@ pub(super) async fn enroll(
             crate::security_events::SecurityEventOutcome::Refused,
         );
     };
-    if tls.require_client_cert {
-        return enrollment_error(
-            &state,
-            &session,
-            StatusCode::SERVICE_UNAVAILABLE,
-            "agent_client_certificate_unavailable",
-            crate::security_events::SecurityEventOutcome::Refused,
-        );
-    }
-
     // The ticket string itself contains the adopted transport credential.
     // Zeroize the form copy as soon as the decoder has taken ownership.
     let ticket_input = Zeroizing::new(form.ticket);
@@ -228,6 +218,26 @@ pub(super) async fn enroll(
             crate::security_events::SecurityEventOutcome::Refused,
         );
     }
+    // CA verification reads operator-controlled material and may take time.
+    // Revalidate before reserving the one-time ticket or opening a listener.
+    if !session_is_current(&state, &session).await {
+        return enrollment_error(
+            &state,
+            &session,
+            StatusCode::FORBIDDEN,
+            "session_changed",
+            crate::security_events::SecurityEventOutcome::Denied,
+        );
+    }
+    if !ticket.has_safe_display_label() {
+        return enrollment_error(
+            &state,
+            &session,
+            StatusCode::UNPROCESSABLE_ENTITY,
+            "ticket_optional_field_invalid",
+            crate::security_events::SecurityEventOutcome::Refused,
+        );
+    }
     let Some(process) = state.process.as_ref() else {
         return enrollment_error(
             &state,
@@ -238,8 +248,36 @@ pub(super) async fn enroll(
         );
     };
     let agent_tunnels = process.agent_tunnel_manager();
+    let ticket_digest = ticket.ticket_digest();
+    match personal_upstream::agent_ticket_was_consumed(
+        &state.database,
+        ticket_digest,
+        current_unix_time(),
+    )
+    .await
+    {
+        Ok(false) => {}
+        Ok(true) => {
+            return enrollment_error(
+                &state,
+                &session,
+                StatusCode::CONFLICT,
+                "ticket_replayed",
+                crate::security_events::SecurityEventOutcome::Denied,
+            );
+        }
+        Err(_) => {
+            return enrollment_error(
+                &state,
+                &session,
+                StatusCode::SERVICE_UNAVAILABLE,
+                "agent_database_failed",
+                crate::security_events::SecurityEventOutcome::Refused,
+            );
+        }
+    }
     let reservation = match state.agent_enrollments.reserve(
-        ticket.enroll_secret(),
+        ticket_input.as_str(),
         &session.session_id,
         &session.user_id,
         ticket.remaining_lifetime(current_unix_time()),
@@ -273,7 +311,7 @@ pub(super) async fn enroll(
             );
         }
     };
-    let env_var = personal_upstream::agent_env_var(&form.provider, &form.account_name);
+    let api_key_env = personal_upstream::agent_api_key_env_var(&form.provider, &form.account_name);
     let control_bind_ip = match config.agents.control_bind_host.parse::<IpAddr>() {
         Ok(ip) => ip,
         Err(_) => {
@@ -286,6 +324,7 @@ pub(super) async fn enroll(
             );
         }
     };
+    let control_bind = SocketAddr::new(control_bind_ip, control.port);
     let mut external_bind = match allocate_external_bind().await {
         Ok(bind) => bind,
         Err(_) => {
@@ -298,26 +337,40 @@ pub(super) async fn enroll(
             );
         }
     };
-    let control_bind = SocketAddr::new(control_bind_ip, control.port);
-    let mut agent = AgentAccountConfig {
+    let mut bootstrap_tls = tls.clone();
+    bootstrap_tls.require_client_cert = false;
+    bootstrap_tls.client_ca_path = None;
+    let mut bootstrap_agent = AgentAccountConfig {
         control_bind: control_bind.to_string(),
         control_endpoint: Some(ticket.control.clone()),
         server_name: Some(ticket.server_name.clone()),
         external_bind: external_bind.to_string(),
-        transport_secret_env: env_var.clone(),
-        tls: Some(tls),
+        transport_secret_env: String::new(),
+        tls: Some(bootstrap_tls),
         ..AgentAccountConfig::default()
     };
-    let mut account = AccountConfig {
+    let mut bootstrap_account = AccountConfig {
         name: form.account_name.clone(),
         auth_mode: AccountAuthMode::Agent,
-        api_key_env: env_var.clone(),
+        api_key_env: api_key_env.clone(),
         base_url: Some(format!("http://{external_bind}/v1")),
-        agent: Some(agent.clone()),
+        agent: Some(bootstrap_agent.clone()),
         label: ticket.agent_label.clone(),
         ..AccountConfig::default()
     };
-    let mut tunnel = None;
+    let issued = match crate::agents::bootstrap::issue_client_certificate() {
+        Ok(issued) => issued,
+        Err(_) => {
+            return enrollment_error(
+                &state,
+                &session,
+                StatusCode::SERVICE_UNAVAILABLE,
+                "agent_certificate_issue_failed",
+                crate::security_events::SecurityEventOutcome::Refused,
+            );
+        }
+    };
+    let mut bootstrap_tunnel = None;
     for attempt in 1..=MAX_AGENT_TUNNEL_START_ATTEMPTS {
         if attempt > 1 {
             external_bind = match allocate_external_bind().await {
@@ -332,22 +385,23 @@ pub(super) async fn enroll(
                     );
                 }
             };
-            agent.external_bind = external_bind.to_string();
-            account.base_url = Some(format!("http://{external_bind}/v1"));
-            account.agent = Some(agent.clone());
+            bootstrap_agent.external_bind = external_bind.to_string();
+            bootstrap_account.base_url = Some(format!("http://{external_bind}/v1"));
+            bootstrap_account.agent = Some(bootstrap_agent.clone());
         }
         match agent_tunnels
             .start_account(
                 config,
                 &form.provider,
-                &account,
+                &bootstrap_account,
                 Some(&config_path),
+                crate::agents::AgentTunnelAuthMode::EnrollmentBootstrap,
                 ticket.enroll_secret(),
             )
             .await
         {
             Ok(started) => {
-                tunnel = Some(started);
+                bootstrap_tunnel = Some(started);
                 break;
             }
             Err(crate::agents::AgentTunnelError::IncompatibleGeneration { .. }) => {
@@ -365,7 +419,7 @@ pub(super) async fn enroll(
                 tracing::warn!(
                     attempt,
                     max_attempts = MAX_AGENT_TUNNEL_START_ATTEMPTS,
-                    "agent reverse listener failed to bind; retrying with a fresh external port"
+                    "agent bootstrap listener failed to bind; retrying with a fresh external port"
                 );
             }
             Err(_) => {
@@ -379,7 +433,7 @@ pub(super) async fn enroll(
             }
         }
     }
-    let Some(tunnel) = tunnel else {
+    let Some(bootstrap_tunnel) = bootstrap_tunnel else {
         return enrollment_error(
             &state,
             &session,
@@ -388,30 +442,274 @@ pub(super) async fn enroll(
             crate::security_events::SecurityEventOutcome::Refused,
         );
     };
-    if !session_is_current(&state, &session).await {
-        let close_report = tunnel.close(Duration::from_secs(5)).await;
+    if !bootstrap_tunnel
+        .wait_for_control_connection(&form.provider, &form.account_name, Duration::from_secs(20))
+        .await
+    {
+        let close_report = bootstrap_tunnel.close(Duration::from_secs(5)).await;
         if close_report.shutdown_timed_out > 0 {
             reservation.retain_until_expiry();
         }
+        return enrollment_error(
+            &state,
+            &session,
+            StatusCode::SERVICE_UNAVAILABLE,
+            "agent_bootstrap_timeout",
+            crate::security_events::SecurityEventOutcome::Refused,
+        );
+    }
+    if let Err(error) = crate::agents::bootstrap::deliver_enrollment_callback(
+        external_bind,
+        ticket.enroll_secret(),
+        &issued.certificate_pem,
+        issued.private_key_pem.as_str(),
+    )
+    .await
+    {
+        let close_report = bootstrap_tunnel.close(Duration::from_secs(5)).await;
+        if close_report.shutdown_timed_out > 0
+            || !matches!(
+                error,
+                crate::agents::bootstrap::BootstrapError::CallbackRejected
+            )
+        {
+            reservation.retain_until_expiry();
+        }
+        return enrollment_error(
+            &state,
+            &session,
+            StatusCode::SERVICE_UNAVAILABLE,
+            "agent_callback_failed",
+            crate::security_events::SecurityEventOutcome::Refused,
+        );
+    }
+    match personal_upstream::record_consumed_agent_ticket(
+        &state.database,
+        ticket_digest,
+        ticket.expires_at(),
+        current_unix_time(),
+    )
+    .await
+    {
+        Ok(true) => reservation.commit(),
+        Ok(false) => {
+            reservation.commit();
+            let _ = bootstrap_tunnel.close(Duration::from_secs(5)).await;
+            return enrollment_error(
+                &state,
+                &session,
+                StatusCode::CONFLICT,
+                "ticket_replayed",
+                crate::security_events::SecurityEventOutcome::Denied,
+            );
+        }
+        Err(_) => {
+            reservation.retain_until_expiry();
+            let _ = bootstrap_tunnel.close(Duration::from_secs(5)).await;
+            return enrollment_error(
+                &state,
+                &session,
+                StatusCode::SERVICE_UNAVAILABLE,
+                "agent_database_failed",
+                crate::security_events::SecurityEventOutcome::Refused,
+            );
+        }
+    }
+    let close_report = bootstrap_tunnel.close(Duration::from_secs(5)).await;
+    if close_report.shutdown_timed_out > 0 {
+        return enrollment_error(
+            &state,
+            &session,
+            StatusCode::SERVICE_UNAVAILABLE,
+            "agent_tunnel_start_failed",
+            crate::security_events::SecurityEventOutcome::Refused,
+        );
+    }
+    let client_ca_path = match crate::operations::config_mutation::write_agent_client_ca_bundle(
+        &config_path,
+        &form.provider,
+        &form.account_name,
+        issued.ca_pem.as_bytes(),
+    ) {
+        Ok(path) => path,
+        Err(_) => {
+            return enrollment_error(
+                &state,
+                &session,
+                StatusCode::SERVICE_UNAVAILABLE,
+                "agent_configuration_failed",
+                crate::security_events::SecurityEventOutcome::Refused,
+            );
+        }
+    };
+    let mut mtls_tls = tls;
+    mtls_tls.client_ca_path = Some(client_ca_path.to_string_lossy().into_owned());
+    mtls_tls.require_client_cert = true;
+    let mut agent = AgentAccountConfig {
+        control_bind: control_bind.to_string(),
+        control_endpoint: Some(ticket.control.clone()),
+        server_name: Some(ticket.server_name.clone()),
+        external_bind: external_bind.to_string(),
+        transport_secret_env: String::new(),
+        tls: Some(mtls_tls),
+        ..AgentAccountConfig::default()
+    };
+    let mut account = AccountConfig {
+        name: form.account_name.clone(),
+        auth_mode: AccountAuthMode::Agent,
+        api_key_env: api_key_env.clone(),
+        base_url: Some(format!("http://{external_bind}/v1")),
+        agent: Some(agent.clone()),
+        label: ticket.agent_label.clone(),
+        ..AccountConfig::default()
+    };
+    let mut tunnel = None;
+    for attempt in 1..=MAX_AGENT_TUNNEL_START_ATTEMPTS {
+        if attempt > 1 {
+            external_bind = match allocate_external_bind().await {
+                Ok(bind) => bind,
+                Err(_) => {
+                    let cleanup = crate::operations::config_mutation::remove_agent_client_ca_bundle(
+                        &config_path,
+                        &form.provider,
+                        &form.account_name,
+                    );
+                    return enrollment_error(
+                        &state,
+                        &session,
+                        StatusCode::SERVICE_UNAVAILABLE,
+                        if cleanup.is_ok() {
+                            "agent_port_unavailable"
+                        } else {
+                            "operator_repair_required"
+                        },
+                        crate::security_events::SecurityEventOutcome::Refused,
+                    );
+                }
+            };
+            agent.external_bind = external_bind.to_string();
+            account.base_url = Some(format!("http://{external_bind}/v1"));
+            account.agent = Some(agent.clone());
+        }
+        match agent_tunnels
+            .start_account(
+                config,
+                &form.provider,
+                &account,
+                Some(&config_path),
+                crate::agents::AgentTunnelAuthMode::ConfiguredAccount,
+                "",
+            )
+            .await
+        {
+            Ok(started) => {
+                tunnel = Some(started);
+                break;
+            }
+            Err(crate::agents::AgentTunnelError::IncompatibleGeneration { .. }) => {
+                let cleanup = crate::operations::config_mutation::remove_agent_client_ca_bundle(
+                    &config_path,
+                    &form.provider,
+                    &form.account_name,
+                );
+                return enrollment_error(
+                    &state,
+                    &session,
+                    StatusCode::CONFLICT,
+                    if cleanup.is_ok() {
+                        "account_conflict"
+                    } else {
+                        "operator_repair_required"
+                    },
+                    crate::security_events::SecurityEventOutcome::Denied,
+                );
+            }
+            Err(crate::agents::AgentTunnelError::ListenerStart { .. })
+                if attempt < MAX_AGENT_TUNNEL_START_ATTEMPTS =>
+            {
+                tracing::warn!(
+                    attempt,
+                    max_attempts = MAX_AGENT_TUNNEL_START_ATTEMPTS,
+                    "agent mTLS listener failed to bind; retrying with a fresh external port"
+                );
+            }
+            Err(_) => {
+                let cleanup = crate::operations::config_mutation::remove_agent_client_ca_bundle(
+                    &config_path,
+                    &form.provider,
+                    &form.account_name,
+                );
+                return enrollment_error(
+                    &state,
+                    &session,
+                    StatusCode::SERVICE_UNAVAILABLE,
+                    if cleanup.is_ok() {
+                        "agent_tunnel_start_failed"
+                    } else {
+                        "operator_repair_required"
+                    },
+                    crate::security_events::SecurityEventOutcome::Refused,
+                );
+            }
+        }
+    }
+    let Some(tunnel) = tunnel else {
+        let cleanup = crate::operations::config_mutation::remove_agent_client_ca_bundle(
+            &config_path,
+            &form.provider,
+            &form.account_name,
+        );
+        return enrollment_error(
+            &state,
+            &session,
+            StatusCode::SERVICE_UNAVAILABLE,
+            if cleanup.is_ok() {
+                "agent_tunnel_start_failed"
+            } else {
+                "operator_repair_required"
+            },
+            crate::security_events::SecurityEventOutcome::Refused,
+        );
+    };
+    if !tunnel
+        .wait_for_control_connection(&form.provider, &form.account_name, Duration::from_secs(30))
+        .await
+    {
+        let close_report = tunnel.close(Duration::from_secs(5)).await;
+        let cleanup = crate::operations::config_mutation::remove_agent_client_ca_bundle(
+            &config_path,
+            &form.provider,
+            &form.account_name,
+        );
+        return enrollment_error(
+            &state,
+            &session,
+            StatusCode::SERVICE_UNAVAILABLE,
+            if close_report.shutdown_timed_out == 0 && cleanup.is_ok() {
+                "agent_mtls_timeout"
+            } else {
+                "operator_repair_required"
+            },
+            crate::security_events::SecurityEventOutcome::Refused,
+        );
+    }
+    if !session_is_current(&state, &session).await {
+        let close_report = tunnel.close(Duration::from_secs(5)).await;
+        let cleanup = crate::operations::config_mutation::remove_agent_client_ca_bundle(
+            &config_path,
+            &form.provider,
+            &form.account_name,
+        );
         return enrollment_error(
             &state,
             &session,
             StatusCode::FORBIDDEN,
-            "session_changed",
+            if close_report.shutdown_timed_out == 0 && cleanup.is_ok() {
+                "session_changed"
+            } else {
+                "operator_repair_required"
+            },
             crate::security_events::SecurityEventOutcome::Denied,
-        );
-    }
-    if !ticket.has_safe_display_label() {
-        let close_report = tunnel.close(Duration::from_secs(5)).await;
-        if close_report.shutdown_timed_out > 0 {
-            reservation.retain_until_expiry();
-        }
-        return enrollment_error(
-            &state,
-            &session,
-            StatusCode::UNPROCESSABLE_ENTITY,
-            "ticket_optional_field_invalid",
-            crate::security_events::SecurityEventOutcome::Refused,
         );
     }
     let env_path = personal_upstream::personal_env_path(&config_path);
@@ -422,7 +720,8 @@ pub(super) async fn enroll(
             user_id: &session.user_id,
             provider_id: &form.provider,
             account_name: &form.account_name,
-            secret: ticket.enroll_secret(),
+            api_key_env: &api_key_env,
+            api_key: ticket.api_key(),
             base_url: account.base_url.as_deref().unwrap_or_default(),
             label: account.label.as_deref(),
             agent: &agent,
@@ -436,7 +735,6 @@ pub(super) async fn enroll(
     .await
     {
         Ok(()) => {
-            reservation.commit();
             state.record_security_event(
                 crate::security_events::SecurityEventCode::AgentEnrollment,
                 crate::security_events::SecurityEventOutcome::Success,
@@ -451,10 +749,14 @@ pub(super) async fn enroll(
             .into_response()
         }
         Err(error) => {
-            let retain_reservation = matches!(&error, PersonalUpstreamError::RepairRequired);
+            let retain_ca_bundle = matches!(&error, PersonalUpstreamError::RepairRequired);
             let (status, code) = upstream_error_response(&error);
-            if retain_reservation {
-                reservation.retain_until_expiry();
+            if !retain_ca_bundle {
+                let _ = crate::operations::config_mutation::remove_agent_client_ca_bundle(
+                    &config_path,
+                    &form.provider,
+                    &form.account_name,
+                );
             }
             enrollment_error(
                 &state,
@@ -543,7 +845,12 @@ pub(super) async fn revoke(
         })
         .filter(|account| account.auth_mode == AccountAuthMode::Agent);
     let remove_config = agent_account.is_some();
-    let agent_env = agent_account
+    let api_key_env = agent_account
+        .map(|account| account.api_key_env.clone())
+        .unwrap_or_else(|| {
+            personal_upstream::agent_api_key_env_var(&form.provider, &form.account_name)
+        });
+    let transport_secret_env = agent_account
         .and_then(|account| account.agent.as_ref())
         .map(|agent| agent.transport_secret_env.clone())
         .unwrap_or_else(|| personal_upstream::agent_env_var(&form.provider, &form.account_name));
@@ -558,7 +865,8 @@ pub(super) async fn revoke(
             user_id: &session.user_id,
             provider_id: &form.provider,
             account_name: &form.account_name,
-            secret_env: &agent_env,
+            api_key_env: &api_key_env,
+            transport_secret_env: &transport_secret_env,
             remove_config,
             config_path: &config_path,
             env_path: &env_path,

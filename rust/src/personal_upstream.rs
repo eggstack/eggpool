@@ -152,7 +152,21 @@ pub fn upstream_env_var(provider_id: &str, account_name: &str) -> String {
     format!("EGGPOOL_UPSTREAM_{hex}")
 }
 
-/// Stable opaque environment-variable name for an enrolled agent credential.
+/// Stable opaque environment-variable name for the separate Agent API key.
+pub fn agent_api_key_env_var(provider_id: &str, account_name: &str) -> String {
+    let mut hasher = Sha256::new();
+    hasher.update(provider_id.as_bytes());
+    hasher.update([0]);
+    hasher.update(account_name.as_bytes());
+    let digest = hasher.finalize();
+    let suffix = digest.iter().take(8).fold(String::new(), |mut text, byte| {
+        text.push_str(&format!("{byte:02x}"));
+        text
+    });
+    format!("EGGPOOL_AGENT_API_{suffix}")
+}
+
+/// Legacy transport-secret environment name retained for revoke compatibility.
 pub fn agent_env_var(provider_id: &str, account_name: &str) -> String {
     let mut hasher = Sha256::new();
     hasher.update(provider_id.as_bytes());
@@ -164,6 +178,58 @@ pub fn agent_env_var(provider_id: &str, account_name: &str) -> String {
         text
     });
     format!("EGGPOOL_AGENT_{suffix}")
+}
+
+/// Check the durable digest ledger before reserving a ticket in memory. Expired
+/// rows are pruned in the same serialized SQLite transaction.
+pub async fn agent_ticket_was_consumed(
+    database: &Database,
+    digest: [u8; 32],
+    now_unix: i64,
+) -> Result<bool, PersonalUpstreamError> {
+    Ok(database
+        .with_transaction(move |connection| {
+            connection.execute(
+                "DELETE FROM consumed_agent_enrollment_tickets WHERE expires_at <= ?1",
+                [now_unix],
+            )?;
+            connection.query_row(
+                "SELECT EXISTS(
+                    SELECT 1 FROM consumed_agent_enrollment_tickets
+                    WHERE ticket_sha256 = ?1 AND expires_at > ?2
+                 )",
+                (digest.as_slice(), now_unix),
+                |row| row.get(0),
+            )
+        })
+        .await?)
+}
+
+/// Persist only the SHA-256 ticket digest after EggPass accepts the callback.
+/// A false result means the digest was already recorded by a concurrent request.
+pub async fn record_consumed_agent_ticket(
+    database: &Database,
+    digest: [u8; 32],
+    expires_at: i64,
+    now_unix: i64,
+) -> Result<bool, PersonalUpstreamError> {
+    if expires_at <= now_unix {
+        return Ok(false);
+    }
+    Ok(database
+        .with_transaction(move |connection| {
+            connection.execute(
+                "DELETE FROM consumed_agent_enrollment_tickets WHERE expires_at <= ?1",
+                [now_unix],
+            )?;
+            let inserted = connection.execute(
+                "INSERT OR IGNORE INTO consumed_agent_enrollment_tickets(ticket_sha256, expires_at)
+                 VALUES (?1, ?2)",
+                (digest.as_slice(), expires_at),
+            )?;
+            Ok(inserted == 1)
+        })
+        .await?)
 }
 
 pub fn personal_env_path(config_path: &Path) -> PathBuf {
@@ -229,7 +295,7 @@ pub async fn reconcile_agent_bindings(
         for (provider_id, account_name) in &orphaned {
             let env_name = agent_env_var(provider_id, account_name);
             if !config_references_env(config, &env_name) && env_path.exists() {
-                omit_personal_agent_credential_files(config_path, &env_path, &env_name)
+                omit_personal_agent_credential_files(config_path, &env_path, &[&env_name])
                     .map_err(|_| PersonalUpstreamError::RepairRequired)?;
             }
         }
@@ -593,13 +659,14 @@ pub async fn add_personal_account_publishing(
 }
 
 /// One owner-bound Agent account enrollment. The account contains only secret
-/// variable names; the enrollment secret is borrowed for the atomic .env write.
+/// variable names; the inference API key is staged in the private .env file.
 pub struct PersonalAgentAccountWrite<'a> {
     pub actor_id: &'a str,
     pub user_id: &'a str,
     pub provider_id: &'a str,
     pub account_name: &'a str,
-    pub secret: &'a str,
+    pub api_key_env: &'a str,
+    pub api_key: &'a str,
     pub base_url: &'a str,
     pub label: Option<&'a str>,
     pub agent: &'a AgentAccountConfig,
@@ -621,7 +688,8 @@ pub async fn add_personal_agent_account_publishing(
         user_id,
         provider_id,
         account_name,
-        secret,
+        api_key_env,
+        api_key,
         base_url,
         label,
         agent,
@@ -629,14 +697,17 @@ pub async fn add_personal_agent_account_publishing(
         env_path,
         require_self_service,
     } = write;
-    let env_var = agent_env_var(provider_id, account_name);
+    let env_var = agent_api_key_env_var(provider_id, account_name);
     if let Err(error) = validate_names(provider_id, account_name) {
         return Err(close_tunnel_or_repair(tunnel, error).await);
     }
     if !bundled_provider(provider_id) {
         return Err(close_tunnel_or_repair(tunnel, PersonalUpstreamError::UnknownProvider).await);
     }
-    if !acceptable_secret(secret) || agent.transport_secret_env != env_var {
+    if !acceptable_secret(api_key)
+        || api_key_env != env_var
+        || !agent.transport_secret_env.is_empty()
+    {
         return Err(close_tunnel_or_repair(tunnel, PersonalUpstreamError::SecretRejected).await);
     }
     if let Err(error) = authorize(database, actor_id, user_id, require_self_service).await {
@@ -654,8 +725,8 @@ pub async fn add_personal_agent_account_publishing(
         env_path,
         provider_id,
         account_name,
-        secret_env: &env_var,
-        secret,
+        api_key_env: &env_var,
+        api_key,
         base_url,
         label,
         agent,
@@ -664,7 +735,7 @@ pub async fn add_personal_agent_account_publishing(
         Err(error) => {
             let tunnel_closed = close_tunnel(tunnel).await;
             return Err(if tunnel_closed {
-                configuration_error(secret, error)
+                configuration_error(api_key, error)
             } else {
                 PersonalUpstreamError::RepairRequired
             });
@@ -701,7 +772,7 @@ pub async fn add_personal_agent_account_publishing(
                     && tunnel_closed
                     && !matches!(&error, MutationError::RollbackFailed)
                 {
-                    configuration_error(secret, error)
+                    configuration_error(api_key, error)
                 } else {
                     PersonalUpstreamError::RepairRequired
                 },
@@ -735,7 +806,8 @@ pub struct PersonalAgentAccountRevoke<'a> {
     pub user_id: &'a str,
     pub provider_id: &'a str,
     pub account_name: &'a str,
-    pub secret_env: &'a str,
+    pub api_key_env: &'a str,
+    pub transport_secret_env: &'a str,
     pub remove_config: bool,
     pub config_path: &'a Path,
     pub env_path: &'a Path,
@@ -753,7 +825,8 @@ pub async fn remove_personal_agent_account_publishing(
         user_id,
         provider_id,
         account_name,
-        secret_env,
+        api_key_env,
+        transport_secret_env,
         remove_config,
         config_path,
         env_path,
@@ -774,10 +847,20 @@ pub async fn remove_personal_agent_account_publishing(
         "agent_revoke",
     )
     .await?;
+    let mut secret_envs = vec![api_key_env];
+    if !transport_secret_env.is_empty() && transport_secret_env != api_key_env {
+        secret_envs.push(transport_secret_env);
+    }
     let omitted = if remove_config {
-        omit_personal_account_files(config_path, env_path, provider_id, account_name, secret_env)
+        omit_personal_account_files(
+            config_path,
+            env_path,
+            provider_id,
+            account_name,
+            &secret_envs,
+        )
     } else {
-        omit_personal_agent_credential_files(config_path, env_path, secret_env)
+        omit_personal_agent_credential_files(config_path, env_path, &secret_envs)
     };
     let (rollback, transition) = match omitted {
         Ok(value) => value,
@@ -813,6 +896,15 @@ pub async fn remove_personal_agent_account_publishing(
     if delete_binding(database, provider_id, account_name)
         .await
         .is_err()
+    {
+        return Err(PersonalUpstreamError::RepairRequired);
+    }
+    if crate::operations::config_mutation::remove_agent_client_ca_bundle(
+        config_path,
+        provider_id,
+        account_name,
+    )
+    .is_err()
     {
         return Err(PersonalUpstreamError::RepairRequired);
     }
@@ -903,8 +995,13 @@ pub async fn remove_personal_account_publishing(
     }
     withdraw_binding(database, actor_id, provider_id, account_name).await?;
     let env_var = upstream_env_var(provider_id, account_name);
-    let published =
-        omit_personal_account_files(config_path, env_path, provider_id, account_name, &env_var);
+    let published = omit_personal_account_files(
+        config_path,
+        env_path,
+        provider_id,
+        account_name,
+        &[&env_var],
+    );
     let (rollback, transition) = match published {
         Ok(value) => value,
         Err(_) => return Err(PersonalUpstreamError::RepairRequired),

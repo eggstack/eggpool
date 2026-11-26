@@ -22,9 +22,11 @@ pub enum TicketVariant {
     Tampered,
 }
 
-/// TEST-TREE ONLY producer for valid and deliberately invalid enrollment tickets.
+/// TEST-TREE ONLY producer-shaped fixture for valid and deliberately invalid enrollment tickets.
+/// Its tickets are not emitted by the EggPass producer itself.
 pub struct TestTicketProducer {
     ca_pem: String,
+    ca_der: Vec<u8>,
     server_cert_pem: String,
     server_key_pem: String,
     enrollment_secret: String,
@@ -40,6 +42,7 @@ impl TestTicketProducer {
             .self_signed(&ca_key)
             .expect("self-signed CA certificate");
         let ca_pem = ca_cert.pem();
+        let ca_der = ca_cert.der().as_ref().to_vec();
         let issuer = Issuer::new(ca_params, ca_key);
 
         let mut server_params =
@@ -55,6 +58,7 @@ impl TestTicketProducer {
 
         Self {
             ca_pem,
+            ca_der,
             server_cert_pem: server_cert.pem(),
             server_key_pem: server_key.serialize_pem(),
             enrollment_secret,
@@ -96,36 +100,45 @@ impl TestTicketProducer {
             _ => {}
         }
 
-        let ca_pin = format!("{:x}", Sha256::digest(self.ca_pem.as_bytes()));
+        let ca_sha256 = URL_SAFE_NO_PAD.encode(Sha256::digest(self.ca_der.as_slice()));
+        let default_api_key = URL_SAFE_NO_PAD.encode([0xA5_u8; 32]);
+        let api_key = if enrollment_secret == default_api_key.as_str() {
+            URL_SAFE_NO_PAD.encode([0xA6_u8; 32])
+        } else {
+            default_api_key
+        };
         let mut payload = json!({
-            "version": 1,
+            "v": 1,
             "control": format!("{SERVER_NAME}:{control_port}"),
             "server_name": SERVER_NAME,
-            "ca_pin": ca_pin,
+            "ca_sha256": ca_sha256,
             "enroll": enrollment_secret,
-            "expires_at": now_unix + 60,
+            "expires_at": now_unix + 600,
             "agent": "test-agent",
-            "providers": ["opencode-go"]
+            "eggpass": "1.0.0",
+            "api_key": api_key
         });
         match variant {
             TicketVariant::Valid => {}
             TicketVariant::LabelMatchesEnrollment => {
                 payload["agent"] = json!(enrollment_secret);
             }
-            TicketVariant::WrongVersion => payload["version"] = json!(9),
+            TicketVariant::WrongVersion => payload["v"] = json!(9),
             TicketVariant::Oversized => payload["agent"] = json!("x".repeat(3000)),
             TicketVariant::Expired => payload["expires_at"] = json!(now_unix - 1),
             TicketVariant::MissingRequired => {
                 payload
                     .as_object_mut()
                     .expect("ticket payload object")
-                    .remove("ca_pin");
+                    .remove("ca_sha256");
             }
             TicketVariant::BadControlAddress => {
                 payload["control"] = json!("https://bad.example:7443")
             }
             TicketVariant::MalformedExpiry => payload["expires_at"] = json!("tomorrow"),
-            TicketVariant::BadCa => payload["ca_pin"] = json!("0".repeat(64)),
+            TicketVariant::BadCa => {
+                payload["ca_sha256"] = json!(URL_SAFE_NO_PAD.encode([0_u8; 32]));
+            }
             TicketVariant::ShortEnrollment => {
                 payload["enroll"] = json!(URL_SAFE_NO_PAD.encode(b"short"));
             }

@@ -67,6 +67,7 @@
     "0065_tool_grants.sql": "757ce7d6e89585bf6f83246b5e4935d29639e037cd0047efcffc0fc160082aff",
     "0066_personal_upstream.sql": "5f37ccad85c006e3e535322155d52a3bb75cc2fad649af54021c9905db742e4c",
     "0067_security_events.sql": "a7264a17790a2526655e23461cc075c3248e09e6d10d81d6ca30ba57dee4fe38",
-    "0068_security_events_legacy_key_rejection.sql": "08f20493e5c9a5c77e2288f5dd0abfdabd442ec40a3bd98c32611717141b726e"
+    "0068_security_events_legacy_key_rejection.sql": "08f20493e5c9a5c77e2288f5dd0abfdabd442ec40a3bd98c32611717141b726e",
+    "0069_agent_enrollment_replay.sql": "f0885d9fb391c9b982e64d2f30b73e368757c2a6c7cceb370bb103101f803c9e"
   }
 }

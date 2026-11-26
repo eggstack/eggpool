@@ -18,6 +18,7 @@ use std::{
 #[cfg(unix)]
 use std::os::unix::fs::PermissionsExt;
 
+use sha2::{Digest, Sha256};
 use toml::{Value, map::Map};
 
 use crate::{
@@ -283,6 +284,96 @@ fn atomic_replace(
         let _ = fs::remove_file(&temporary);
     }
     result
+}
+
+/// Stable, account-specific trust-bundle path for EggPool-issued agent certificates.
+pub fn agent_client_ca_path(config_path: &Path, provider_id: &str, account_name: &str) -> PathBuf {
+    let mut digest = Sha256::new();
+    digest.update(provider_id.as_bytes());
+    digest.update([0]);
+    digest.update(account_name.as_bytes());
+    let suffix = digest
+        .finalize()
+        .iter()
+        .take(16)
+        .map(|byte| format!("{byte:02x}"))
+        .collect::<String>();
+    let parent = config_path
+        .parent()
+        .filter(|path| !path.as_os_str().is_empty())
+        .unwrap_or_else(|| Path::new("."));
+    let parent = if parent.is_absolute() {
+        parent.to_path_buf()
+    } else {
+        env::current_dir()
+            .unwrap_or_else(|_| PathBuf::from("."))
+            .join(parent)
+    };
+    let parent = fs::canonicalize(&parent).unwrap_or(parent);
+    parent
+        .join(".eggpool-agent-ca")
+        .join(format!("{suffix}.pem"))
+}
+
+/// Atomically publish a bounded per-agent client-CA trust bundle.
+pub fn write_agent_client_ca_bundle(
+    config_path: &Path,
+    provider_id: &str,
+    account_name: &str,
+    pem: &[u8],
+) -> Result<PathBuf, MutationError> {
+    if !valid_identifier(provider_id)
+        || !valid_identifier(account_name)
+        || pem.is_empty()
+        || pem.len() > 256 * 1024
+    {
+        return Err(MutationError::Invalid(
+            "agent client CA bundle was rejected".into(),
+        ));
+    }
+    let path = agent_client_ca_path(config_path, provider_id, account_name);
+    let _guard = lock_mutation(config_path)?;
+    if fs::symlink_metadata(&path).is_ok() {
+        return Err(MutationError::Invalid(
+            "agent client CA bundle already exists".into(),
+        ));
+    }
+    #[cfg(unix)]
+    let mode = Some(fs::Permissions::from_mode(0o600));
+    #[cfg(not(unix))]
+    let mode = None;
+    atomic_replace(&path, pem, mode)?;
+    Ok(path)
+}
+
+/// Remove only the account-specific CA bundle path owned by this module.
+pub fn remove_agent_client_ca_bundle(
+    config_path: &Path,
+    provider_id: &str,
+    account_name: &str,
+) -> Result<(), MutationError> {
+    if !valid_identifier(provider_id) || !valid_identifier(account_name) {
+        return Err(MutationError::Invalid(
+            "agent client CA identity was rejected".into(),
+        ));
+    }
+    let path = agent_client_ca_path(config_path, provider_id, account_name);
+    let _guard = lock_mutation(config_path)?;
+    reject_symlink_ancestors(&path)?;
+    match fs::symlink_metadata(&path) {
+        Ok(metadata) if metadata.file_type().is_file() => {
+            fs::remove_file(&path).map_err(MutationError::Write)?;
+            if let Some(parent) = path.parent() {
+                let _ = fs::remove_dir(parent);
+            }
+            Ok(())
+        }
+        Ok(_) => Err(MutationError::Invalid(
+            "agent client CA path is not a regular file".into(),
+        )),
+        Err(error) if error.kind() == io::ErrorKind::NotFound => Ok(()),
+        Err(error) => Err(MutationError::Read(error)),
+    }
 }
 
 fn mutate_text_with_transition<F>(
@@ -1681,8 +1772,8 @@ pub struct PersonalAgentAccountFileWrite<'a> {
     pub env_path: &'a Path,
     pub provider_id: &'a str,
     pub account_name: &'a str,
-    pub secret_env: &'a str,
-    pub secret: &'a str,
+    pub api_key_env: &'a str,
+    pub api_key: &'a str,
     pub base_url: &'a str,
     pub label: Option<&'a str>,
     pub agent: &'a crate::config::AgentAccountConfig,
@@ -1756,8 +1847,8 @@ pub fn prepare_personal_agent_account_files(
         env_path,
         provider_id,
         account_name,
-        secret_env,
-        secret,
+        api_key_env,
+        api_key,
         base_url,
         label,
         agent,
@@ -1765,16 +1856,14 @@ pub fn prepare_personal_agent_account_files(
     let _guard = lock_mutation(config_path)?;
     if !valid_identifier(provider_id)
         || !valid_identifier(account_name)
-        || !valid_env_name(secret_env)
+        || !valid_env_name(api_key_env)
     {
         return Err(MutationError::Invalid(
             "provider, account, or environment name contains unsafe characters".into(),
         ));
     }
-    if secret.is_empty() || secret.chars().any(char::is_control) {
-        return Err(MutationError::Invalid(
-            "agent enrollment secret was rejected".into(),
-        ));
+    if api_key.is_empty() || api_key.chars().any(char::is_control) {
+        return Err(MutationError::Invalid("agent API key was rejected".into()));
     }
     let previous_config = if config_path.exists() {
         read_bounded(config_path)?
@@ -1792,7 +1881,7 @@ pub fn prepare_personal_agent_account_files(
             "account name is already configured".into(),
         ));
     }
-    let account = agent_account_value(account_name, secret_env, base_url, label, agent)?;
+    let account = agent_account_value(account_name, api_key_env, base_url, label, agent)?;
     let updated = if provider_exists(&original_text, provider_id) {
         let original_text = remove_empty_accounts_array(&original_text, provider_id);
         format!(
@@ -1801,7 +1890,7 @@ pub fn prepare_personal_agent_account_files(
             agent_account_block(
                 provider_id,
                 account_name,
-                secret_env,
+                api_key_env,
                 base_url,
                 label,
                 agent
@@ -1858,7 +1947,7 @@ pub fn prepare_personal_agent_account_files(
     };
     let env_text = String::from_utf8(previous_env.clone().unwrap_or_default())
         .map_err(|_| MutationError::Invalid("environment file is not valid UTF-8".into()))?;
-    let updated_env = upsert_env(&env_text, secret_env, secret)?;
+    let updated_env = upsert_env(&env_text, api_key_env, api_key)?;
     // Resolve the config destination and its safe replacement mode before
     // staging the adopted credential in the environment file.
     let config_mode = existing_mode(config_path)?;
@@ -2027,10 +2116,10 @@ pub fn install_personal_account_files(
 pub fn omit_personal_agent_credential_files(
     config_path: &Path,
     env_path: &Path,
-    secret_env: &str,
+    secret_envs: &[&str],
 ) -> Result<(PersonalFileRollback, ConfigTransition), MutationError> {
     let _guard = lock_mutation(config_path)?;
-    if !valid_env_name(secret_env) {
+    if secret_envs.is_empty() || secret_envs.iter().any(|name| !valid_env_name(name)) {
         return Err(MutationError::Invalid(
             "environment name contains unsafe characters".into(),
         ));
@@ -2049,7 +2138,9 @@ pub fn omit_personal_agent_credential_files(
     };
     let env_text = String::from_utf8(previous_env.clone().unwrap_or_default())
         .map_err(|_| MutationError::Invalid("environment file is not valid UTF-8".into()))?;
-    let updated_env = omit_env_assignment(&env_text, secret_env);
+    let updated_env = secret_envs
+        .iter()
+        .fold(env_text, |text, name| omit_env_assignment(&text, name));
     #[cfg(unix)]
     let env_mode = Some(fs::Permissions::from_mode(0o600));
     #[cfg(not(unix))]
@@ -2072,9 +2163,15 @@ pub fn omit_personal_account_files(
     env_path: &Path,
     provider_id: &str,
     account_name: &str,
-    api_key_env: &str,
+    secret_envs: &[&str],
 ) -> Result<(PersonalFileRollback, ConfigTransition), MutationError> {
     let _guard = lock_mutation(config_path)?;
+    if secret_envs.is_empty() || secret_envs.iter().any(|name| !valid_env_name(name)) {
+        return Err(MutationError::Invalid(
+            "environment name contains unsafe characters".into(),
+        ));
+    }
+    let api_key_env = secret_envs[0];
     let previous_config = read_bounded(config_path)?;
     let original_text = String::from_utf8(previous_config.clone()).map_err(|error| {
         MutationError::Invalid(format!("configuration is not valid UTF-8: {error}"))
@@ -2107,7 +2204,9 @@ pub fn omit_personal_account_files(
     };
     let env_text = String::from_utf8(previous_env.clone().unwrap_or_default())
         .map_err(|_| MutationError::Invalid("environment file is not valid UTF-8".into()))?;
-    let updated_env = omit_env_assignment(&env_text, api_key_env);
+    let updated_env = secret_envs
+        .iter()
+        .fold(env_text, |text, name| omit_env_assignment(&text, name));
     atomic_replace(config_path, updated.as_bytes(), existing_mode(config_path)?)?;
     #[cfg(unix)]
     let env_mode = Some(fs::Permissions::from_mode(0o600));

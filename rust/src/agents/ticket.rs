@@ -1,6 +1,7 @@
 //! Bounded, secret-redacting decoder for one-time Eggpass enrollment tickets.
 
 use std::{
+    io::Read,
     net::IpAddr,
     str::FromStr,
     time::{SystemTime, UNIX_EPOCH},
@@ -8,7 +9,7 @@ use std::{
 
 use base64::{
     Engine as _,
-    engine::general_purpose::{URL_SAFE, URL_SAFE_NO_PAD},
+    engine::general_purpose::{STANDARD, URL_SAFE_NO_PAD},
 };
 use http::uri::Authority;
 use serde::{Deserialize, Deserializer};
@@ -20,8 +21,12 @@ use crate::config::AgentsConfig;
 
 const PREFIX: &str = "epagent1.";
 pub const MAX_TICKET_BYTES: usize = 2 * 1024;
-pub const MAX_TICKET_LIFETIME_SECONDS: i64 = 2 * 60;
+pub const MAX_TICKET_LIFETIME_SECONDS: i64 = 10 * 60;
 const MAX_ENROLL_BYTES: usize = 128;
+const MAX_API_KEY_BYTES: usize = 512;
+const MAX_EGGPASS_VERSION_BYTES: usize = 64;
+const MAX_CA_BUNDLE_BYTES: usize = 1024 * 1024;
+const MAX_CA_CERT_DER_BYTES: usize = 768 * 1024;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Error)]
 pub enum TicketError {
@@ -59,7 +64,7 @@ pub enum TicketError {
     CaMismatch,
     #[error("ticket enrollment secret is malformed or too short")]
     EnrollmentSecret,
-    #[error("ticket display label or provider list is invalid")]
+    #[error("ticket agent label, EggPass metadata, or provider list is invalid")]
     OptionalField,
 }
 
@@ -74,22 +79,34 @@ impl<'de> Deserialize<'de> for EnrollmentSecret {
     }
 }
 
+struct ApiKeySecret(Zeroizing<String>);
+
+impl<'de> Deserialize<'de> for ApiKeySecret {
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: Deserializer<'de>,
+    {
+        String::deserialize(deserializer).map(|value| Self(Zeroizing::new(value)))
+    }
+}
+
 #[derive(Deserialize)]
 #[serde(deny_unknown_fields)]
 struct RawTicket {
-    version: Option<serde_json::Value>,
+    v: Option<serde_json::Value>,
     control: Option<String>,
     server_name: Option<String>,
-    ca_pin: Option<String>,
+    ca_sha256: Option<String>,
     enroll: Option<EnrollmentSecret>,
     expires_at: Option<serde_json::Value>,
-    #[serde(default)]
     agent: Option<String>,
+    eggpass: Option<String>,
+    api_key: Option<ApiKeySecret>,
     #[serde(default)]
     providers: Vec<String>,
 }
 
-/// Parsed public ticket metadata and its zeroizing, private transport secret.
+/// Parsed public ticket metadata and its zeroizing, private credentials.
 pub struct EnrollmentTicket {
     pub control: String,
     pub server_name: String,
@@ -97,7 +114,9 @@ pub struct EnrollmentTicket {
     pub agent_label: Option<String>,
     pub providers: Vec<String>,
     expires_at: i64,
+    ticket_digest: [u8; 32],
     enroll: Zeroizing<String>,
+    api_key: Zeroizing<String>,
 }
 
 impl std::fmt::Debug for EnrollmentTicket {
@@ -110,7 +129,9 @@ impl std::fmt::Debug for EnrollmentTicket {
             .field("agent_label", &"[REDACTED]")
             .field("providers", &"[REDACTED]")
             .field("expires_at", &"[REDACTED]")
+            .field("ticket_digest", &"[REDACTED]")
             .field("enroll", &"[REDACTED]")
+            .field("api_key", &"[REDACTED]")
             .finish()
     }
 }
@@ -134,13 +155,12 @@ impl EnrollmentTicket {
         }
         let decoded = URL_SAFE_NO_PAD
             .decode(encoded)
-            .or_else(|_| URL_SAFE.decode(encoded))
             .map_err(|_| TicketError::Base64)?;
         let payload_bytes = Zeroizing::new(decoded);
         let raw: RawTicket =
             serde_json::from_slice(&payload_bytes).map_err(|_| TicketError::Malformed)?;
         let version = raw
-            .version
+            .v
             .as_ref()
             .and_then(serde_json::Value::as_u64)
             .ok_or(TicketError::Version)?;
@@ -149,8 +169,12 @@ impl EnrollmentTicket {
         }
         let control = raw.control.ok_or(TicketError::MissingField)?;
         let server_name = raw.server_name.ok_or(TicketError::MissingField)?;
-        let ca_pin = raw.ca_pin.ok_or(TicketError::MissingField)?;
+        let ca_pin = raw.ca_sha256.ok_or(TicketError::MissingField)?;
         let enroll = raw.enroll.ok_or(TicketError::MissingField)?.0;
+        let agent = raw.agent.ok_or(TicketError::MissingField)?;
+        let eggpass = raw.eggpass.ok_or(TicketError::MissingField)?;
+        let api_key = raw.api_key.ok_or(TicketError::MissingField)?.0;
+        let providers = raw.providers;
         let expires_at = raw
             .expires_at
             .as_ref()
@@ -167,35 +191,26 @@ impl EnrollmentTicket {
         }
         validate_pin(&ca_pin)?;
         validate_enroll_secret(&enroll)?;
-        if raw.agent.as_ref().is_some_and(|label| {
-            label.chars().count() > 64
-                || label.chars().any(char::is_control)
-                || label.contains('=')
-                || label.contains(':')
-                || label.contains("://")
-                || label.to_ascii_lowercase().starts_with("bearer ")
-                || label.starts_with("sk-")
-        }) || raw.agent.as_deref() == Some(enroll.as_str())
-            || raw.providers.len() > 32
-            || raw
-                .providers
-                .iter()
-                .any(|provider| !valid_identifier(provider))
+        validate_api_key(&api_key)?;
+        if !valid_agent_label(&agent)
+            || agent == enroll.as_str()
+            || !valid_eggpass_version(&eggpass)
+            || providers.len() > 32
+            || providers.iter().any(|provider| !valid_identifier(provider))
         {
             return Err(TicketError::OptionalField);
         }
-        let ca_pin = ca_pin
-            .strip_prefix("sha256:")
-            .unwrap_or(&ca_pin)
-            .to_ascii_lowercase();
+        let ticket_digest = Sha256::digest(input.as_bytes()).into();
         Ok(Self {
             control,
             server_name,
             ca_pin,
-            agent_label: raw.agent,
-            providers: raw.providers,
+            agent_label: Some(agent),
+            providers,
             expires_at,
+            ticket_digest,
             enroll,
+            api_key,
         })
     }
 
@@ -203,9 +218,19 @@ impl EnrollmentTicket {
         self.expires_at
     }
 
+    /// Digest of the original bearer ticket for durable replay protection.
+    pub fn ticket_digest(&self) -> [u8; 32] {
+        self.ticket_digest
+    }
+
     /// Borrow the credential only for tunnel startup and secret-file staging.
     pub fn enroll_secret(&self) -> &str {
         self.enroll.as_str()
+    }
+
+    /// Borrow EggPass's inference API credential without exposing it via Debug.
+    pub fn api_key(&self) -> &str {
+        self.api_key.as_str()
     }
 
     /// Recheck the display label at the configuration publication boundary.
@@ -252,9 +277,17 @@ impl EnrollmentTicket {
         let path = server_ca_path
             .filter(|path| !path.trim().is_empty())
             .ok_or(TicketError::MissingCaAuthority)?;
-        let bytes = std::fs::read(crate::Config::runtime_path(path))
+        let file = std::fs::File::open(crate::Config::runtime_path(path))
             .map_err(|_| TicketError::MissingCaAuthority)?;
-        let fingerprint = format!("{:x}", Sha256::digest(bytes));
+        let mut pem = Vec::new();
+        file.take((MAX_CA_BUNDLE_BYTES + 1) as u64)
+            .read_to_end(&mut pem)
+            .map_err(|_| TicketError::MissingCaAuthority)?;
+        if pem.len() > MAX_CA_BUNDLE_BYTES {
+            return Err(TicketError::MissingCaAuthority);
+        }
+        let certificate = first_pem_certificate_der(&pem).ok_or(TicketError::MissingCaAuthority)?;
+        let fingerprint = URL_SAFE_NO_PAD.encode(Sha256::digest(certificate.as_slice()));
         if self.ca_pin != fingerprint {
             return Err(TicketError::CaMismatch);
         }
@@ -335,8 +368,10 @@ fn valid_dns_name(value: &str) -> bool {
 }
 
 fn validate_pin(value: &str) -> Result<(), TicketError> {
-    let pin = value.strip_prefix("sha256:").unwrap_or(value);
-    if pin.len() == 64 && pin.bytes().all(|byte| byte.is_ascii_hexdigit()) {
+    let decoded = URL_SAFE_NO_PAD
+        .decode(value)
+        .map_err(|_| TicketError::CaPin)?;
+    if decoded.len() == 32 {
         Ok(())
     } else {
         Err(TicketError::CaPin)
@@ -350,13 +385,42 @@ fn validate_enroll_secret(value: &str) -> Result<(), TicketError> {
     let decoded = Zeroizing::new(
         URL_SAFE_NO_PAD
             .decode(value)
-            .or_else(|_| URL_SAFE.decode(value))
             .map_err(|_| TicketError::EnrollmentSecret)?,
     );
     if decoded.len() < 32 {
         return Err(TicketError::EnrollmentSecret);
     }
     Ok(())
+}
+
+fn validate_api_key(value: &str) -> Result<(), TicketError> {
+    if value.is_empty()
+        || value.len() > MAX_API_KEY_BYTES
+        || !value.bytes().all(|byte| byte.is_ascii_graphic())
+    {
+        Err(TicketError::Malformed)
+    } else {
+        Ok(())
+    }
+}
+
+fn valid_agent_label(value: &str) -> bool {
+    !value.is_empty()
+        && value.chars().count() <= 64
+        && !value.chars().any(char::is_control)
+        && !value.contains('=')
+        && !value.contains(':')
+        && !value.contains("://")
+        && !value.to_ascii_lowercase().starts_with("bearer ")
+        && !value.starts_with("sk-")
+}
+
+fn valid_eggpass_version(value: &str) -> bool {
+    !value.is_empty()
+        && value.len() <= MAX_EGGPASS_VERSION_BYTES
+        && value
+            .bytes()
+            .all(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b'.' | b'-' | b'+'))
 }
 
 fn valid_identifier(value: &str) -> bool {
@@ -367,25 +431,60 @@ fn valid_identifier(value: &str) -> bool {
             .all(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b'-' | b'_'))
 }
 
+fn first_pem_certificate_der(pem: &[u8]) -> Option<Zeroizing<Vec<u8>>> {
+    const BEGIN: &[u8] = b"-----BEGIN CERTIFICATE-----";
+    const END: &[u8] = b"-----END CERTIFICATE-----";
+
+    let start = find_bytes(pem, BEGIN)?.checked_add(BEGIN.len())?;
+    let end = find_bytes(pem.get(start..)?, END)?.checked_add(start)?;
+    let encoded = &pem[start..end];
+    if encoded.len() > MAX_CA_CERT_DER_BYTES * 4 / 3 + 8 {
+        return None;
+    }
+    let compact: Vec<u8> = encoded
+        .iter()
+        .copied()
+        .filter(|byte| !byte.is_ascii_whitespace())
+        .collect();
+    let der = STANDARD.decode(compact).ok()?;
+    if der.is_empty() || der.len() > MAX_CA_CERT_DER_BYTES {
+        return None;
+    }
+    Some(Zeroizing::new(der))
+}
+
+fn find_bytes(haystack: &[u8], needle: &[u8]) -> Option<usize> {
+    haystack
+        .windows(needle.len())
+        .position(|window| window == needle)
+}
+
 #[cfg(test)]
 mod tests {
-    use base64::{Engine as _, engine::general_purpose::URL_SAFE_NO_PAD};
+    use base64::{
+        Engine as _,
+        engine::general_purpose::{STANDARD, URL_SAFE_NO_PAD},
+    };
     use serde_json::{Value, json};
     use sha2::{Digest, Sha256};
 
-    use super::{EnrollmentTicket, TicketError};
+    use super::{EnrollmentTicket, MAX_TICKET_LIFETIME_SECONDS, TicketError};
 
     const NOW: i64 = 1_800_000_000;
-    const SECRET: &str = "ticket-secret-sentinel-that-must-never-be-echoed";
+    const ENROLL_SECRET: &str = "ticket-secret-sentinel-that-must-never-be-echoed";
+    const API_KEY_SECRET: &str = "sk-eggpass-test-api-key-sentinel";
 
     fn payload() -> Value {
         json!({
-            "version": 1,
+            "v": 1,
             "control": "eggpool.example:7443",
             "server_name": "agent.example",
-            "ca_pin": "a".repeat(64),
+            "ca_sha256": URL_SAFE_NO_PAD.encode([0x11_u8; 32]),
             "enroll": URL_SAFE_NO_PAD.encode([0x5a_u8; 32]),
             "expires_at": NOW + 60,
+            "agent": "workstation",
+            "eggpass": "0.1.3",
+            "api_key": API_KEY_SECRET,
         })
     }
 
@@ -398,50 +497,97 @@ mod tests {
 
     fn decode_error(ticket: &str) -> TicketError {
         let error = EnrollmentTicket::decode(ticket, NOW).expect_err("ticket is rejected");
-        assert!(
-            !error.to_string().contains(SECRET),
-            "ticket error must not expose enrollment material"
-        );
+        for secret in [ENROLL_SECRET, API_KEY_SECRET] {
+            assert!(
+                !error.to_string().contains(secret),
+                "ticket error must not expose credentials"
+            );
+        }
         error
     }
 
-    #[test]
-    fn decoder_accepts_a_valid_ticket_and_redacts_debug() {
+    fn certificate_pem(der: &[u8]) -> Vec<u8> {
+        let encoded = STANDARD.encode(der);
+        format!(
+            "-----BEGIN CERTIFICATE-----\n{}\n-----END CERTIFICATE-----\n",
+            encoded
+        )
+        .into_bytes()
+    }
+
+    fn write_ca_and_ticket(pin: &str, pem: &[u8]) -> (tempfile::TempDir, EnrollmentTicket) {
+        let directory = tempfile::tempdir().expect("temporary directory");
+        let ca_path = directory.path().join("server-ca.pem");
+        std::fs::write(&ca_path, pem).expect("CA file writes");
         let mut value = payload();
-        value["enroll"] = json!(SECRET);
+        value["ca_sha256"] = json!(pin);
+        let ticket = EnrollmentTicket::decode(&encode(&value), NOW).expect("valid pin format");
+        (directory, ticket)
+    }
+
+    #[test]
+    fn producer_shaped_ticket_keeps_credentials_distinct_and_redacts_debug() {
+        let mut value = payload();
+        value["enroll"] = json!(ENROLL_SECRET);
         value["agent"] = json!("agent-label-sentinel");
-        value["providers"] = json!(["provider-sentinel"]);
-        let pin_sentinel = "b".repeat(64);
-        value["ca_pin"] = json!(&pin_sentinel);
-        let ticket = EnrollmentTicket::decode(&encode(&value), NOW).expect("valid ticket");
+        value["api_key"] = json!(API_KEY_SECRET);
+        let ticket = EnrollmentTicket::decode(&encode(&value), NOW).expect("valid producer ticket");
         assert_eq!(
             ticket.remaining_lifetime(NOW),
             std::time::Duration::from_secs(60)
         );
         assert_eq!(ticket.control, "eggpool.example:7443");
-        assert_eq!(ticket.enroll_secret(), SECRET);
+        assert_eq!(ticket.enroll_secret(), ENROLL_SECRET);
+        assert_eq!(ticket.api_key(), API_KEY_SECRET);
+        assert_ne!(ticket.enroll_secret(), ticket.api_key());
+
         let debug = format!("{ticket:?}");
         for sentinel in [
-            SECRET,
+            ENROLL_SECRET,
+            API_KEY_SECRET,
             "eggpool.example",
             "agent.example",
             "agent-label-sentinel",
-            "provider-sentinel",
-            pin_sentinel.as_str(),
         ] {
-            assert!(!debug.contains(sentinel), "Debug leaked {sentinel}");
+            assert!(
+                !debug.contains(sentinel),
+                "Debug leaked sensitive ticket data"
+            );
         }
         assert!(debug.contains("[REDACTED]"));
     }
 
     #[test]
-    fn decoder_rejects_malformed_ticket_matrix_without_echoing_secret() {
+    fn accepts_exact_maximum_lifetime_and_rejects_expiry_boundary_and_excess() {
         let mut value = payload();
-        value["enroll"] = json!(SECRET);
-        let valid = encode(&value);
-        let mut bad = payload();
-        bad["version"] = json!(9);
-        assert_eq!(decode_error(&encode(&bad)), TicketError::Version);
+        value["expires_at"] = json!(NOW + MAX_TICKET_LIFETIME_SECONDS);
+        let ticket = EnrollmentTicket::decode(&encode(&value), NOW)
+            .expect("exactly the maximum ticket lifetime is accepted");
+        assert_eq!(
+            ticket.remaining_lifetime(NOW),
+            std::time::Duration::from_secs(MAX_TICKET_LIFETIME_SECONDS as u64)
+        );
+
+        value["expires_at"] = json!(NOW + MAX_TICKET_LIFETIME_SECONDS + 1);
+        assert_eq!(decode_error(&encode(&value)), TicketError::Expired);
+        value["expires_at"] = json!(NOW);
+        assert_eq!(decode_error(&encode(&value)), TicketError::Expired);
+    }
+
+    #[test]
+    fn decoder_rejects_unknown_version_fields_and_malformed_input() {
+        let mut value = payload();
+        value["v"] = json!(9);
+        assert_eq!(decode_error(&encode(&value)), TicketError::Version);
+
+        value = payload();
+        value["unrecognized"] = json!("ignored fields are forbidden");
+        assert_eq!(decode_error(&encode(&value)), TicketError::Malformed);
+
+        value = payload();
+        value["version"] = json!(1);
+        assert_eq!(decode_error(&encode(&value)), TicketError::Malformed);
+
         assert_eq!(decode_error("epagent1.not*base64"), TicketError::Base64);
         assert_eq!(
             decode_error(&format!("epagent1.{}", URL_SAFE_NO_PAD.encode(b"{"))),
@@ -451,29 +597,59 @@ mod tests {
             decode_error(&format!("epagent1.{}", "a".repeat(2 * 1024))),
             TicketError::TooLarge
         );
-        bad = payload();
-        bad["expires_at"] = json!(NOW - 1);
-        assert_eq!(decode_error(&encode(&bad)), TicketError::Expired);
-        bad = payload();
-        bad.as_object_mut().expect("object").remove("ca_pin");
-        assert_eq!(decode_error(&encode(&bad)), TicketError::MissingField);
-        bad = payload();
-        bad["expires_at"] = json!("tomorrow");
-        assert_eq!(decode_error(&encode(&bad)), TicketError::Expiry);
-        bad = payload();
-        bad["control"] = json!("https://agent.example:7443");
-        assert_eq!(decode_error(&encode(&bad)), TicketError::ControlAddress);
-        bad = payload();
-        bad["enroll"] = json!(URL_SAFE_NO_PAD.encode(b"short"));
-        assert_eq!(decode_error(&encode(&bad)), TicketError::EnrollmentSecret);
-        assert!(!valid.is_empty());
+    }
+
+    #[test]
+    fn decoder_requires_all_producer_fields_and_valid_credentials() {
+        let mut value = payload();
+        value.as_object_mut().expect("object").remove("ca_sha256");
+        assert_eq!(decode_error(&encode(&value)), TicketError::MissingField);
+
+        value = payload();
+        value.as_object_mut().expect("object").remove("api_key");
+        assert_eq!(decode_error(&encode(&value)), TicketError::MissingField);
+
+        value = payload();
+        value["expires_at"] = json!("tomorrow");
+        assert_eq!(decode_error(&encode(&value)), TicketError::Expiry);
+
+        value = payload();
+        value["control"] = json!("https://agent.example:7443");
+        assert_eq!(decode_error(&encode(&value)), TicketError::ControlAddress);
+
+        value = payload();
+        value["enroll"] = json!(URL_SAFE_NO_PAD.encode(b"short"));
+        assert_eq!(decode_error(&encode(&value)), TicketError::EnrollmentSecret);
+
+        value = payload();
+        value["api_key"] = json!("bad key with whitespace");
+        assert_eq!(decode_error(&encode(&value)), TicketError::Malformed);
+    }
+
+    #[test]
+    fn agent_label_and_eggpass_metadata_are_safely_bounded() {
+        let mut value = payload();
+        value["agent"] = json!("https://example.invalid");
+        assert_eq!(decode_error(&encode(&value)), TicketError::OptionalField);
+
+        value = payload();
+        value["agent"] = json!("a".repeat(65));
+        assert_eq!(decode_error(&encode(&value)), TicketError::OptionalField);
+
+        value = payload();
+        value["eggpass"] = json!("0.1.3\nmalicious");
+        assert_eq!(decode_error(&encode(&value)), TicketError::OptionalField);
+
+        value = payload();
+        value["eggpass"] = json!("0".repeat(65));
+        assert_eq!(decode_error(&encode(&value)), TicketError::OptionalField);
     }
 
     #[test]
     fn enrollment_credential_cannot_be_used_as_the_agent_display_label() {
         let mut value = payload();
-        value["enroll"] = json!(SECRET);
-        value["agent"] = json!(SECRET);
+        value["enroll"] = json!(ENROLL_SECRET);
+        value["agent"] = json!(ENROLL_SECRET);
         assert_eq!(decode_error(&encode(&value)), TicketError::OptionalField);
 
         value["agent"] = json!("safe display label");
@@ -488,26 +664,50 @@ mod tests {
     }
 
     #[test]
-    fn ca_pin_is_checked_against_the_server_ca_file() {
-        let directory = tempfile::tempdir().expect("temporary directory");
-        let ca = b"fixture server CA authority";
-        let ca_path = directory.path().join("server-ca.pem");
-        std::fs::write(&ca_path, ca).expect("CA file writes");
+    fn ca_pin_uses_first_certificate_der_from_a_multi_certificate_pem_bundle() {
+        let first_der = b"synthetic first certificate DER";
+        let second_der = b"synthetic second certificate DER";
+        let pem = [certificate_pem(first_der), certificate_pem(second_der)].concat();
+        let ca_path = tempfile::tempdir().expect("temporary directory");
+        let ca_file = ca_path.path().join("server-ca.pem");
+        std::fs::write(&ca_file, &pem).expect("CA file writes");
+
+        let first_pin = URL_SAFE_NO_PAD.encode(Sha256::digest(first_der));
         let mut value = payload();
-        value["ca_pin"] = json!(format!("{:x}", Sha256::digest(ca)));
-        let ticket = EnrollmentTicket::decode(&encode(&value), NOW).expect("valid pin format");
-        ticket
-            .verify_server_ca(ca_path.to_str())
-            .expect("matching server CA pin");
-        value["ca_pin"] = json!("b".repeat(64));
-        let mismatched = EnrollmentTicket::decode(&encode(&value), NOW).expect("valid pin format");
+        value["ca_sha256"] = json!(first_pin);
+        let first_ticket = EnrollmentTicket::decode(&encode(&value), NOW).expect("valid pin");
+        first_ticket
+            .verify_server_ca(ca_file.to_str())
+            .expect("first certificate DER pin matches");
+
+        let pem_text_pin = URL_SAFE_NO_PAD.encode(Sha256::digest(&pem));
+        value["ca_sha256"] = json!(pem_text_pin);
+        let pem_text_ticket = EnrollmentTicket::decode(&encode(&value), NOW).expect("valid pin");
         assert_eq!(
-            mismatched.verify_server_ca(ca_path.to_str()),
+            pem_text_ticket.verify_server_ca(ca_file.to_str()),
             Err(TicketError::CaMismatch)
         );
+
+        value["ca_sha256"] = json!(URL_SAFE_NO_PAD.encode(Sha256::digest(second_der)));
+        let second_ticket = EnrollmentTicket::decode(&encode(&value), NOW).expect("valid pin");
         assert_eq!(
-            mismatched.verify_server_ca(None),
+            second_ticket.verify_server_ca(ca_file.to_str()),
+            Err(TicketError::CaMismatch)
+        );
+    }
+
+    #[test]
+    fn ca_pin_rejects_missing_or_malformed_pem_and_wrong_pin_encoding() {
+        let encoded_pin = URL_SAFE_NO_PAD.encode([0x11_u8; 32]);
+        let (directory, ticket) = write_ca_and_ticket(&encoded_pin, b"not a PEM certificate");
+        let ca_path = directory.path().join("server-ca.pem");
+        assert_eq!(
+            ticket.verify_server_ca(ca_path.to_str()),
             Err(TicketError::MissingCaAuthority)
         );
+
+        let mut value = payload();
+        value["ca_sha256"] = json!("a".repeat(64));
+        assert_eq!(decode_error(&encode(&value)), TicketError::CaPin);
     }
 }

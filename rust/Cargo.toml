@@ -100,6 +100,7 @@ hyper-util = { version = "0.1", default-features = false, features = [
 ] }
 nix = { version = "0.31.3", default-features = false, features = ["signal", "term", "user"] }
 rustls = { version = "0.23", default-features = false, features = ["ring", "tls12"] }
+rcgen = "0.14"
 rpassword = "7"
 serde = { version = "1", features = ["derive"] }
 serde_json = { version = "1", features = ["preserve_order"] }
@@ -126,7 +127,6 @@ eggress-protocol-shadowsocks = { version = "=1.0.12", features = [
     "legacy-crypto",
     "pproxy-legacy",
 ] }
-rcgen = "0.14"
 tempfile = "3"
 eggress-protocol-trojan = "=1.0.12"
 tokio-rustls = "0.26"

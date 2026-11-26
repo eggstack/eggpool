@@ -73,8 +73,8 @@ async fn security_event_vocabulary_extension_preserves_existing_aggregates() {
     let state = MigrationRunner::new(&database)
         .run()
         .await
-        .expect("version-68 event vocabulary migration applies");
-    assert_eq!(state.applied_this_run, vec![68]);
+        .expect("v68 vocabulary and v69 replay migrations apply");
+    assert_eq!(state.applied_this_run, vec![68, 69]);
 
     let event_counts = database
         .call(|connection| {
@@ -112,8 +112,8 @@ async fn fresh_database_migrates_idempotently_and_preserves_pragmas() {
         .run()
         .await
         .expect("migrations apply");
-    assert_eq!(first.applied_versions.len(), 68);
-    assert_eq!(first.applied_this_run.len(), 68);
+    assert_eq!(first.applied_versions.len(), 69);
+    assert_eq!(first.applied_this_run.len(), 69);
     let default_member_profile: Option<String> = database
         .call(|connection| {
             connection.query_row(
@@ -342,7 +342,7 @@ async fn python_historical_fixture_upgrades_and_repositories_round_trip() {
         .await
         .expect("current migrations apply");
     assert_eq!(state.applied_this_run.first(), Some(&12));
-    assert_eq!(state.applied_this_run.last(), Some(&68));
+    assert_eq!(state.applied_this_run.last(), Some(&69));
     let account = AccountRepository::new(&database)
         .get_by_name("historical-account")
         .await
@@ -710,14 +710,14 @@ async fn schema54_image_upgrades_with_legacy_state_preserved() {
         .archive;
     BackupService::validate_archive(&archive).expect("pre-upgrade archive validates");
 
-    // Forward-only production upgrade: migrations 55 through 67 inclusive.
+    // Forward-only production upgrade: migrations 55 through 69 inclusive.
     let state = MigrationRunner::new(&database)
         .run()
         .await
         .expect("production upgrade applies");
     assert_eq!(state.applied_this_run.first(), Some(&55));
-    assert_eq!(state.applied_this_run.last(), Some(&68));
-    assert_eq!(state.applied_this_run.len(), 14);
+    assert_eq!(state.applied_this_run.last(), Some(&69));
+    assert_eq!(state.applied_this_run.len(), 15);
     database
         .quick_check()
         .await
@@ -1153,8 +1153,8 @@ async fn the_v64_migration_removes_the_legacy_rows_and_constrains_the_null_scope
     );
     assert_eq!(
         state.applied_versions.last(),
-        Some(&68),
-        "the migration chain is contiguous and ends at v68"
+        Some(&69),
+        "the migration chain is contiguous and ends at v69"
     );
 
     database

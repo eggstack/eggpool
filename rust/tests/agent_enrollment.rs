@@ -37,10 +37,11 @@ use eggress_protocol_reverse::{
     client::{ReverseClient, ReverseClientConfig},
     tls::ReverseClientTlsConfig,
 };
+use sha2::{Digest, Sha256};
 use tokio::{
     io::{AsyncReadExt, AsyncWriteExt},
     net::{TcpListener as TokioTcpListener, TcpStream},
-    sync::oneshot,
+    sync::{mpsc as async_mpsc, oneshot},
     task::JoinHandle,
 };
 
@@ -48,10 +49,12 @@ use tokio::{
 mod agent_ticket;
 
 use agent_ticket::{SERVER_NAME, TestTicketProducer, TicketVariant};
+use zeroize::{Zeroize, Zeroizing};
 
 const PROVIDER: &str = "opencode-go";
 const ENROLLMENT_MODEL: &str = "agent-enrollment-model";
 const MEMBER_PASSWORD: &str = "M002 temporary member password";
+const ENROLLMENT_USERNAME: &str = "enroll";
 
 #[derive(Clone)]
 struct Browser {
@@ -477,6 +480,31 @@ async fn browser_form_post(
     String::from_utf8_lossy(&response).into_owned()
 }
 
+fn spawn_enrollment_request(
+    app: &TestApp,
+    browser: &Browser,
+    account_name: &str,
+    ticket: &str,
+) -> JoinHandle<String> {
+    let body = format!(
+        "provider={PROVIDER}&account_name={account_name}&ticket={ticket}&csrf={}",
+        browser.csrf
+    );
+    let address = app.address;
+    let origin = app.origin.clone();
+    let cookies = browser.cookies.clone();
+    tokio::spawn(async move {
+        browser_form_post(
+            address,
+            "/my-account/agents/enroll",
+            &body,
+            &cookies,
+            &origin,
+        )
+        .await
+    })
+}
+
 async fn authenticated_status(address: SocketAddr, cookies: &str) -> String {
     let mut stream = TcpStream::connect(address)
         .await
@@ -589,21 +617,144 @@ fn unix_time() -> i64 {
         .map_or(0, |duration| duration.as_secs().min(i64::MAX as u64) as i64)
 }
 
+struct TicketCredentials {
+    enrollment: Zeroizing<String>,
+    api_key: Zeroizing<String>,
+}
+
+#[derive(serde::Deserialize)]
+struct EncodedTicketSecrets {
+    enroll: String,
+    api_key: String,
+}
+
+impl Drop for EncodedTicketSecrets {
+    fn drop(&mut self) {
+        self.enroll.zeroize();
+        self.api_key.zeroize();
+    }
+}
+
+fn ticket_credentials(ticket: &str) -> TicketCredentials {
+    let encoded = ticket
+        .strip_prefix("epagent1.")
+        .expect("producer ticket prefix");
+    let payload = Zeroizing::new(
+        URL_SAFE_NO_PAD
+            .decode(encoded)
+            .expect("producer ticket encoding"),
+    );
+    let mut fields: EncodedTicketSecrets =
+        serde_json::from_slice(payload.as_slice()).expect("producer ticket fields");
+    TicketCredentials {
+        enrollment: Zeroizing::new(std::mem::take(&mut fields.enroll)),
+        api_key: Zeroizing::new(std::mem::take(&mut fields.api_key)),
+    }
+}
+
+fn real_ticket_from_eggpass_cli(app: &TestApp) -> Zeroizing<String> {
+    let binary = std::env::var_os("EGGPASS_BIN")
+        .expect("set EGGPASS_BIN when running the ignored producer interoperability test");
+    let home = app._directory.path().join("eggpass-cli-home");
+    fs::create_dir_all(&home).expect("create isolated EggPass CLI home");
+    let ca_path = app
+        .config
+        .agents
+        .tls
+        .as_ref()
+        .and_then(|tls| tls.server_ca_path.as_ref())
+        .expect("test CA path configured");
+    let output = Command::new(binary)
+        .env("EGGPASS_HOME", &home)
+        .arg("eggpool")
+        .arg("--control")
+        .arg(format!("{SERVER_NAME}:{}", app.control_port))
+        .arg("--server-name")
+        .arg(SERVER_NAME)
+        .arg("--ca")
+        .arg(ca_path)
+        .arg("--label")
+        .arg("producer-cli-interop")
+        .output()
+        .expect("run EggPass eggpool setup CLI");
+    assert!(
+        output.status.success(),
+        "EggPass producer CLI exits successfully (status {:?})",
+        output.status.code()
+    );
+    let stdout = String::from_utf8(output.stdout).expect("EggPass ticket output is UTF-8");
+    let ticket_lines = stdout
+        .lines()
+        .filter(|line| line.starts_with("epagent1."))
+        .collect::<Vec<_>>();
+    assert_eq!(
+        ticket_lines.len(),
+        1,
+        "EggPass stdout must contain exactly one ticket line ({} bytes, {} lines)",
+        stdout.len(),
+        stdout.lines().count()
+    );
+    let ticket = ticket_lines[0];
+    assert!(
+        ticket.len() <= 2_048 && !ticket.contains(['\r', '\n']),
+        "EggPass ticket line is bounded and single-line"
+    );
+    Zeroizing::new(ticket.to_owned())
+}
+
+struct EnrollmentCallback {
+    authorization_valid: bool,
+    host_valid: bool,
+    request_shape_valid: bool,
+    callback_accepted: bool,
+    client_cert_pem: String,
+    client_key_pem: Zeroizing<String>,
+}
+
+#[derive(serde::Deserialize)]
+#[serde(deny_unknown_fields)]
+struct EnrollmentCallbackBody {
+    client_cert_pem: String,
+    client_key_pem: String,
+}
+
 struct ProviderFixture {
     address: SocketAddr,
     requests: Arc<AtomicUsize>,
+    api_host_valid: Arc<AtomicBool>,
+    api_authorization_valid: Arc<AtomicBool>,
+    callbacks: async_mpsc::UnboundedReceiver<EnrollmentCallback>,
     stop: Option<oneshot::Sender<()>>,
     task: JoinHandle<()>,
 }
 
 impl ProviderFixture {
-    async fn start() -> Self {
+    async fn start_for_agent(enrollment_secret: &str, api_key: &str) -> Self {
+        Self::start_with_credentials(Some(enrollment_secret), Some(api_key), true).await
+    }
+
+    async fn start_rejecting_callback(enrollment_secret: &str, api_key: &str) -> Self {
+        Self::start_with_credentials(Some(enrollment_secret), Some(api_key), false).await
+    }
+
+    async fn start_with_credentials(
+        enrollment_secret: Option<&str>,
+        api_key: Option<&str>,
+        callback_acceptance: bool,
+    ) -> Self {
         let listener = TokioTcpListener::bind("127.0.0.1:0")
             .await
             .expect("provider fixture binds");
         let address = listener.local_addr().expect("provider fixture address");
         let requests = Arc::new(AtomicUsize::new(0));
         let task_requests = Arc::clone(&requests);
+        let api_host_valid = Arc::new(AtomicBool::new(false));
+        let task_api_host_valid = Arc::clone(&api_host_valid);
+        let api_authorization_valid = Arc::new(AtomicBool::new(false));
+        let task_api_authorization_valid = Arc::clone(&api_authorization_valid);
+        let expected_enrollment = enrollment_secret.map(|secret| Zeroizing::new(secret.to_owned()));
+        let expected_api_key = api_key.map(|secret| Zeroizing::new(secret.to_owned()));
+        let (callback_tx, callbacks) = async_mpsc::unbounded_channel();
         let (stop, mut stopped) = oneshot::channel();
         let task = tokio::spawn(async move {
             loop {
@@ -611,17 +762,98 @@ impl ProviderFixture {
                     _ = &mut stopped => return,
                     accepted = listener.accept() => {
                         let (mut stream, _) = accepted.expect("provider fixture accepts");
-                        if read_provider_request(&mut stream).await.is_err() {
+                        let mut request = match read_provider_request(&mut stream).await {
+                            Ok(request) => request,
+                            Err(_) => continue,
+                        };
+                        let Some(header_end) = request.windows(4).position(|window| window == b"\r\n\r\n") else {
+                            request.zeroize();
                             continue;
+                        };
+                        let headers = Zeroizing::new(String::from_utf8_lossy(&request[..header_end]).into_owned());
+                        let mut lines = headers.lines();
+                        let first = lines.next().unwrap_or_default();
+                        let mut first_fields = first.split_ascii_whitespace();
+                        let method = first_fields.next().unwrap_or_default();
+                        let target = first_fields.next().unwrap_or_default();
+                        let host = headers.lines().find_map(|line| {
+                            let (name, value) = line.split_once(':')?;
+                            name.eq_ignore_ascii_case("host").then_some(value.trim())
+                        }).unwrap_or_default();
+                        let authorization = headers.lines().find_map(|line| {
+                            let (name, value) = line.split_once(':')?;
+                            name.eq_ignore_ascii_case("authorization").then_some(value.trim())
+                        }).unwrap_or_default();
+                        if target == "/v1/eggpool/enroll" {
+                            let body_bytes = &request[header_end + 4..];
+                            let content_type_valid = headers.lines().any(|line| {
+                                line.split_once(':').is_some_and(|(name, value)| {
+                                    name.eq_ignore_ascii_case("content-type")
+                                        && value.trim().eq_ignore_ascii_case("application/json")
+                                })
+                            });
+                            let payload = serde_json::from_slice::<EnrollmentCallbackBody>(body_bytes).ok();
+                            let fields_valid = payload.as_ref().is_some_and(|payload| {
+                                !payload.client_cert_pem.is_empty()
+                                    && !payload.client_key_pem.is_empty()
+                                    && payload.client_cert_pem.len() <= 64 * 1024
+                                    && payload.client_key_pem.len() <= 64 * 1024
+                            });
+                            let authorization_valid = expected_enrollment.as_ref().is_some_and(|expected| {
+                                authorization.strip_prefix("Bearer ") == Some(expected.as_str())
+                            });
+                            let host_valid = host == "127.0.0.1";
+                            let request_shape_valid = method == "POST"
+                                && content_type_valid
+                                && fields_valid
+                                && body_bytes.len() <= 132 * 1024;
+                            let accepted = callback_acceptance
+                                && authorization_valid
+                                && host_valid
+                                && request_shape_valid;
+                            let callback = EnrollmentCallback {
+                                authorization_valid,
+                                host_valid,
+                                request_shape_valid,
+                                callback_accepted: accepted,
+                                client_cert_pem: payload.as_ref().map_or_else(String::new, |payload| payload.client_cert_pem.clone()),
+                                client_key_pem: Zeroizing::new(payload.map_or_else(String::new, |payload| payload.client_key_pem)),
+                            };
+                            request.zeroize();
+                            let (status, body) = if accepted {
+                                ("201 Created", br#"{"status":"ok"}"#.as_slice())
+                            } else {
+                                ("400 Bad Request", br#"{"status":"error"}"#.as_slice())
+                            };
+                            let response = format!(
+                                "HTTP/1.1 {status}\r\ncontent-type: application/json\r\ncontent-length: {}\r\nconnection: close\r\n\r\n",
+                                body.len()
+                            );
+                            let _ = stream.write_all(response.as_bytes()).await;
+                            let _ = stream.write_all(body).await;
+                            let _ = callback_tx.send(callback);
+                        } else {
+                            let host_valid = host == "127.0.0.1";
+                            let authorization_valid = expected_api_key.as_ref().is_none_or(|expected| {
+                                authorization.strip_prefix("Bearer ") == Some(expected.as_str())
+                            });
+                            task_requests.fetch_add(1, Ordering::AcqRel);
+                            task_api_host_valid.store(host_valid, Ordering::Release);
+                            task_api_authorization_valid.store(authorization_valid, Ordering::Release);
+                            request.zeroize();
+                            let body = br#"{"id":"enrollment-fixture","object":"chat.completion","model":"agent-enrollment-model","choices":[{"index":0,"message":{"role":"assistant","content":"reverse-agent-ok"},"finish_reason":"stop"}],"usage":{"prompt_tokens":1,"completion_tokens":1,"total_tokens":2}}"#;
+                            let (status, body) = if host_valid && authorization_valid {
+                                ("200 OK", body.as_slice())
+                            } else {
+                                ("401 Unauthorized", br#"{"error":"forwarding rejected"}"#.as_slice())
+                            };
+                            let response = format!(
+                                "HTTP/1.1 {status}\r\ncontent-type: application/json\r\ncontent-length: {}\r\nconnection: close\r\n\r\n",
+                                body.len()
+                            );
+                            let _ = stream.write_all(response.as_bytes()).await;
+                            let _ = stream.write_all(body).await;
                         }
-                        task_requests.fetch_add(1, Ordering::AcqRel);
-                        let body = br#"{"id":"enrollment-fixture","object":"chat.completion","model":"agent-enrollment-model","choices":[{"index":0,"message":{"role":"assistant","content":"reverse-agent-ok"},"finish_reason":"stop"}],"usage":{"prompt_tokens":1,"completion_tokens":1,"total_tokens":2}}"#;
-                        let headers = format!(
-                            "HTTP/1.1 200 OK\r\ncontent-type: application/json\r\ncontent-length: {}\r\nconnection: close\r\n\r\n",
-                            body.len()
-                        );
-                        stream.write_all(headers.as_bytes()).await.expect("provider headers write");
-                        stream.write_all(body).await.expect("provider response writes");
                     }
                 }
             }
@@ -629,9 +861,19 @@ impl ProviderFixture {
         Self {
             address,
             requests,
+            api_host_valid,
+            api_authorization_valid,
+            callbacks,
             stop: Some(stop),
             task,
         }
+    }
+
+    async fn next_callback(&mut self) -> EnrollmentCallback {
+        tokio::time::timeout(Duration::from_secs(35), self.callbacks.recv())
+            .await
+            .expect("EggPass callback reaches the fixture")
+            .expect("callback fixture channel remains open")
     }
 
     async fn shutdown(mut self) {
@@ -643,7 +885,8 @@ impl ProviderFixture {
     }
 }
 
-async fn read_provider_request(stream: &mut TcpStream) -> io::Result<()> {
+async fn read_provider_request(stream: &mut TcpStream) -> io::Result<Vec<u8>> {
+    const MAX_REQUEST_BYTES: usize = 256 * 1024;
     let mut bytes = Vec::new();
     let mut buffer = [0_u8; 2048];
     let mut request_end = None;
@@ -653,6 +896,10 @@ async fn read_provider_request(stream: &mut TcpStream) -> io::Result<()> {
             return Err(io::ErrorKind::UnexpectedEof.into());
         }
         bytes.extend_from_slice(&buffer[..read]);
+        if bytes.len() > MAX_REQUEST_BYTES {
+            bytes.zeroize();
+            return Err(io::ErrorKind::InvalidData.into());
+        }
         if request_end.is_none()
             && let Some(header_end) = bytes.windows(4).position(|window| window == b"\r\n\r\n")
         {
@@ -668,7 +915,7 @@ async fn read_provider_request(stream: &mut TcpStream) -> io::Result<()> {
             request_end = Some(header_end + 4 + content_length);
         }
         if request_end.is_some_and(|end| bytes.len() >= end) {
-            return Ok(());
+            return Ok(bytes);
         }
     }
 }
@@ -686,10 +933,48 @@ impl ReverseClientTask {
         password: &str,
         ca_pem: Vec<u8>,
     ) -> Self {
+        Self::start_with_identity(
+            control,
+            service,
+            Some(username.to_owned()),
+            Some(password.to_owned()),
+            None,
+            None,
+            ca_pem,
+        )
+    }
+
+    fn start_mtls(
+        control: SocketAddr,
+        service: SocketAddr,
+        certificate_pem: &str,
+        private_key_pem: &str,
+        ca_pem: Vec<u8>,
+    ) -> Self {
+        Self::start_with_identity(
+            control,
+            service,
+            None,
+            None,
+            Some(certificate_pem.as_bytes().to_vec()),
+            Some(private_key_pem.as_bytes().to_vec()),
+            ca_pem,
+        )
+    }
+
+    fn start_with_identity(
+        control: SocketAddr,
+        service: SocketAddr,
+        username: Option<String>,
+        password: Option<String>,
+        client_cert_pem: Option<Vec<u8>>,
+        client_key_pem: Option<Vec<u8>>,
+        ca_pem: Vec<u8>,
+    ) -> Self {
         let client = ReverseClient::new(ReverseClientConfig {
             server_addr: control,
-            auth_username: Some(username.to_owned()),
-            auth_password: Some(password.to_owned()),
+            auth_username: username,
+            auth_password: password,
             reconnect_initial_ms: 5,
             reconnect_max_ms: 20,
             default_target_host: Some(service.ip().to_string()),
@@ -697,8 +982,8 @@ impl ReverseClientTask {
             tls: Some(ReverseClientTlsConfig {
                 ca_pem: Some(ca_pem),
                 server_name: SERVER_NAME.to_owned(),
-                client_cert_pem: None,
-                client_key_pem: None,
+                client_cert_pem,
+                client_key_pem,
             }),
             ..ReverseClientConfig::default()
         });
@@ -726,6 +1011,102 @@ impl ReverseClientTask {
             }
         }
     }
+}
+
+fn start_bootstrap_client(
+    app: &TestApp,
+    provider: &ProviderFixture,
+    enrollment_secret: &str,
+) -> ReverseClientTask {
+    ReverseClientTask::start(
+        SocketAddr::new(IpAddr::V4(Ipv4Addr::LOCALHOST), app.control_port),
+        provider.address,
+        ENROLLMENT_USERNAME,
+        enrollment_secret,
+        app.producer.ca_pem().as_bytes().to_vec(),
+    )
+}
+
+async fn start_mtls_from_callback(
+    app: &TestApp,
+    provider: &ProviderFixture,
+    bootstrap: ReverseClientTask,
+    callback: EnrollmentCallback,
+) -> (EnrollmentCallback, ReverseClientTask) {
+    assert!(
+        callback.authorization_valid,
+        "callback uses the enrollment bearer credential"
+    );
+    assert!(
+        callback.host_valid,
+        "callback Host is pinned to the loopback provider"
+    );
+    assert!(
+        callback.request_shape_valid,
+        "callback has the documented path and JSON body"
+    );
+    assert!(
+        callback.callback_accepted,
+        "provider accepted the enrollment callback"
+    );
+    assert!(
+        callback
+            .client_cert_pem
+            .starts_with("-----BEGIN CERTIFICATE-----")
+    );
+    assert!(
+        callback
+            .client_key_pem
+            .starts_with("-----BEGIN PRIVATE KEY-----")
+    );
+
+    bootstrap.shutdown().await;
+    let client = ReverseClientTask::start_mtls(
+        SocketAddr::new(IpAddr::V4(Ipv4Addr::LOCALHOST), app.control_port),
+        provider.address,
+        &callback.client_cert_pem,
+        callback.client_key_pem.as_str(),
+        app.producer.ca_pem().as_bytes().to_vec(),
+    );
+    (callback, client)
+}
+
+async fn switch_to_mtls_after_callback(
+    app: &TestApp,
+    provider: &mut ProviderFixture,
+    bootstrap: ReverseClientTask,
+) -> (EnrollmentCallback, ReverseClientTask) {
+    let callback = provider.next_callback().await;
+    start_mtls_from_callback(app, provider, bootstrap, callback).await
+}
+
+async fn await_enrollment_request(request: JoinHandle<String>) -> String {
+    tokio::time::timeout(Duration::from_secs(45), request)
+        .await
+        .expect("enrollment request completes after mTLS reconnect")
+        .expect("enrollment request task joins")
+}
+
+async fn enroll_with_callback(
+    app: &TestApp,
+    browser: &Browser,
+    provider: &mut ProviderFixture,
+    account_name: &str,
+    ticket: &str,
+    enrollment_secret: &str,
+) -> (String, EnrollmentCallback, ReverseClientTask) {
+    let bootstrap = start_bootstrap_client(app, provider, enrollment_secret);
+    let mut request = spawn_enrollment_request(app, browser, account_name, ticket);
+    let callback = tokio::select! {
+        callback = provider.next_callback() => callback,
+        result = &mut request => {
+            let response = result.expect("enrollment request task joins");
+            panic!("enrollment returned before callback: {}", response_summary(&response));
+        }
+    };
+    let (callback, client) = start_mtls_from_callback(app, provider, bootstrap, callback).await;
+    let response = await_enrollment_request(request).await;
+    (response, callback, client)
 }
 
 async fn wait_for_control_count(tunnels: &AgentTunnelSet, expected: u32) {
@@ -1093,14 +1474,14 @@ async fn agent_file_preparation_does_not_publish_before_binding() {
     let app = TestApp::start(false, false, true, false).await;
     let original_config = fs::read(&app.config_path).expect("initial config reads");
     let original_env = fs::read(&app.env_path).ok();
-    let env_name = "EGGPOOL_AGENT_STAGED_TEST";
-    let secret = "staged-credential-must-not-be-persisted";
+    let env_name = personal_upstream::agent_api_key_env_var(PROVIDER, "staged-agent");
+    let secret = "staged-api-key-must-not-be-persisted";
     let agent = AgentAccountConfig {
         control_bind: "127.0.0.1:17443".to_owned(),
         control_endpoint: Some(format!("{}:17443", SERVER_NAME)),
         server_name: Some(SERVER_NAME.to_owned()),
         external_bind: "127.0.0.1:17444".to_owned(),
-        transport_secret_env: env_name.to_owned(),
+        transport_secret_env: String::new(),
         tls: app.config.agents.tls.clone(),
         ..AgentAccountConfig::default()
     };
@@ -1111,8 +1492,8 @@ async fn agent_file_preparation_does_not_publish_before_binding() {
             env_path: &app.env_path,
             provider_id: PROVIDER,
             account_name: "staged-agent",
-            secret_env: env_name,
-            secret,
+            api_key_env: &env_name,
+            api_key: secret,
             base_url: "http://127.0.0.1:17444/v1",
             label: None,
             agent: &agent,
@@ -1148,12 +1529,12 @@ async fn config_destination_preflight_failure_leaves_no_credential_file() {
     let config_link = app._directory.path().join("config-link.toml");
     symlink(&app.config_path, &config_link).expect("create config symlink fixture");
     let env_path = app._directory.path().join("must-not-be-created.env");
-    let env_name = "EGGPOOL_AGENT_PREFLIGHT_TEST";
-    let secret = "credential-must-not-be-staged";
+    let env_name = personal_upstream::agent_api_key_env_var(PROVIDER, "preflight-agent");
+    let secret = "api-key-must-not-be-staged";
     let agent = AgentAccountConfig {
         control_bind: "127.0.0.1:17443".to_owned(),
         external_bind: "127.0.0.1:17444".to_owned(),
-        transport_secret_env: env_name.to_owned(),
+        transport_secret_env: String::new(),
         tls: app.config.agents.tls.clone(),
         ..AgentAccountConfig::default()
     };
@@ -1163,8 +1544,8 @@ async fn config_destination_preflight_failure_leaves_no_credential_file() {
             env_path: &env_path,
             provider_id: PROVIDER,
             account_name: "preflight-agent",
-            secret_env: env_name,
-            secret,
+            api_key_env: &env_name,
+            api_key: secret,
             base_url: "http://127.0.0.1:17444/v1",
             label: None,
             agent: &agent,
@@ -1276,13 +1657,113 @@ async fn credential_equal_agent_label_is_not_published_or_rendered() {
 }
 
 #[tokio::test(flavor = "current_thread")]
+async fn rejected_callback_rolls_back_without_consuming_ticket_or_publishing_agent() {
+    let app = TestApp::start(true, false, true, false).await;
+    let original_config = fs::read(&app.config_path).expect("initial config reads");
+    let ticket = app.ticket(TicketVariant::Valid);
+    let credentials = ticket_credentials(&ticket);
+    let digest: [u8; 32] = Sha256::digest(ticket.as_bytes()).into();
+    let mut rejecting_provider = ProviderFixture::start_rejecting_callback(
+        credentials.enrollment.as_str(),
+        credentials.api_key.as_str(),
+    )
+    .await;
+    let bootstrap =
+        start_bootstrap_client(&app, &rejecting_provider, credentials.enrollment.as_str());
+    let request = spawn_enrollment_request(&app, &app.member, "callback-retry-agent", &ticket);
+    let callback = rejecting_provider.next_callback().await;
+    assert!(callback.authorization_valid);
+    assert!(callback.host_valid);
+    assert!(callback.request_shape_valid);
+    assert!(!callback.callback_accepted);
+    bootstrap.shutdown().await;
+    let rejected = await_enrollment_request(request).await;
+    assert!(
+        rejected.starts_with("HTTP/1.1 503"),
+        "callback rejection is bounded: {}",
+        response_summary(&rejected)
+    );
+    assert!(rejected.contains("agent_callback_failed"));
+    assert!(!rejected.contains(credentials.enrollment.as_str()));
+    assert_eq!(
+        fs::read(&app.config_path).expect("config remains unchanged"),
+        original_config
+    );
+    assert!(
+        !app.env_path.exists(),
+        "rejected callback publishes no API key"
+    );
+    assert!(
+        personal_upstream::list_bindings(&app.database, Some(&app.member.user_id))
+            .await
+            .expect("bindings query succeeds")
+            .is_empty()
+    );
+    let ca_path = eggpool::operations::config_mutation::agent_client_ca_path(
+        &app.config_path,
+        PROVIDER,
+        "callback-retry-agent",
+    );
+    assert!(
+        !ca_path.exists(),
+        "rejected callback creates no trust bundle"
+    );
+    assert!(
+        !personal_upstream::agent_ticket_was_consumed(&app.database, digest, unix_time())
+            .await
+            .expect("replay lookup succeeds")
+    );
+    rejecting_provider.shutdown().await;
+
+    let mut accepting_provider = ProviderFixture::start_for_agent(
+        credentials.enrollment.as_str(),
+        credentials.api_key.as_str(),
+    )
+    .await;
+    let (accepted, _callback, client) = enroll_with_callback(
+        &app,
+        &app.member,
+        &mut accepting_provider,
+        "callback-retry-agent",
+        &ticket,
+        credentials.enrollment.as_str(),
+    )
+    .await;
+    assert!(
+        accepted.starts_with("HTTP/1.1 200"),
+        "same ticket retries after rejected callback: {}",
+        response_summary(&accepted)
+    );
+    assert!(
+        personal_upstream::agent_ticket_was_consumed(&app.database, digest, unix_time())
+            .await
+            .expect("accepted ticket persists")
+    );
+    let revoked = app.revoke(&app.member, "callback-retry-agent").await;
+    assert!(revoked.starts_with("HTTP/1.1 200"));
+    assert!(!ca_path.exists());
+    client.shutdown().await;
+    accepting_provider.shutdown().await;
+    app.shutdown().await;
+}
+
+#[tokio::test(flavor = "current_thread")]
 async fn member_enrollment_is_single_use_owner_bound_and_revocable() {
     let app = TestApp::start(true, false, true, false).await;
     let ticket = app.ticket(TicketVariant::Valid);
-    let (left, right) = tokio::join!(
-        app.enroll(&app.member, "enrolled-agent", &ticket),
-        app.enroll(&app.member, "enrolled-agent", &ticket),
-    );
+    let credentials = ticket_credentials(&ticket);
+    let mut provider = ProviderFixture::start_for_agent(
+        credentials.enrollment.as_str(),
+        credentials.api_key.as_str(),
+    )
+    .await;
+    let bootstrap = start_bootstrap_client(&app, &provider, credentials.enrollment.as_str());
+    let left_task = spawn_enrollment_request(&app, &app.member, "enrolled-agent", &ticket);
+    let right_task = spawn_enrollment_request(&app, &app.member, "enrolled-agent", &ticket);
+    let (_callback, mtls_client) =
+        switch_to_mtls_after_callback(&app, &mut provider, bootstrap).await;
+    let left = await_enrollment_request(left_task).await;
+    let right = await_enrollment_request(right_task).await;
     assert_ne!(
         left.starts_with("HTTP/1.1 200"),
         right.starts_with("HTTP/1.1 200"),
@@ -1340,8 +1821,18 @@ async fn member_enrollment_is_single_use_owner_bound_and_revocable() {
         .find(|account| account.name == "enrolled-agent")
         .expect("enrolled account published");
     let agent = account.agent.as_ref().expect("Agent metadata is present");
+    let client_ca_path = eggpool::operations::config_mutation::agent_client_ca_path(
+        &app.config_path,
+        PROVIDER,
+        "enrolled-agent",
+    );
+    assert!(client_ca_path.is_file(), "per-agent client CA is persisted");
     assert_eq!(account.auth_mode, AccountAuthMode::Agent);
-    assert_eq!(account.api_key_env, agent.transport_secret_env);
+    assert_ne!(account.api_key_env, agent.transport_secret_env);
+    assert!(
+        agent.transport_secret_env.is_empty(),
+        "mTLS replaces a transport password"
+    );
     assert_eq!(
         agent.control_endpoint.as_deref(),
         Some(format!("agent.example:{}", app.control_port).as_str())
@@ -1350,9 +1841,10 @@ async fn member_enrollment_is_single_use_owner_bound_and_revocable() {
     let env_text = fs::read_to_string(&app.env_path).expect("credential file exists");
     assert!(env_text.contains(&format!(
         "{}=\"{}\"",
-        agent.transport_secret_env,
-        app.producer.enroll_secret_token()
+        account.api_key_env,
+        credentials.api_key.as_str()
     )));
+    assert!(!env_text.contains(credentials.enrollment.as_str()));
     #[cfg(unix)]
     {
         use std::os::unix::fs::PermissionsExt;
@@ -1387,8 +1879,9 @@ async fn member_enrollment_is_single_use_owner_bound_and_revocable() {
         .await
         .expect("binding projection reads");
     assert!(persisted.contains(&binding_owner));
-    assert!(!persisted.contains(app.producer.enroll_secret_token()));
-    let secret_bytes = app.producer.enroll_secret_token().as_bytes();
+    assert!(!persisted.contains(credentials.enrollment.as_str()));
+    assert!(!persisted.contains(credentials.api_key.as_str()));
+    let secret_bytes = credentials.enrollment.as_bytes();
     for sqlite_path in [
         app._directory.path().join("eggpool.sqlite3"),
         app._directory.path().join("eggpool.sqlite3-wal"),
@@ -1450,11 +1943,12 @@ async fn member_enrollment_is_single_use_owner_bound_and_revocable() {
             .unwrap()
             .contains("enrolled-agent")
     );
+    let revoked_env = fs::read_to_string(&app.env_path).unwrap_or_default();
+    assert!(!revoked_env.contains(credentials.enrollment.as_str()));
+    assert!(!revoked_env.contains(credentials.api_key.as_str()));
     assert!(
-        !fs::read_to_string(&app.env_path)
-            .unwrap_or_default()
-            .contains(app.producer.enroll_secret_token()),
-        "revocation removes the credential value"
+        !client_ca_path.exists(),
+        "revocation removes per-agent CA trust"
     );
     assert!(
         personal_upstream::list_bindings(&app.database, Some(&app.member.user_id))
@@ -1472,19 +1966,36 @@ async fn member_enrollment_is_single_use_owner_bound_and_revocable() {
         no_op.starts_with("HTTP/1.1 200"),
         "revoke remains idempotent: {no_op}"
     );
+    mtls_client.shutdown().await;
+    provider.shutdown().await;
     app.shutdown().await;
 }
 
 #[tokio::test(flavor = "current_thread")]
 async fn enrolled_agent_routes_inference_through_reverse_client() {
     let app = TestApp::start(true, false, true, false).await;
-    let provider = ProviderFixture::start().await;
     let ticket = app.ticket(TicketVariant::Valid);
-    let enrolled = app.enroll(&app.member, "inference-agent", &ticket).await;
+    let credentials = ticket_credentials(&ticket);
+    let mut provider = ProviderFixture::start_for_agent(
+        credentials.enrollment.as_str(),
+        credentials.api_key.as_str(),
+    )
+    .await;
+    let (enrolled, callback, client) = enroll_with_callback(
+        &app,
+        &app.member,
+        &mut provider,
+        "inference-agent",
+        &ticket,
+        credentials.enrollment.as_str(),
+    )
+    .await;
     assert!(
         enrolled.starts_with("HTTP/1.1 200"),
-        "enrollment succeeds: {enrolled}"
+        "enrollment succeeds: {}",
+        response_summary(&enrolled)
     );
+    assert!(callback.callback_accepted);
 
     let published: Config = toml::from_str(
         &fs::read_to_string(&app.config_path).expect("published configuration reads"),
@@ -1499,7 +2010,12 @@ async fn enrolled_agent_routes_inference_through_reverse_client() {
         .agent
         .as_ref()
         .expect("Agent tunnel settings are present");
-    let control: SocketAddr = agent.control_bind.parse().expect("control bind is valid");
+    let client_ca_path = eggpool::operations::config_mutation::agent_client_ca_path(
+        &app.config_path,
+        PROVIDER,
+        "inference-agent",
+    );
+    assert!(client_ca_path.is_file(), "mTLS trust bundle is present");
     let monitor = app
         .process
         .agent_tunnel_manager()
@@ -1507,16 +2023,9 @@ async fn enrolled_agent_routes_inference_through_reverse_client() {
         .await
         .expect("monitor shares the published Agent tunnel");
 
-    let client = ReverseClientTask::start(
-        control,
-        provider.address,
-        &account.name,
-        app.producer.enroll_secret_token(),
-        app.producer.ca_pem().as_bytes().to_vec(),
-    );
     wait_for_control_count(&monitor, 1).await;
     let online_status = authenticated_status(app.address, &app.admin.cookies).await;
-    assert!(!online_status.contains(app.producer.enroll_secret_token()));
+    assert!(!online_status.contains(credentials.enrollment.as_str()));
     let (online_state, online_reason) = live_agent_status(&online_status, "inference-agent");
     assert_eq!(online_state, "online");
     assert_eq!(online_reason, None);
@@ -1531,7 +2040,10 @@ async fn enrolled_agent_routes_inference_through_reverse_client() {
         "reverse origin response is returned: {inference}"
     );
     assert_eq!(provider.requests.load(Ordering::Acquire), 1);
-    assert!(!inference.contains(app.producer.enroll_secret_token()));
+    assert!(provider.api_host_valid.load(Ordering::Acquire));
+    assert!(provider.api_authorization_valid.load(Ordering::Acquire));
+    assert!(!inference.contains(credentials.enrollment.as_str()));
+    assert!(!inference.contains(credentials.api_key.as_str()));
 
     client.request_cancel();
     let external_address: SocketAddr = agent
@@ -1545,7 +2057,7 @@ async fn enrolled_agent_routes_inference_through_reverse_client() {
     client.shutdown().await;
     wait_for_control_count(&monitor, 0).await;
     let offline_status = authenticated_status(app.address, &app.admin.cookies).await;
-    assert!(!offline_status.contains(app.producer.enroll_secret_token()));
+    assert!(!offline_status.contains(credentials.enrollment.as_str()));
     let (offline_state, offline_reason) = live_agent_status(&offline_status, "inference-agent");
     assert_eq!(offline_state, "offline");
     assert_eq!(offline_reason.as_deref(), Some("control_disconnected"));
@@ -1565,24 +2077,37 @@ async fn enrolled_agent_routes_inference_through_reverse_client() {
         app.control_port,
     ))
     .await;
+    assert!(
+        !client_ca_path.exists(),
+        "revocation removes the mTLS trust bundle"
+    );
     provider.shutdown().await;
     app.shutdown().await;
 }
 
 #[tokio::test(flavor = "current_thread")]
-async fn wrong_enrollment_credential_cannot_dispatch_provider_request() {
+async fn enrollment_credential_cannot_replace_the_post_enrollment_mtls_identity() {
     let app = TestApp::start(true, false, true, false).await;
-    let provider = ProviderFixture::start().await;
-    let enrolled = app
-        .enroll(
-            &app.member,
-            "wrong-credential-agent",
-            &app.ticket(TicketVariant::Valid),
-        )
-        .await;
+    let ticket = app.ticket(TicketVariant::Valid);
+    let credentials = ticket_credentials(&ticket);
+    let mut provider = ProviderFixture::start_for_agent(
+        credentials.enrollment.as_str(),
+        credentials.api_key.as_str(),
+    )
+    .await;
+    let (enrolled, _callback, mtls_client) = enroll_with_callback(
+        &app,
+        &app.member,
+        &mut provider,
+        "wrong-credential-agent",
+        &ticket,
+        credentials.enrollment.as_str(),
+    )
+    .await;
     assert!(
         enrolled.starts_with("HTTP/1.1 200"),
-        "enrollment succeeds: {enrolled}"
+        "enrollment succeeds: {}",
+        response_summary(&enrolled)
     );
 
     let published: Config = toml::from_str(
@@ -1605,24 +2130,38 @@ async fn wrong_enrollment_credential_cannot_dispatch_provider_request() {
         .prepare_for_generation(&published, Some(&app.config_path))
         .await
         .expect("monitor shares the published Agent tunnel");
-    let wrong_client = ReverseClientTask::start(
+    wait_for_control_count(&monitor, 1).await;
+    mtls_client.request_cancel();
+    let external_address: SocketAddr = agent
+        .external_bind
+        .parse()
+        .expect("Agent external bind is valid");
+    let external_stream = TcpStream::connect(external_address)
+        .await
+        .expect("loopback external listener consumes the idle control session");
+    drop(external_stream);
+    mtls_client.shutdown().await;
+    wait_for_control_count(&monitor, 0).await;
+
+    // Reuse the one-time bootstrap identity after enrollment. The mTLS listener
+    // must reject it because the one-time password is no longer an identity.
+    let bootstrap_identity = ReverseClientTask::start(
         control,
         provider.address,
-        &account.name,
-        "wrong-enrollment-credential-sentinel",
+        ENROLLMENT_USERNAME,
+        credentials.enrollment.as_str(),
         app.producer.ca_pem().as_bytes().to_vec(),
     );
-    wait_for_control_count(&monitor, 1).await;
-
     let rejected_address = app.address;
     let rejected_token = app.api_token.clone();
     let mut rejected_request =
         tokio::spawn(async move { inference_request(rejected_address, &rejected_token).await });
     if let Ok(result) = tokio::time::timeout(Duration::from_secs(1), &mut rejected_request).await {
-        let rejected = result.expect("wrong-credential inference task joins");
+        let rejected = result.expect("bootstrap-identity inference task joins");
         assert!(
             !rejected.starts_with("HTTP/1.1 200"),
-            "wrong tunnel credential must not serve inference: {rejected}"
+            "bootstrap identity must not serve inference: {}",
+            response_summary(&rejected)
         );
     } else {
         rejected_request.abort();
@@ -1631,14 +2170,22 @@ async fn wrong_enrollment_credential_cannot_dispatch_provider_request() {
     assert_eq!(
         provider.requests.load(Ordering::Acquire),
         0,
-        "wrong tunnel credential never reaches the provider fixture"
+        "bootstrap identity never reaches the provider fixture"
     );
-    wrong_client.shutdown().await;
+    bootstrap_identity.shutdown().await;
     let close_report = monitor.close(Duration::from_secs(2)).await;
     assert_eq!(
         close_report.shared, 1,
         "the live generation still owns the tunnel"
     );
+    let ca_path = eggpool::operations::config_mutation::agent_client_ca_path(
+        &app.config_path,
+        PROVIDER,
+        "wrong-credential-agent",
+    );
+    let revoked = app.revoke(&app.member, "wrong-credential-agent").await;
+    assert!(revoked.starts_with("HTTP/1.1 200"));
+    assert!(!ca_path.exists());
     provider.shutdown().await;
     app.shutdown().await;
 }
@@ -1646,18 +2193,34 @@ async fn wrong_enrollment_credential_cannot_dispatch_provider_request() {
 #[tokio::test(flavor = "current_thread")]
 async fn enrollment_credential_rotation_replaces_old_secret_and_remains_unpersisted() {
     let app = TestApp::start(true, false, true, false).await;
-    let old_secret = app.producer.enroll_secret_token().to_owned();
-    let first = app
-        .enroll(
-            &app.member,
-            "rotated-agent",
-            &app.ticket(TicketVariant::Valid),
-        )
-        .await;
+    let first_ticket = app.ticket(TicketVariant::Valid);
+    let old_credentials = ticket_credentials(&first_ticket);
+    let mut first_provider = ProviderFixture::start_for_agent(
+        old_credentials.enrollment.as_str(),
+        old_credentials.api_key.as_str(),
+    )
+    .await;
+    let (first, _callback, first_client) = enroll_with_callback(
+        &app,
+        &app.member,
+        &mut first_provider,
+        "rotated-agent",
+        &first_ticket,
+        old_credentials.enrollment.as_str(),
+    )
+    .await;
     assert!(
         first.starts_with("HTTP/1.1 200"),
-        "initial enrollment succeeds: {first}"
+        "initial enrollment succeeds: {}",
+        response_summary(&first)
     );
+    let first_ca_path = eggpool::operations::config_mutation::agent_client_ca_path(
+        &app.config_path,
+        PROVIDER,
+        "rotated-agent",
+    );
+    assert!(first_ca_path.is_file());
+    first_client.shutdown().await;
     let first_revoke = app.revoke(&app.member, "rotated-agent").await;
     assert!(
         first_revoke.starts_with("HTTP/1.1 200"),
@@ -1666,9 +2229,19 @@ async fn enrollment_credential_rotation_replaces_old_secret_and_remains_unpersis
     assert!(
         !fs::read_to_string(&app.env_path)
             .unwrap_or_default()
-            .contains(&old_secret),
-        "revocation removes the first credential"
+            .contains(old_credentials.api_key.as_str()),
+        "revocation removes the first API key"
     );
+    assert!(
+        !first_ca_path.exists(),
+        "revocation removes the first CA bundle"
+    );
+    assert!(
+        !fs::read_to_string(&app.env_path)
+            .unwrap_or_default()
+            .contains(old_credentials.enrollment.as_str())
+    );
+    first_provider.shutdown().await;
     port_is_closed(SocketAddr::new(
         IpAddr::V4(Ipv4Addr::LOCALHOST),
         app.control_port,
@@ -1682,48 +2255,73 @@ async fn enrollment_credential_rotation_replaces_old_secret_and_remains_unpersis
         TicketVariant::Valid,
         &new_secret,
     );
-    let second = app
-        .enroll(&app.member, "rotated-agent", &rotated_ticket)
-        .await;
+    let new_credentials = ticket_credentials(&rotated_ticket);
+    let mut second_provider = ProviderFixture::start_for_agent(
+        new_credentials.enrollment.as_str(),
+        new_credentials.api_key.as_str(),
+    )
+    .await;
+    let (second, _callback, second_client) = enroll_with_callback(
+        &app,
+        &app.member,
+        &mut second_provider,
+        "rotated-agent",
+        &rotated_ticket,
+        new_credentials.enrollment.as_str(),
+    )
+    .await;
     assert!(
         second.starts_with("HTTP/1.1 200"),
-        "rotated enrollment succeeds: {second}"
+        "rotated enrollment succeeds: {}",
+        response_summary(&second)
     );
     let env_text = fs::read_to_string(&app.env_path).expect("rotated credential file reads");
     assert!(
-        env_text.contains(&new_secret),
-        "new credential is installed"
+        env_text.contains(new_credentials.api_key.as_str()),
+        "new API key is installed"
     );
-    assert!(
-        !env_text.contains(&old_secret),
-        "old credential is absent after rotation"
-    );
+    assert!(!env_text.contains(new_credentials.enrollment.as_str()));
+    assert!(!env_text.contains(old_credentials.api_key.as_str()));
+    assert!(!env_text.contains(old_credentials.enrollment.as_str()));
     let config_text = fs::read_to_string(&app.config_path).expect("rotated config reads");
-    assert!(!config_text.contains(&old_secret));
-    assert!(!config_text.contains(&new_secret));
+    assert!(!config_text.contains(old_credentials.api_key.as_str()));
+    assert!(!config_text.contains(new_credentials.api_key.as_str()));
+    assert!(!config_text.contains(old_credentials.enrollment.as_str()));
+    assert!(!config_text.contains(new_credentials.enrollment.as_str()));
     // The credential must be absent from EVERY persisted table, not from
     // one projection of one table.
     let persisted = dump_all_persisted_values(&app.database).await;
-    assert!(
-        !persisted.contains(&old_secret),
-        "the retired credential is absent from every persisted table"
-    );
-    assert!(
-        !persisted.contains(&new_secret),
-        "the adopted credential is absent from every persisted table"
-    );
+    for secret in [
+        old_credentials.enrollment.as_str(),
+        old_credentials.api_key.as_str(),
+        new_credentials.enrollment.as_str(),
+        new_credentials.api_key.as_str(),
+    ] {
+        assert!(
+            !persisted.contains(secret),
+            "ticket credentials are absent from every persisted table"
+        );
+    }
 
     let second_revoke = app.revoke(&app.member, "rotated-agent").await;
     assert!(
         second_revoke.starts_with("HTTP/1.1 200"),
         "rotated credential revokes: {second_revoke}"
     );
-    assert!(
-        !fs::read_to_string(&app.env_path)
-            .unwrap_or_default()
-            .contains(&new_secret),
-        "revocation removes the rotated credential"
+    let final_env = fs::read_to_string(&app.env_path).unwrap_or_default();
+    assert!(!final_env.contains(new_credentials.api_key.as_str()));
+    assert!(!final_env.contains(new_credentials.enrollment.as_str()));
+    let second_ca_path = eggpool::operations::config_mutation::agent_client_ca_path(
+        &app.config_path,
+        PROVIDER,
+        "rotated-agent",
     );
+    assert!(
+        !second_ca_path.exists(),
+        "revocation removes the rotated CA bundle"
+    );
+    second_client.shutdown().await;
+    second_provider.shutdown().await;
     app.shutdown().await;
 }
 
@@ -1732,11 +2330,28 @@ async fn failed_reload_rolls_back_config_binding_secret_and_control_listener() {
     let app = TestApp::start(true, true, true, false).await;
     let original_config = fs::read(&app.config_path).expect("initial config reads");
     let ticket = app.ticket(TicketVariant::Valid);
-    let failed = app.enroll(&app.member, "rollback-agent", &ticket).await;
+    let credentials = ticket_credentials(&ticket);
+    let mut provider = ProviderFixture::start_for_agent(
+        credentials.enrollment.as_str(),
+        credentials.api_key.as_str(),
+    )
+    .await;
+    let (failed, _callback, client) = enroll_with_callback(
+        &app,
+        &app.member,
+        &mut provider,
+        "rollback-agent",
+        &ticket,
+        credentials.enrollment.as_str(),
+    )
+    .await;
     assert!(
         failed.starts_with("HTTP/1.1 503"),
-        "missing control socket fails publication: {failed}"
+        "reload failure rolls back publication: {}",
+        response_summary(&failed)
     );
+    client.shutdown().await;
+    provider.shutdown().await;
     assert!(
         failed.contains("publication_rolled_back"),
         "rollback is reported with a bounded code: {failed}"
@@ -1753,28 +2368,224 @@ async fn failed_reload_rolls_back_config_binding_secret_and_control_listener() {
             .is_empty(),
         "owner binding is rolled back"
     );
+    let ca_path = eggpool::operations::config_mutation::agent_client_ca_path(
+        &app.config_path,
+        PROVIDER,
+        "rollback-agent",
+    );
+    assert!(
+        !ca_path.exists(),
+        "rollback removes unpublished client CA trust"
+    );
+    let ticket_digest: [u8; 32] = Sha256::digest(ticket.as_bytes()).into();
+    assert!(
+        personal_upstream::agent_ticket_was_consumed(&app.database, ticket_digest, unix_time())
+            .await
+            .expect("replay lookup succeeds")
+    );
     port_is_closed(SocketAddr::new(
         IpAddr::V4(Ipv4Addr::LOCALHOST),
         app.control_port,
     ))
     .await;
+    let replay = app.enroll(&app.member, "rollback-agent", &ticket).await;
+    assert!(replay.starts_with("HTTP/1.1 409"));
+    assert!(replay.contains("ticket_replayed"));
+
     app.fail_reload.store(false, Ordering::Release);
-    let retried = app.enroll(&app.member, "rollback-agent", &ticket).await;
+    let new_enrollment_secret = URL_SAFE_NO_PAD.encode([0x77_u8; 32]);
+    let retry_ticket = app.producer.ticket_with_enrollment_secret(
+        unix_time(),
+        app.control_port,
+        TicketVariant::Valid,
+        &new_enrollment_secret,
+    );
+    let retry_credentials = ticket_credentials(&retry_ticket);
+    let mut retry_provider = ProviderFixture::start_for_agent(
+        retry_credentials.enrollment.as_str(),
+        retry_credentials.api_key.as_str(),
+    )
+    .await;
+    let (retried, _callback, retry_client) = enroll_with_callback(
+        &app,
+        &app.member,
+        &mut retry_provider,
+        "rollback-agent",
+        &retry_ticket,
+        retry_credentials.enrollment.as_str(),
+    )
+    .await;
     assert!(
         retried.starts_with("HTTP/1.1 200"),
-        "the same ticket succeeds after rollback: {retried}"
+        "fresh ticket succeeds after rollback: {}",
+        response_summary(&retried)
     );
-    assert!(
-        fs::read_to_string(&app.env_path)
-            .expect("retry writes credential")
-            .contains(app.producer.enroll_secret_token())
-    );
+    let env_text = fs::read_to_string(&app.env_path).expect("retry writes the API key");
+    assert!(env_text.contains(retry_credentials.api_key.as_str()));
+    assert!(!env_text.contains(retry_credentials.enrollment.as_str()));
     let revoked = app.revoke(&app.member, "rollback-agent").await;
     assert!(
         revoked.starts_with("HTTP/1.1 200"),
         "cleanup revoke: {revoked}"
     );
+    retry_client.shutdown().await;
+    retry_provider.shutdown().await;
     app.shutdown().await;
+}
+
+#[tokio::test(flavor = "current_thread")]
+#[ignore = "run through scripts/test-eggpool-interop.sh with a built EggPass CLI"]
+async fn real_eggpass_cli_ticket_completes_callback_mtls_and_authenticated_api_request() {
+    let app = TestApp::start(true, false, true, false).await;
+    let ticket = real_ticket_from_eggpass_cli(&app);
+    let credentials = ticket_credentials(ticket.as_str());
+    let mut provider = ProviderFixture::start_for_agent(
+        credentials.enrollment.as_str(),
+        credentials.api_key.as_str(),
+    )
+    .await;
+    let (enrolled, callback, client) = enroll_with_callback(
+        &app,
+        &app.member,
+        &mut provider,
+        "producer-cli-agent",
+        ticket.as_str(),
+        credentials.enrollment.as_str(),
+    )
+    .await;
+    assert!(
+        enrolled.starts_with("HTTP/1.1 200"),
+        "real producer ticket enrolls: {}",
+        response_summary(&enrolled)
+    );
+    assert!(callback.callback_accepted);
+
+    let published: Config =
+        toml::from_str(&fs::read_to_string(&app.config_path).expect("published config reads"))
+            .expect("published config parses");
+    let account = published.providers[PROVIDER]
+        .accounts
+        .iter()
+        .find(|account| account.name == "producer-cli-agent")
+        .expect("real producer account published");
+    let agent = account.agent.as_ref().expect("mTLS settings published");
+    assert!(agent.transport_secret_env.is_empty());
+    assert_ne!(account.api_key_env, agent.transport_secret_env);
+    let env_text = fs::read_to_string(&app.env_path).expect("API key file exists");
+    assert!(env_text.contains(credentials.api_key.as_str()));
+    assert!(!env_text.contains(credentials.enrollment.as_str()));
+    let persisted = dump_all_persisted_values(&app.database).await;
+    assert!(!persisted.contains(credentials.enrollment.as_str()));
+    assert!(!persisted.contains(credentials.api_key.as_str()));
+
+    let client_ca_path = eggpool::operations::config_mutation::agent_client_ca_path(
+        &app.config_path,
+        PROVIDER,
+        "producer-cli-agent",
+    );
+    assert!(
+        client_ca_path.is_file(),
+        "issued client CA is trusted by EggPool"
+    );
+    let inference = inference_request(app.address, &app.api_token).await;
+    assert!(
+        inference.starts_with("HTTP/1.1 200"),
+        "normal API request succeeds: {}",
+        response_summary(&inference)
+    );
+    assert!(inference.contains("reverse-agent-ok"));
+    assert_eq!(provider.requests.load(Ordering::Acquire), 1);
+    assert!(provider.api_host_valid.load(Ordering::Acquire));
+    assert!(provider.api_authorization_valid.load(Ordering::Acquire));
+
+    let replay = app
+        .enroll(&app.member, "producer-cli-replay", ticket.as_str())
+        .await;
+    assert!(replay.starts_with("HTTP/1.1 409"));
+    assert!(replay.contains("ticket_replayed"));
+    assert!(!replay.contains(credentials.enrollment.as_str()));
+
+    let revoked = app.revoke(&app.member, "producer-cli-agent").await;
+    assert!(revoked.starts_with("HTTP/1.1 200"));
+    assert!(
+        !client_ca_path.exists(),
+        "revocation removes producer-backed trust material"
+    );
+    let final_env = fs::read_to_string(&app.env_path).unwrap_or_default();
+    assert!(!final_env.contains(credentials.api_key.as_str()));
+    assert!(!final_env.contains(credentials.enrollment.as_str()));
+    client.shutdown().await;
+    provider.shutdown().await;
+    app.shutdown().await;
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn consumed_ticket_digest_survives_database_restart_without_raw_ticket() {
+    let directory = tempfile::tempdir().expect("isolated replay database directory");
+    let database_path = directory.path().join("replay.sqlite3");
+    let ticket = Zeroizing::new("epagent1.restart-replay-test-sentinel".to_owned());
+    let digest: [u8; 32] = Sha256::digest(ticket.as_bytes()).into();
+    let now = 1_800_000_000_i64;
+    let expires_at = now + 600;
+    let database = Database::open(DatabaseConfig {
+        path: database_path.display().to_string(),
+        ..DatabaseConfig::default()
+    })
+    .await
+    .expect("replay database opens");
+    MigrationRunner::new(&database)
+        .run()
+        .await
+        .expect("replay database migrates");
+    assert!(
+        personal_upstream::record_consumed_agent_ticket(&database, digest, expires_at, now)
+            .await
+            .expect("ticket digest persists")
+    );
+    assert!(
+        personal_upstream::agent_ticket_was_consumed(&database, digest, now)
+            .await
+            .expect("ticket digest is found")
+    );
+    let persisted = dump_all_persisted_values(&database).await;
+    assert!(
+        !persisted.contains(ticket.as_str()),
+        "only the digest is persisted"
+    );
+    database
+        .close()
+        .await
+        .expect("first replay database closes");
+
+    let reopened = Database::open(DatabaseConfig {
+        path: database_path.display().to_string(),
+        ..DatabaseConfig::default()
+    })
+    .await
+    .expect("replay database reopens");
+    MigrationRunner::new(&reopened)
+        .run()
+        .await
+        .expect("reopen migration check succeeds");
+    assert!(
+        personal_upstream::agent_ticket_was_consumed(&reopened, digest, now)
+            .await
+            .expect("consumed ticket survives restart")
+    );
+    reopened
+        .close()
+        .await
+        .expect("reopened replay database closes");
+    for suffix in ["", "-wal", "-shm", "-journal"] {
+        let file = PathBuf::from(format!("{}{suffix}", database_path.display()));
+        let bytes = fs::read(file).unwrap_or_default();
+        assert!(
+            !bytes
+                .windows(ticket.len())
+                .any(|window| window == ticket.as_bytes()),
+            "raw ticket is absent from SQLite files"
+        );
+    }
 }
 
 #[tokio::test(flavor = "current_thread")]

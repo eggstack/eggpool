@@ -17,6 +17,7 @@
 //! `DialError` kinds without inspecting display strings.
 
 use std::{
+    net::IpAddr,
     pin::Pin,
     sync::Arc,
     task::{Context, Poll},
@@ -421,6 +422,17 @@ impl ProviderHttpClient {
         *request.method_mut() = method;
         *request.uri_mut() = uri;
         *request.headers_mut() = headers;
+        if self
+            .base_url
+            .host()
+            .and_then(|host| host.parse::<IpAddr>().ok())
+            .is_some_and(|address| address.is_loopback())
+        {
+            request.headers_mut().insert(
+                http::header::HOST,
+                http::HeaderValue::from_static("127.0.0.1"),
+            );
+        }
         *request.version_mut() = http::Version::HTTP_11;
         let response = client
             .execute_http_body(request, NativeRequestOptions::default())

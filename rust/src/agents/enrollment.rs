@@ -1,4 +1,4 @@
-//! Bounded in-memory replay registry for one-time enrollment credentials.
+//! Bounded in-memory reservation registry for one-time enrollment tickets.
 
 use std::{
     collections::HashMap,
@@ -14,7 +14,7 @@ use sha2::{Digest, Sha256};
 use thiserror::Error;
 
 pub const MAX_PENDING_ENROLLMENTS: usize = 64;
-pub const MAX_PENDING_TTL: Duration = Duration::from_secs(2 * 60);
+pub const MAX_PENDING_TTL: Duration = Duration::from_secs(10 * 60);
 
 static NEXT_RESERVATION_ID: AtomicU64 = AtomicU64::new(1);
 
@@ -61,28 +61,27 @@ impl PendingEnrollmentRegistry {
         Self::default()
     }
 
-    /// Atomically reserve a ticket digest for this initiating browser session
-    /// and user. Only the digest and owner metadata survive the request; the
-    /// raw ticket secret is never retained. The entry expires with the ticket.
+    /// Atomically reserve a digest of the bearer ticket for this initiating
+    /// browser session and user. The raw ticket is never retained.
     pub fn reserve(
         &self,
-        enrollment_secret: &str,
+        ticket: &str,
         session_id: &str,
         user_id: &str,
         ttl: Duration,
     ) -> Result<EnrollmentReservation, EnrollmentRegistryError> {
-        self.reserve_at(enrollment_secret, session_id, user_id, ttl, Instant::now())
+        self.reserve_at(ticket, session_id, user_id, ttl, Instant::now())
     }
 
     fn reserve_at(
         &self,
-        enrollment_secret: &str,
+        ticket: &str,
         session_id: &str,
         user_id: &str,
         ttl: Duration,
         now: Instant,
     ) -> Result<EnrollmentReservation, EnrollmentRegistryError> {
-        if enrollment_secret.is_empty()
+        if ticket.is_empty()
             || session_id.is_empty()
             || user_id.is_empty()
             || ttl.is_zero()
@@ -90,7 +89,7 @@ impl PendingEnrollmentRegistry {
         {
             return Err(EnrollmentRegistryError::Invalid);
         }
-        let digest: [u8; 32] = Sha256::digest(enrollment_secret.as_bytes()).into();
+        let digest: [u8; 32] = Sha256::digest(ticket.as_bytes()).into();
         let mut entries = self
             .entries
             .lock()
