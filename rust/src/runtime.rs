@@ -1293,66 +1293,13 @@ fn print_one_time_secret(secret: &str, explicitly_allowed: bool) {
 }
 
 async fn accounts(path: &Path, command: crate::cli::AccountsCommand) -> Result<(), BootstrapError> {
+    if let crate::cli::AccountsCommand::MigrateOAuth(args) = &command {
+        return migrate_oauth(path, args).await;
+    }
     let config = config::Config::from_toml(path)?;
     match command {
-        crate::cli::AccountsCommand::OAuthLogin(args) => {
-            if !config.oauth.enabled {
-                return Err(command_error(
-                    EXIT_VALIDATION,
-                    "OAuth is disabled by EggPool configuration",
-                ));
-            }
-            let credential = read_oauth_write_credential(args.token_stdin)?;
-            let provider_label = match args.provider.as_str() {
-                "openai" => "OpenAI",
-                "xai" => "xAI",
-                _ => "OAuth provider",
-            };
-            println!(
-                "Starting {provider_label} authorization for configured account {}.",
-                args.account
-            );
-            let interactive_tty = io::stdin().is_terminal() && io::stdout().is_terminal();
-            crate::operations::oauth_login::login_provider(
-                &config,
-                &args.provider,
-                &args.account,
-                credential.as_str(),
-                interactive_tty,
-                |presentation, authorization_url| match presentation {
-                    crate::operations::oauth_login::BrowserPresentation::BrowserOpenerSucceeded => {}
-                    crate::operations::oauth_login::BrowserPresentation::CopiedToClipboard => {
-                        println!(
-                            "Browser launch could not be confirmed; the authorization URL was copied to the clipboard. Paste it into a browser, then paste the resulting callback URL back here when prompted."
-                        );
-                    }
-                    crate::operations::oauth_login::BrowserPresentation::ManualUrl => {
-                        if io::stdin().is_terminal() && io::stdout().is_terminal() {
-                            println!(
-                                "Browser launch could not be confirmed and clipboard access is unavailable. Open this authorization URL in a browser, then paste the resulting callback URL back here:\n{authorization_url}"
-                            );
-                        } else {
-                            println!(
-                                "Browser launch could not be confirmed and the authorization URL cannot be shown without an interactive terminal."
-                            );
-                        }
-                    }
-                },
-                |notice| match notice {
-                    crate::operations::oauth_login::PasteNotice::Hint => println!(
-                        "If the browser runs on another machine, copy the complete callback URL from its address bar and paste it here."
-                    ),
-                    crate::operations::oauth_login::PasteNotice::Rejected => println!(
-                        "That value does not match this login. Paste the complete callback URL from the browser address bar."
-                    ),
-                },
-            )
-            .await
-            .map_err(|error| command_error(EXIT_VALIDATION, error.to_string()))?;
-            println!(
-                "{provider_label} credentials saved for account {}.",
-                args.account
-            );
+        crate::cli::AccountsCommand::MigrateOAuth(_) => {
+            unreachable!("handled before loading the current config")
         }
         crate::cli::AccountsCommand::List => {
             print_accounts_human(&crate::operations::operator::account_list(&config), false);
@@ -1387,41 +1334,68 @@ async fn accounts(path: &Path, command: crate::cli::AccountsCommand) -> Result<(
     Ok(())
 }
 
-fn read_oauth_write_credential(
-    from_stdin: bool,
-) -> Result<zeroize::Zeroizing<String>, BootstrapError> {
-    let value = if from_stdin {
-        let mut value = String::new();
-        io::stdin()
-            .lock()
-            .take(130)
-            .read_to_string(&mut value)
-            .map_err(|_| {
-                command_error(
-                    EXIT_VALIDATION,
-                    "could not read EggPool OAuth credential from stdin",
-                )
-            })?;
-        value
-    } else {
-        if !io::stdin().is_terminal() {
-            return Err(command_error(
-                EXIT_VALIDATION,
-                "EggPool OAuth credential requires a hidden TTY prompt or --token-stdin",
-            ));
-        }
-        rpassword::prompt_password("EggPool OAuth write credential: ").map_err(|_| {
-            command_error(EXIT_VALIDATION, "could not read EggPool OAuth credential")
-        })?
-    };
-    let token = value.trim_end_matches(['\r', '\n']).to_owned();
-    if !token.starts_with("epk1_") || token.len() > 128 || token.chars().any(char::is_control) {
+async fn migrate_oauth(
+    path: &Path,
+    args: &crate::cli::MigrateOAuthArgs,
+) -> Result<(), BootstrapError> {
+    if args.json && !args.yes {
         return Err(command_error(
             EXIT_VALIDATION,
-            "invalid EggPool OAuth credential",
+            "--json requires --yes so stdout contains one machine-readable summary",
         ));
     }
-    Ok(zeroize::Zeroizing::new(token))
+    let plan = crate::operations::account_migration::inspect(path)
+        .await
+        .map_err(|error| command_error(EXIT_VALIDATION, error.to_string()))?;
+    if !args.json {
+        println!("Legacy OAuth accounts: {}", plan.summary.accounts.len());
+        for account in &plan.summary.accounts {
+            println!(
+                "  provider={} account={} owner={}",
+                account.provider_id.as_deref().unwrap_or("unknown"),
+                account.account_name,
+                account.owner_user_id.as_deref().unwrap_or("unknown")
+            );
+        }
+        println!(
+            "OAuth config present: {}; credential directory present: {}; managed files found: {}.",
+            plan.summary.oauth_config_present,
+            plan.summary.credential_directory_present,
+            plan.summary.credential_files_found
+        );
+        println!("{}", plan.summary.backup_recommendation);
+    }
+    let confirmed = if args.yes {
+        true
+    } else if !plan.has_changes() {
+        false
+    } else if io::stdin().is_terminal() {
+        prompt_confirmation("Remove the reported legacy OAuth configuration and credential files?")?
+    } else {
+        return Err(command_error(
+            EXIT_VALIDATION,
+            "explicit confirmation required; rerun with --yes",
+        ));
+    };
+    let summary =
+        crate::operations::account_migration::execute(plan, confirmed, args.allow_live_server)
+            .await
+            .map_err(|error| command_error(EXIT_VALIDATION, error.to_string()))?;
+    if args.json {
+        let output = serde_json::to_string_pretty(&summary).map_err(|_| {
+            command_error(EXIT_VALIDATION, "migration summary serialization failed")
+        })?;
+        println!("{output}");
+    } else {
+        println!(
+            "Migration {}: removed {} credential files; config updated: {}; report: {}.",
+            summary.status,
+            summary.credential_files_removed,
+            summary.config_updated,
+            summary.report_file
+        );
+    }
+    Ok(())
 }
 
 fn print_accounts_human(rows: &[Value], status: bool) {
@@ -2029,6 +2003,11 @@ async fn recover(path: &Path, source: Option<PathBuf>) -> Result<(), BootstrapEr
         restored.config.display(),
         restored.database.display()
     );
+    if restored.legacy_oauth_config_restored {
+        println!(
+            "The restored configuration still carries legacy OAuth material. Run eggpool accounts migrate-oauth to remove it."
+        );
+    }
     Ok(())
 }
 

@@ -966,25 +966,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "eggpass-auth"
-version = "0.1.1"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "77d9e4540abc3c43db8164f1783a0c945143751525525cd39ae152719696ece7"
-dependencies = [
- "base64 0.23.1",
- "eggfetch-core",
- "form_urlencoded",
- "http",
- "http-body-util",
- "rand 0.10.4",
- "serde",
- "serde_json",
- "sha2 0.11.1",
- "tokio",
- "tokio-util",
-]
-
-[[package]]
 name = "eggpool"
 version = "0.8.3"
 dependencies = [
@@ -995,7 +976,6 @@ dependencies = [
  "bytes",
  "clap",
  "eggfetch-core",
- "eggpass-auth",
  "eggpool-client-config",
  "eggpool-model-routing",
  "eggpool-provider-profile",

@@ -124,8 +124,6 @@ pub struct CatalogService {
     credentials: CredentialStore,
     database: Database,
     client_pool: ProviderClientPool,
-    oauth: Option<crate::oauth::OAuthAccountManager>,
-    personal_bindings: crate::personal_upstream::PersonalUpstreamSnapshot,
     catalog: Arc<std::sync::Mutex<ModelCatalogCache>>,
     state: Arc<Mutex<ServiceState>>,
     refresh_lock: Arc<Mutex<()>>,
@@ -169,8 +167,6 @@ impl CatalogService {
             credentials,
             database,
             client_pool,
-            oauth: None,
-            personal_bindings: crate::personal_upstream::PersonalUpstreamSnapshot::default(),
             catalog: Arc::new(std::sync::Mutex::new(cache)),
             state: Arc::new(Mutex::new(ServiceState {
                 ..ServiceState::default()
@@ -197,8 +193,6 @@ impl CatalogService {
             credentials,
             database,
             client_pool,
-            oauth: None,
-            personal_bindings: crate::personal_upstream::PersonalUpstreamSnapshot::default(),
             catalog,
             state: Arc::new(Mutex::new(ServiceState {
                 cache_loaded: true,
@@ -206,16 +200,6 @@ impl CatalogService {
             })),
             refresh_lock: Arc::new(Mutex::new(())),
         }
-    }
-
-    pub fn with_oauth_account_manager(
-        mut self,
-        manager: crate::oauth::OAuthAccountManager,
-        personal_bindings: crate::personal_upstream::PersonalUpstreamSnapshot,
-    ) -> Self {
-        self.oauth = Some(manager);
-        self.personal_bindings = personal_bindings;
-        self
     }
 
     pub fn shared_cache(&self) -> Arc<std::sync::Mutex<ModelCatalogCache>> {
@@ -288,39 +272,6 @@ impl CatalogService {
                             .filter(|provider| auth_is_none(provider))
                             .map(|_| crate::config::SecretString::from(""))
                     }),
-                crate::config::AccountAuthMode::OAuth => {
-                    let Some(user_id) = self
-                        .personal_bindings
-                        .owner_user_id(&identity.provider_id, &identity.account_name)
-                    else {
-                        outcomes.insert(identity.account_name.clone(), RefreshOutcome::Skipped);
-                        continue;
-                    };
-                    let Some(manager) = &self.oauth else {
-                        outcomes.insert(identity.account_name.clone(), RefreshOutcome::Failed);
-                        continue;
-                    };
-                    match manager
-                        .access_token_for_user(
-                            user_id,
-                            &identity.provider_id,
-                            &identity.account_name,
-                        )
-                        .await
-                    {
-                        Ok(token) => Some(token),
-                        Err(error) => {
-                            tracing::warn!(
-                                provider = %identity.provider_id,
-                                account = %identity.account_name,
-                                error = ?error,
-                                "catalog OAuth token resolution failed"
-                            );
-                            outcomes.insert(identity.account_name.clone(), RefreshOutcome::Failed);
-                            continue;
-                        }
-                    }
-                }
                 crate::config::AccountAuthMode::Agent => self
                     .credentials
                     .get(&identity.account_name)

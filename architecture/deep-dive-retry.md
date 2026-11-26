@@ -60,44 +60,16 @@ same decision without applying account or model effects twice (`try_apply_once`/
 
 `prepare_next` is the only retry-state mutation: a wire-scoped decision pins `preferred_account` to the
 same account so the next iteration tries the next untried `WireSurface`, while an account-scoped decision
-excludes the failed account (`excluded_accounts`) and clears the pin. The credential-refresh retry
-uses the same wire scope, because the owner’s own credential is the only one that may answer the
-resubmitted request, so `preferred_account` stays pinned to that account. `should_retry` admits only
+excludes the failed account (`excluded_accounts`) and clears the pin. `should_retry` admits only
 `RetryAccount` and `RetryWire`; any other action completes instead of redialing upstream.
 
-## Owner-scoped credential refresh after an upstream 401
+## Authentication failures and 401 handling
 
-An upstream HTTP 401 on an account whose auth mode is OAuth is a stale-credential signal, not an
-account fault. Both coordinators handle it before any account-health effect is applied:
-`coordinator::oauth_401_for_account` recognizes the case from the observation and the configured
-account, `coordinator::refresh_rejected_oauth_credential` refreshes that owner’s credential through
-`OAuthAccountManager::refresh_rejected_credential_for_user`, and the retry is admitted only when the
-refresh actually succeeded.
-
-The refresh is compare-and-refresh. `eggpass_auth::TokenManager::force_refresh` rotates the credential
-only when the stored access token is still the one the provider rejected; otherwise the newer stored
-credential is returned without a second token request, so a rotated refresh token is never spent twice.
-The refresh runs under the same per-account OS lock as the proactive path, commits atomically before the
-lock is released, and is detached from request cancellation.
-
-The retry holds the account constant and re-offers the wire surface that was rejected, because the
-surface was not the fault: `prepare_next` pins the account, and the coordinator re-admits the
-rejected `WireSurface` for that account and pins it for the next attempt, so the resolver cannot
-silently move the resubmitted request to a different surface. The pin is a preference, not a bypass:
-if the shared resolver has since learned that the surface is rejecting, it is not offered again and
-the account’s next candidate is used instead. One refresh and one retry are allowed per request, inside
-the ordinary attempt budget. The account-health evidence is applied only when the refresh fails or the
-refreshed credential is rejected again, which keeps a healed stale credential from disabling the account
-while a genuinely rejected credential still does. The operator gate blocks the refresh exactly as it
-blocks login, routing, and proactive refresh, and a non-owner cannot reach the refresh at all.
-
-The failure classifier is unchanged: `classify` still produces the same 401 effects, the same evidence
-class, and the same recorded labels, so the frozen compatibility observation fixture is unaffected. The
-recovery is coordinator-owned and contributes its own scope and action labels
-(`same_account_refreshed_credential`, `refresh_credential_same_account`) for the healed attempt only.
-Those two labels extend the `FailureEffects` string vocabulary; they are not new durable attempt
-columns, and the durable attempt rows keep their existing shape. The published `RetryScope` and
-`NextAction` variant sets are unchanged as well, so the library’s public API does not move.
+The runtime has no provider OAuth credential-refresh or same-owner replay path.
+A 401 on an Agent account is terminal: the coordinator does not refresh or retry
+that Agent request. Static-key accounts continue to use the ordinary failure
+classifier and shared retry budget; the removed OAuth behavior does not change
+that policy.
 
 ## Finite retry loop
 

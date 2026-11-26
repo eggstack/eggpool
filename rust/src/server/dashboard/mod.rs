@@ -145,14 +145,13 @@ use response::{html_response, static_response};
 use theme::*;
 
 pub(super) use admin::{
-    add_member_upstream, assign_user_profile, audit_export, audit_page,
-    create_oauth_credentials_token, create_personal_token, create_profile, create_user,
-    delete_profile, issue_admin_token, my_account_page, my_models_page, profiles_page,
-    remove_instance_budget, remove_member_upstream, remove_profile_rule, remove_upstream_account,
-    remove_user_override, reset_user_password, revoke_personal_token, revoke_user_tokens,
-    set_default_member_profile, set_instance_budget, set_profile_preference, set_profile_rule,
-    set_upstream_default, set_upstream_grant, set_user_budget, set_user_override, set_user_state,
-    update_profile, usage_page, users_page,
+    add_member_upstream, assign_user_profile, audit_export, audit_page, create_personal_token,
+    create_profile, create_user, delete_profile, issue_admin_token, my_account_page,
+    my_models_page, profiles_page, remove_instance_budget, remove_member_upstream,
+    remove_profile_rule, remove_upstream_account, remove_user_override, reset_user_password,
+    revoke_personal_token, revoke_user_tokens, set_default_member_profile, set_instance_budget,
+    set_profile_preference, set_profile_rule, set_upstream_default, set_upstream_grant,
+    set_user_budget, set_user_override, set_user_state, update_profile, usage_page, users_page,
 };
 pub(super) use api::{
     grouped_timeseries_api, stats_cache_observability, stats_cache_stability,

@@ -503,21 +503,21 @@ pub enum AccountsCommand {
     List,
     Status,
     Explain(AccountsExplainArgs),
-    /// Sign in to one configured OpenAI or xAI OAuth account for the authenticated user.
-    #[command(name = "oauth-login")]
-    OAuthLogin(OAuthLoginArgs),
+    /// Explicitly remove legacy provider OAuth configuration and credential files.
+    #[command(name = "migrate-oauth")]
+    MigrateOAuth(MigrateOAuthArgs),
 }
 #[derive(Debug, clap::Args)]
-pub struct OAuthLoginArgs {
-    /// OAuth provider. Ownership comes from the EggPool credential, not this value.
-    #[arg(long, value_name = "PROVIDER", default_value = "openai", value_parser = ["openai", "xai"])]
-    pub provider: String,
-    /// Configured provider account name. Ownership comes from the EggPool credential, not this name.
-    #[arg(long, value_name = "ACCOUNT")]
-    pub account: String,
-    /// Read the self-only EggPool OAuth-write credential from stdin instead of a hidden TTY prompt.
+pub struct MigrateOAuthArgs {
+    /// Confirm removal of the reported legacy OAuth configuration and files.
     #[arg(long)]
-    pub token_stdin: bool,
+    pub yes: bool,
+    /// Emit the bounded migration summary as JSON.
+    #[arg(long)]
+    pub json: bool,
+    /// Proceed while the server is live only after coordinating the migration.
+    #[arg(long)]
+    pub allow_live_server: bool,
 }
 #[derive(Debug, clap::Args)]
 pub struct AccountsExplainArgs {

@@ -547,12 +547,11 @@ value is the single credential: EggPool stores it under both the account's
 credential to that Agent's HTTP endpoint, and the Agent presents it as the
 reverse control-channel password with the account name as username. Agent
 accounts require an active personal upstream binding; they are not shared. A
-provider-side Agent HTTP 401 is terminal: EggPool neither refreshes it as OAuth
-nor retries through a shared fallback account. An enrolled Agent base URL ends
+provider-side Agent HTTP 401 is terminal and is not retried through a shared
+fallback account. An enrolled Agent base URL ends
 in `/v1`; discovery uses the relative target `/models`, producing the effective
-request `GET /v1/models` with the Agent account's credential. A failed refresh
-records failure without withdrawing previously known support or affecting another
-account. The upstream model ID remains the dispatch and policy ID. My models shows
+request `GET /v1/models` with the Agent account's credential. A failed catalog refresh records failure without withdrawing previously known
+support or affecting another account. The upstream model ID remains the dispatch and policy ID. My models shows
 one origin label per backing account; collision suffixes are display-only. The
 ticket's display label is refused if it equals the enrollment credential.
 
@@ -645,36 +644,29 @@ binding and credential when the account was never published, while startup
 reconciliation removes stale Agent bindings absent from the published config.
 Repeating revocation after removal is an idempotent no-op.
 
-## Per-user OAuth accounts
+## Retiring legacy provider OAuth custody
 
-EggPool implements owner-bound OAuth login for configured OpenAI and xAI
-accounts. The available flows are deliberately distinct:
+EggPool no longer supports server-held provider OAuth credentials or OAuth
+account auth modes. A configuration containing the removed `[oauth]` section or
+an account with `auth_mode = "oauth"` fails to load with a typed, secret-free
+error naming the removed surface and directing the operator to
+`eggpool accounts migrate-oauth`.
 
-- Web UI: xAI device-code only.
-- Desktop CLI: OpenAI and xAI authorization-code/PKCE through an ephemeral
-  loopback listener bound to `127.0.0.1`. A browser on the same machine
-  completes the callback directly; in an interactive terminal the command also
-  accepts a pasted callback URL from another machine, and a standalone
-  authorization code for xAI, a fixed-client-ID provider. Both are validated
-  against the same pending transaction before the code is exchanged. The CLI
-  receives its self-only OAuth-write credential from the authenticated Web UI
-  and accepts it through a hidden prompt or stdin. There is no OpenAI Web UI
-  callback on EggPool's listener.
+At startup, EggPool reports an existing config-adjacent `.eggpool-oauth/`
+directory in a bounded, secret-free diagnostic and preserves it; startup never
+deletes it implicitly. The migration command previews the OAuth accounts and
+owners without secret material. Applying it requires explicit `--yes`; it
+refuses a detected live server unless the operator explicitly opts in with
+`--allow-live-server` after coordination. `--json` emits a bounded machine-readable
+summary, also written beside the configuration as
+`.eggpool-oauth-migration.json`.
 
-Each completed grant belongs to one managed user, provider, and configured
-account. The credential set is stored outside SQLite in the private
-`.eggpool-oauth/` directory. OAuth accounts are not pooled and never fall
-back across users or accounts. When a provider rejects an owner-bound
-credential with HTTP 401, EggPool refreshes that owner's credential and
-retries the same request against the same account once; a credential that is
-still rejected fails the request and disables the account, and the owner must
-sign in again. Setting `[oauth].enabled = false` blocks login, routing, and
-refresh while retaining stored credential files.
-
-These are descriptions of EggPool's implemented flows, not a claim of live
-provider validation, provider approval, or legal/TOS compliance. Local stub
-tests do not establish current provider registration or policy; verify those
-requirements for the specific provider and deployment.
+`eggpool accounts migrate-oauth` is idempotent. It removes only legacy OAuth
+configuration entries and files in `.eggpool-oauth/`; it does not convert an
+OAuth grant into an Agent credential or modify unrelated files. Agent accounts
+remain the supported per-user provider path: the user-owned Agent keeps its
+provider credentials and connects through EggPool's reverse TLS tunnel, as
+described above.
 
 ## Consumer Subscription and Other Exclusions
 

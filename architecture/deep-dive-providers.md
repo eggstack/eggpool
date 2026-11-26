@@ -6,13 +6,12 @@ Back to [Architecture](README.md). See also [overview.md §7](overview.md).
 neutral HTTP transport: `transport.rs` (`ProviderHttpClient`, `ProviderBody`,
 `ProviderResponse`, `TransportError`) and `client_pool.rs`
 (generation-owned per-provider/account pool over an immutable nested topology
-with atomic close) own HTTP, connection ownership, and timeouts only. OAuth
-custody and expiry-aware token resolution live in runtime `oauth.rs`; the
-coordinator resolves an owned token before borrowed attempt preparation and
-renders it at the existing dispatch-header boundary. There is no credential
-custody, wire selection, routing, or retry logic in transport. Provider
-profiles describe protocol, URL, auth shape, wire surface, and capability facts
-without storing secrets in metadata.
+with atomic close) own HTTP, connection ownership, and timeouts only. Supported
+account auth modes are static key and Agent; account credentials are rendered
+at the existing dispatch-header boundary. There is no provider OAuth custody,
+wire selection, routing, or retry logic in transport. Provider profiles
+describe protocol, URL, auth shape, wire surface, and capability facts without
+storing secrets in metadata.
 
 ## Bundled provider-profile authority
 
@@ -167,39 +166,25 @@ as the release proof. A cancelled handshake may complete protocol negotiation;
 the semantic assertions are proxy-target integrity, one recovery origin
 request, and successful client reuse rather than an incidental handshake count.
 
-## Owner-scoped OAuth credentials (M001)
+## Retired provider OAuth custody
 
-`rust/src/oauth.rs` is the generation-owned service for OAuth account
-credentials. The selected account's existing `ProviderClientPool` client is
-cloned into Eggpass; OAuth does not build a second client or change proxy,
-timeout, retry, or TLS policy. The service accepts only reviewed OpenAI and xAI
-accounts, checks the active personal-upstream owner snapshot, and keys every
-credential by `(user_id, provider_id, account_name)`.
+EggPool no longer stores or resolves provider OAuth credentials. The supported
+account auth modes are `StaticKey` and `Agent`; there is no OAuth account mode
+or `[oauth]` configuration section. A legacy configuration using either
+removed surface fails to load with a typed, secret-free error naming the surface
+and directing operators to `eggpool accounts migrate-oauth`.
 
-Credential JSON lives outside SQLite under the config-adjacent
-`.eggpool-oauth/` directory, with owner-only directory/file permissions
-(0700/0600). A hashed filename and the owner tuple inside the file must agree.
-Per-identity OS locks cover load/refresh/rotation across processes; Eggpass's
-complete rotated set is atomically replaced before the new access token is
-returned. Refresh commit/clear transactions are detached from request
-cancellation so they cannot abandon a lock mid-rotation. Backup/restore includes
-these files, validates the same owner binding, and clears stale files when an
-older archive has no OAuth members.
-
-Finite and streaming coordinators resolve an owned `SecretString` before
-publication and synchronous attempt preparation. A resolution failure rolls back
-the selected claim and produces no provider attempt or account fallback. A
-subsequent OAuth HTTP 401 refreshes that owner's credential for that same account
-and retries the same request against the same account exactly once, as ADR-0015
-and M004 record; a failed refresh or a second rejection terminalizes the request
-and disables the account, with no account fallback and no reselection. Static-key
-failure policy is unchanged. Catalog
-OAuth requests use the same owner-scoped service; public discovery never proves
-credential validity. `[oauth].enabled` defaults on; disabling blocks OAuth
-login, routing, and refresh while retaining credential files. OpenAI login is
-desktop-only through M003's loopback PKCE flow; the Web UI uses xAI device-code.
-M002 owns authenticated Web UI flows; M003 owns desktop loopback PKCE and the
-owner-bound upload route. Neither flow adds a public provider callback listener.
+If the config-adjacent `.eggpool-oauth/` directory exists, startup reports it
+in a bounded diagnostic and preserves it. The explicit migration command
+reports every legacy OAuth account and owner without secret material, requires
+`--yes` to apply changes, and refuses a detected live server unless the
+operator explicitly opts in with `--allow-live-server` after coordination.
+`--json` emits a bounded machine-readable summary; the command also writes
+`.eggpool-oauth-migration.json` beside the config. It is idempotent and removes
+only legacy OAuth configuration entries and files in `.eggpool-oauth/`; it never
+converts a grant into an Agent credential. The per-user Agent reverse TLS
+tunnel described above remains supported and keeps provider credentials with
+the Agent.
 
 ## Native dependency boundaries
 

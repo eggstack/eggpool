@@ -152,18 +152,16 @@ fn exact_r001_field_dispositions_are_ported() {
             .count(),
         0
     );
+    assert!(actual.iter().all(|(path, _)| !path.starts_with("oauth.")));
     let mut added_gate_fields = actual
         .iter()
-        .filter(|(path, _)| path.as_str() == "agents.enabled" || path.as_str() == "oauth.enabled")
+        .filter(|(path, _)| path.as_str() == "agents.enabled")
         .cloned()
         .collect::<Vec<_>>();
     added_gate_fields.sort();
     assert_eq!(
         added_gate_fields,
-        vec![
-            ("agents.enabled".to_owned(), "restart_required".to_owned()),
-            ("oauth.enabled".to_owned(), "restart_required".to_owned()),
-        ]
+        vec![("agents.enabled".to_owned(), "restart_required".to_owned())]
     );
 }
 
@@ -182,7 +180,6 @@ fn serialized_schema_projection_is_the_coverage_guard() {
             "agents.enabled",
             "agents.single_host",
             "agents.tls",
-            "oauth.enabled",
         ]
         .map(str::to_owned),
     );
@@ -198,10 +195,6 @@ fn unknown_paths_and_dynamic_rules_fail_closed_or_match_oracle() {
     );
     assert_eq!(
         disposition_for("agents.enabled"),
-        ReloadDisposition::RestartRequired
-    );
-    assert_eq!(
-        disposition_for("oauth.enabled"),
         ReloadDisposition::RestartRequired
     );
     assert_eq!(

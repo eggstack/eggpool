@@ -161,10 +161,7 @@ managed-user at `/login`, `/logout`, `/account`, `/account/landing`,
 `/account/password`, `/my-account`, `/my-account/models`,
 `/my-account/upstreams`, `/my-account/upstreams/remove`,
 `/my-account/agents/enroll`, `/my-account/agents/revoke`, `/account/tokens`,
-`/account/tokens/revoke`, `/account/tokens/oauth`, `/usage`, `/api/user-budget`,
-`/api/user/oauth-credentials`, `/api/user/oauth-credentials/hint`,
-`/api/user/oauth/xai/start`, `/api/user/oauth/xai/poll`, `/api/user/oauth/xai/cancel`,
-`/api/user/oauth/xai/commit`, `/api/user/oauth/xai/status`; dashboard pages at
+`/account/tokens/revoke`, `/usage`, `/api/user-budget`; dashboard pages at
 `/`, `/accounts`, `/models`, `/models/{*model_id}`, `/latency`, `/events`,
 `/timeseries`, `/bandwidth`, `/pings`, `/reliability`, `/routing`,
 `/traces`, `/runtime`, `/cache`, `/users`, `/profiles`, `/admin/audit`,
@@ -419,8 +416,10 @@ atomic TOML edits + `classify_transition`-carrying apply), `terminal.rs`
 fallback for non-TTY use; `Ctrl-C` stays `MutationError::Interrupted` to
 `BootstrapError::Interrupted` exit 130 behind one termios guard, qualified by
 safe `openpty` PTY tests), `deploy.rs`(systemd/logrotate/cron rendering, install/uninstall), `backup.rs` (staged
-atomic ZIP `BACKUP_FORMAT_VERSION=1` with `META` + config + optional `.env` + consistent SQLite
-snapshot via `backup_to`; restore requires stopped service), `update.rs` (GitHub release
+atomic ZIP `BACKUP_FORMAT_VERSION=2` with `META` + config + optional `.env` + consistent SQLite
+snapshot via `backup_to`; v2 contains no OAuth members, legacy v1 restore omits
+OAuth data and reports `legacy_oauth_data_omitted`, and omitted members preserve
+any current legacy credential directory; restore requires stopped service), `update.rs` (GitHub release
 discovery, SHA-256 verification, atomic transition; background probes are
 conservative, exact-version resolution is explicit), `catalog.rs` (embedded
 installable-releases catalog), `provenance.rs` (install-provenance detection),
@@ -509,14 +508,11 @@ transaction as the request reservation, and settlement of one daily and one
 monthly bucket at terminalization. `rust/src/server/dashboard/admin.rs` owns
 the admin and member HTML surfaces as thin CSRF-validated adapters.
 `rust/src/personal_upstream.rs` owns personal upstream grants and bindings.
-`rust/src/oauth.rs` owns owner-bound provider OAuth credential custody and
-resolution outside SQLite; its storage operations serialize with backup/restore,
-and tokens stay out of diagnostics and public projections. The plaintext secret stays in the config-adjacent environment file, and
-routing eligibility excludes a bound account from every principal except its
-owner. The subsystem owns no router, no upstream dispatch, and no second database
-writer; `server/middleware.rs` keeps the route-role gate, `coordinator/`
-keeps publication and settlement, and `routing/`, `quota/`, and `health/`
-keep owning upstream accounts, provider quota, and provider health.
+Direct provider OAuth custody is retired. Legacy OAuth configuration is rejected
+with a typed, secret-free migration hint; an existing `.eggpool-oauth/`
+directory is reported at startup and preserved until `eggpool accounts
+migrate-oauth` explicitly removes its OAuth entries and files. The command is
+idempotent and never converts a grant into an Agent credential.
 
 Deep dive: [On-prem user access](deep-dive-on-prem-user-access.md).
 
@@ -620,14 +616,14 @@ Deep dives: [Core](deep-dive-core.md), [Deployment](deep-dive-deployment.md).
 |---|---|---|
 | Entry, CLI, errors | `rust/src/main.rs`, `rust/src/lib.rs`, `rust/src/cli.rs`, `rust/src/runtime.rs`, `rust/src/error.rs`, `rust/src/version.rs` | [Core](deep-dive-core.md) |
 | Operations CLI surface | `rust/src/runtime.rs`, `rust/src/cli.rs`, `rust/src/operations/` (local operator commands; `runtime.rs` dispatches and renders, `operations/` owns the local services) | [Core](deep-dive-core.md), [Control](deep-dive-control.md), [Metrics](deep-dive-metrics.md) |
-| Config, reload policy, reload | `rust/src/config.rs`, `rust/src/config_reload_policy.rs`, `rust/src/reload.rs`, `rust/build.rs`, `rust/build_support.rs` | [Core](deep-dive-core.md), [Control](deep-dive-control.md), [Runtime](deep-dive-runtime.md) |
+| Config, reload policy, reload | `rust/src/config.rs`, `rust/src/secret.rs`, `rust/src/config_reload_policy.rs`, `rust/src/reload.rs`, `rust/build.rs`, `rust/build_support.rs` | [Core](deep-dive-core.md), [Control](deep-dive-control.md), [Runtime](deep-dive-runtime.md) |
 | HTTP adapters | `rust/src/server/` | [Request lifecycle](deep-dive-request-lifecycle.md), [Dashboard](deep-dive-dashboard.md), [Runtime](deep-dive-runtime.md) |
-| On-prem user access | `rust/src/identity.rs`, `rust/src/web_session.rs`, `rust/src/model_policy.rs`, `rust/src/user_budget.rs`, `rust/src/instance_budget.rs`, `rust/src/personal_upstream.rs`, `rust/src/server/auth.rs`, `rust/src/server/dashboard/admin.rs` | [On-prem user access](deep-dive-on-prem-user-access.md) |
+| On-prem user access | `rust/src/identity.rs`, `rust/src/web_session.rs`, `rust/src/security_events.rs`, `rust/src/model_policy.rs`, `rust/src/user_budget.rs`, `rust/src/instance_budget.rs`, `rust/src/personal_upstream.rs`, `rust/src/server/auth.rs`, `rust/src/server/dashboard/admin.rs`, `rust/src/operations/account_migration.rs` | [On-prem user access](deep-dive-on-prem-user-access.md) |
 | Admission | `rust/src/request/` | [Request lifecycle](deep-dive-request-lifecycle.md), [Transcoder](deep-dive-transcoder.md) |
 | Coordinator finite/streaming | `rust/src/coordinator/`, `rust/src/coordinator/streaming/` | [Request lifecycle](deep-dive-request-lifecycle.md), [Retry](deep-dive-retry.md) |
 | Publication/finalization/failure | `rust/src/coordinator/publication.rs`, `rust/src/coordinator/finalization.rs`, `rust/src/coordinator/failure.rs`, `rust/src/coordinator/attempt.rs`, `rust/src/coordinator/wire_resolver.rs` | [Request lifecycle](deep-dive-request-lifecycle.md), [Retry](deep-dive-retry.md) |
 | Wire/transcoding | `rust/src/wire/` (facades + `adapters.rs` seam + `runtime.rs` join), `rust/crates/eggpool-wire/` (neutral kernel) | [Transcoder](deep-dive-transcoder.md) |
-| Providers/transport | `rust/src/providers/`, `rust/src/provider_profile.rs` + `rust/crates/eggpool-provider-profile/` (shared profile contract) | [Providers](deep-dive-providers.md) |
+| Providers/transport | `rust/src/providers/`, `rust/src/agents/`, `rust/src/provider_profile.rs` + `rust/crates/eggpool-provider-profile/` (shared profile contract) | [Providers](deep-dive-providers.md) |
 | Routing/quota/health/accounts | `rust/src/routing/`, `rust/src/quota/`, `rust/src/health/`, `rust/src/accounts/` | [Routing](deep-dive-routing.md), [Health](deep-dive-health.md) |
 | Catalog/model-info | `rust/src/catalog/` | [Catalog](deep-dive-catalog.md), [Model info](deep-dive-model-info.md) |
 | Semantic model routing | `rust/crates/eggpool-model-routing/`, `rust/src/model_router.rs` | [Routing](deep-dive-routing.md), [Models](deep-dive-models.md) |
@@ -635,9 +631,9 @@ Deep dives: [Core](deep-dive-core.md), [Deployment](deep-dive-deployment.md).
 | Persistence | `rust/src/db/`, `rust/assets/db/migrations/` | [Database](deep-dive-database.md) |
 | Generations/lifecycle | `rust/src/runtime_lifecycle/`, `rust/src/task_supervisor.rs` | [Runtime](deep-dive-runtime.md), [Background](deep-dive-background.md) |
 | Operations control/lifecycle | `rust/src/operations/control.rs`, `rust/src/operations/lifecycle.rs`, `rust/src/operations/process.rs`, `rust/src/operations/paths.rs`, `rust/src/operations/config_mutation.rs`, `rust/src/operations/terminal.rs` | [Control](deep-dive-control.md), [Deployment](deep-dive-deployment.md) |
-| Deploy/backup/update | `rust/src/operations/deploy.rs`, `rust/src/operations/backup.rs`, `rust/src/operations/update.rs`, `rust/src/operations/catalog.rs`, `rust/src/operations/provenance.rs` | [Deployment](deep-dive-deployment.md), [Lifecycle](deep-dive-lifecycle.md) |
+| Deploy/backup/update | `rust/src/operations/deploy.rs`, `rust/src/operations/backup.rs`, `rust/src/operations/account_migration.rs`, `rust/src/operations/update.rs`, `rust/src/operations/catalog.rs`, `rust/src/operations/provenance.rs` | [Deployment](deep-dive-deployment.md), [Lifecycle](deep-dive-lifecycle.md) |
 | Operator/status/metrics/integrations | `rust/src/operations/operator.rs`, `rust/src/operations/status.rs`, `rust/src/operations/metrics.rs`, `rust/src/operations/integrations.rs` (+ portable `eggpool-client-config`) | [Metrics](deep-dive-metrics.md), [Integrations](deep-dive-integrations.md) |
-| Observability/security | `rust/src/operations/metrics.rs`, `rust/src/operations/status.rs`, `rust/src/server/dashboard/`, `rust/src/server/health.rs`, `rust/src/runtime_lifecycle/diagnostics.rs` | [Observability](deep-dive-observability.md), [Metrics](deep-dive-metrics.md), [Dashboard](deep-dive-dashboard.md), [Security](deep-dive-security.md) |
+| Observability/security | `rust/src/operations/metrics.rs`, `rust/src/operations/status.rs`, `rust/src/server/dashboard/`, `rust/src/server/health.rs`, `rust/src/runtime_lifecycle/diagnostics.rs`, `rust/src/security_events.rs` | [Observability](deep-dive-observability.md), [Metrics](deep-dive-metrics.md), [Dashboard](deep-dive-dashboard.md), [Security](deep-dive-security.md) |
 | Tooling/tests | `scripts/`, `tests/tooling/`, `rust/tests/`, `packaging/` | [Core](deep-dive-core.md), [Deployment](deep-dive-deployment.md) |
 
 ## Source-development flow

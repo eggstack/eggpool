@@ -253,7 +253,6 @@ impl AccountRegistry {
                     AccountAuthMode::StaticKey => {
                         no_auth_required || credentials.has_usable(&configured.name)
                     }
-                    AccountAuthMode::OAuth => config.oauth.enabled,
                     AccountAuthMode::Agent => credentials.has_usable(&configured.name),
                 };
                 if configured.enabled
@@ -275,7 +274,6 @@ impl AccountRegistry {
                     enabled: configured.enabled
                         && match configured.auth_mode {
                             AccountAuthMode::StaticKey => true,
-                            AccountAuthMode::OAuth => config.oauth.enabled,
                             AccountAuthMode::Agent => config.agents.enabled,
                         },
                     has_usable_credentials,

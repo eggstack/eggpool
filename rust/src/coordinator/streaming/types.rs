@@ -157,8 +157,6 @@ pub enum StreamingCoordinatorError {
     Effects(String),
     #[error("streaming request facts do not match admitted model, surface, or stream intent")]
     InvalidFacts,
-    #[error("OAuth account credentials are unavailable")]
-    OAuth(#[from] crate::oauth::OAuthAccountError),
 }
 
 /// The last upstream error response retained for pre-handoff exhaustion

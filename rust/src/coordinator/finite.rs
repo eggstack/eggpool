@@ -229,8 +229,6 @@ pub enum FiniteCoordinatorError {
     Effects(String),
     #[error("finite request facts do not match admitted model or surface")]
     InvalidFacts,
-    #[error("OAuth account credentials are unavailable")]
-    OAuth(#[from] crate::oauth::OAuthAccountError),
 }
 
 /// Whether the generation exposes at least one provider wire surface that
@@ -569,7 +567,6 @@ pub struct FiniteCoordinator {
     provider_profiles: BTreeMap<String, Vec<ConfiguredWireProfile>>,
     providers: BTreeMap<String, ProviderConfig>,
     credentials: CredentialStore,
-    oauth: Option<crate::oauth::OAuthAccountManager>,
     finalization: FinalizationSupervisor,
     retry_policy: RetryPolicy,
     failure_engine: Arc<Mutex<FailureDecisionEngine>>,
@@ -610,7 +607,6 @@ impl FiniteCoordinator {
             provider_profiles,
             providers,
             credentials,
-            oauth: None,
             finalization,
             retry_policy,
             failure_engine: Arc::new(Mutex::new(FailureDecisionEngine::new(retry_policy))),
@@ -623,46 +619,21 @@ impl FiniteCoordinator {
         self
     }
 
-    pub fn with_oauth_account_manager(
-        mut self,
-        manager: crate::oauth::OAuthAccountManager,
-    ) -> Self {
-        self.oauth = Some(manager);
-        self
-    }
-
-    async fn resolve_account_api_key(
+    fn resolve_account_api_key(
         &self,
-        user_id: Option<&str>,
-        provider_id: &str,
         account_name: &str,
         provider: &ProviderConfig,
-    ) -> Result<Option<SecretString>, crate::oauth::OAuthAccountError> {
+    ) -> Option<SecretString> {
         let Some(account) = provider
             .accounts
             .iter()
             .find(|account| account.name == account_name)
         else {
-            // Account-less legacy configurations retain static-key behavior.
-            return Ok(self.credentials.get(account_name).map(SecretString::from));
+            return self.credentials.get(account_name).map(SecretString::from);
         };
         match account.auth_mode {
-            AccountAuthMode::StaticKey => {
-                Ok(self.credentials.get(account_name).map(SecretString::from))
-            }
-            AccountAuthMode::Agent => {
-                Ok(self.credentials.get(account_name).map(SecretString::from))
-            }
-            AccountAuthMode::OAuth => {
-                let user_id = user_id.ok_or(crate::oauth::OAuthAccountError::InvalidOwner)?;
-                let manager = self
-                    .oauth
-                    .as_ref()
-                    .ok_or(crate::oauth::OAuthAccountError::Disabled)?;
-                manager
-                    .access_token_for_user(user_id, provider_id, account_name)
-                    .await
-                    .map(Some)
+            AccountAuthMode::StaticKey | AccountAuthMode::Agent => {
+                self.credentials.get(account_name).map(SecretString::from)
             }
         }
     }
@@ -774,15 +745,9 @@ impl FiniteCoordinator {
         }
 
         let mut attempt_number = 1_u32;
-        // One credential refresh per request: a second upstream rejection on
-        // the same account terminalizes instead of rotating the credential
-        // again.
-        let mut oauth_credential_refreshed = false;
         let mut excluded_accounts = BTreeSet::new();
         let mut preferred_account = None;
         let mut attempted_wires: BTreeMap<String, BTreeSet<WireSurface>> = BTreeMap::new();
-        // The account and wire surface a credential-refresh retry must reuse.
-        let mut pinned_wire: Option<(String, WireSurface)> = None;
         let mut last_identity: Option<FinalizationIdentity> = None;
         let mut last_upstream: Option<LastUpstream> = None;
         let request_start = Instant::now();
@@ -1009,30 +974,11 @@ impl FiniteCoordinator {
             let attempted = attempted_wires
                 .entry(claim.account_name().to_owned())
                 .or_default();
-            // A credential-refresh retry holds the account and the wire
-            // surface constant: the provider rejected a stale credential, not
-            // the surface. The pinned surface is offered again whenever the
-            // resolver still has it; otherwise the account's next candidate
-            // is used.
-            let pinned = pinned_wire
-                .as_ref()
-                .filter(|(account, _)| account.as_str() == claim.account_name())
-                .map(|(_, surface)| *surface);
-            let selected = pinned
-                .and_then(|surface| {
-                    resolution
-                        .candidates
-                        .iter()
-                        .find(|candidate| candidate.surface() == surface)
-                        .cloned()
-                })
-                .or_else(|| {
-                    resolution
-                        .candidates
-                        .iter()
-                        .find(|candidate| !attempted.contains(&candidate.surface()))
-                        .cloned()
-                });
+            let selected = resolution
+                .candidates
+                .iter()
+                .find(|candidate| !attempted.contains(&candidate.surface()))
+                .cloned();
             let Some(candidate) = selected else {
                 claim.rollback_claim()?;
                 excluded_accounts.insert(claim.account_name().to_owned());
@@ -1046,23 +992,7 @@ impl FiniteCoordinator {
                 .any(|candidate| !attempted.contains(&candidate.surface()));
             let upstream_protocol = protocol_for_surface(candidate.surface());
             let selected_account_name = claim.account_name().to_owned();
-            // Resolve OAuth before durable publication: refresh failures create
-            // no provider attempt and cannot fall back to another account.
-            let account_api_key = match self
-                .resolve_account_api_key(
-                    request.routing_facts.principal_user_id.as_deref(),
-                    &provider_id,
-                    &selected_account_name,
-                    provider,
-                )
-                .await
-            {
-                Ok(value) => value,
-                Err(error) => {
-                    claim.rollback_claim()?;
-                    return Err(FiniteCoordinatorError::OAuth(error));
-                }
-            };
+            let account_api_key = self.resolve_account_api_key(&selected_account_name, provider);
             let client_protocol = if is_embedding {
                 "openai_embeddings"
             } else {
@@ -1818,72 +1748,6 @@ impl FiniteCoordinator {
                             self.retry_policy,
                         ));
                     let (effects, first) = self.decide(&observation)?;
-                    // An upstream 401 on an owner-bound OAuth account is a
-                    // stale-credential signal, not an account fault: refresh
-                    // this owner's credential and retry the same account
-                    // exactly once. The account is penalized only when the
-                    // refresh fails or the refreshed credential is rejected
-                    // again, and no other account is ever substituted.
-                    if !oauth_credential_refreshed
-                        && attempt_number < self.retry_policy.max_attempts.max(1)
-                        && super::oauth_401_for_account(&observation, &self.providers)
-                    {
-                        let refreshed = super::refresh_rejected_oauth_credential(
-                            self.oauth.as_ref(),
-                            request.routing_facts.principal_user_id.as_deref(),
-                            &identity.provider_id,
-                            &identity.account_name,
-                            account_api_key.as_ref(),
-                        )
-                        .await;
-                        if refreshed.is_some() {
-                            oauth_credential_refreshed = true;
-                            // The wire surface was not the fault: the credential
-                            // was. The retry re-offers the rejected surface and
-                            // holds the account constant.
-                            let failed_surface = candidate.surface();
-                            if let Some(attempted) = attempted_wires.get_mut(&identity.account_name)
-                            {
-                                attempted.remove(&failed_surface);
-                            }
-                            pinned_wire = Some((identity.account_name.clone(), failed_surface));
-                            let healed = super::healed_credential_refresh_effects(&effects);
-                            last_upstream = Some(LastUpstream {
-                                status: upstream.status,
-                                headers: upstream.headers.clone(),
-                                body: body.clone(),
-                                effects: healed.clone(),
-                                upstream_request_id: upstream.upstream_request_id.clone(),
-                                headers_elapsed: upstream.headers_elapsed,
-                            });
-                            self.cleanup_failed_attempt(
-                                &published,
-                                self.retry_cleanup_data(
-                                    &identity,
-                                    upstream_protocol,
-                                    &healed,
-                                    Some(upstream.status),
-                                    upstream.upstream_request_id.clone(),
-                                    upstream.headers_elapsed,
-                                    request_bytes,
-                                    body.len(),
-                                ),
-                            )
-                            .await?;
-                            // The next attempt resolves the credential again
-                            // through the ordinary owner-scoped path, which
-                            // reads the credential the refresh committed under
-                            // the account lock.
-                            self.prepare_next(
-                                &mut attempt_number,
-                                &mut preferred_account,
-                                &mut excluded_accounts,
-                                &identity,
-                                &healed,
-                            );
-                            continue;
-                        }
-                    }
                     if first {
                         self.apply_effects(&published.claim, &effects).await;
                     }
@@ -2147,72 +2011,6 @@ impl FiniteCoordinator {
                             self.retry_policy,
                         ));
                     let (effects, first) = self.decide(&observation)?;
-                    // An upstream 401 on an owner-bound OAuth account is a
-                    // stale-credential signal, not an account fault: refresh
-                    // this owner's credential and retry the same account
-                    // exactly once. The account is penalized only when the
-                    // refresh fails or the refreshed credential is rejected
-                    // again, and no other account is ever substituted.
-                    if !oauth_credential_refreshed
-                        && attempt_number < self.retry_policy.max_attempts.max(1)
-                        && super::oauth_401_for_account(&observation, &self.providers)
-                    {
-                        let refreshed = super::refresh_rejected_oauth_credential(
-                            self.oauth.as_ref(),
-                            request.routing_facts.principal_user_id.as_deref(),
-                            &identity.provider_id,
-                            &identity.account_name,
-                            account_api_key.as_ref(),
-                        )
-                        .await;
-                        if refreshed.is_some() {
-                            oauth_credential_refreshed = true;
-                            // The wire surface was not the fault: the credential
-                            // was. The retry re-offers the rejected surface and
-                            // holds the account constant.
-                            let failed_surface = candidate.surface();
-                            if let Some(attempted) = attempted_wires.get_mut(&identity.account_name)
-                            {
-                                attempted.remove(&failed_surface);
-                            }
-                            pinned_wire = Some((identity.account_name.clone(), failed_surface));
-                            let healed = super::healed_credential_refresh_effects(&effects);
-                            last_upstream = Some(LastUpstream {
-                                status: upstream.status,
-                                headers: upstream.headers.clone(),
-                                body: body.clone(),
-                                effects: healed.clone(),
-                                upstream_request_id: upstream.upstream_request_id.clone(),
-                                headers_elapsed: upstream.headers_elapsed,
-                            });
-                            self.cleanup_failed_attempt(
-                                &published,
-                                self.retry_cleanup_data(
-                                    &identity,
-                                    upstream_protocol,
-                                    &healed,
-                                    Some(upstream.status),
-                                    upstream.upstream_request_id.clone(),
-                                    upstream.headers_elapsed,
-                                    request_bytes,
-                                    body.len(),
-                                ),
-                            )
-                            .await?;
-                            // The next attempt resolves the credential again
-                            // through the ordinary owner-scoped path, which
-                            // reads the credential the refresh committed under
-                            // the account lock.
-                            self.prepare_next(
-                                &mut attempt_number,
-                                &mut preferred_account,
-                                &mut excluded_accounts,
-                                &identity,
-                                &healed,
-                            );
-                            continue;
-                        }
-                    }
                     if first {
                         self.apply_effects(&published.claim, &effects).await;
                     }
@@ -2442,10 +2240,8 @@ impl FiniteCoordinator {
             .unwrap_or_else(|e| e.into_inner())
             .decide(observation)
             .map_err(|error| FiniteCoordinatorError::Effects(error.to_string()))?;
-        if super::oauth_401_for_account(observation, &self.providers)
-            || super::agent_401_for_account(observation, &self.providers)
-        {
-            super::terminalize_oauth_401(&mut effects);
+        if super::agent_401_for_account(observation, &self.providers) {
+            super::terminalize_agent_401(&mut effects);
         }
         Ok((effects, first))
     }
@@ -2482,9 +2278,7 @@ impl FiniteCoordinator {
     ) {
         *attempt_number = (*attempt_number).saturating_add(1);
         // The alternate-wire retry holds the account constant while the failed
-        // wire candidate is retired. The credential-refresh retry reuses that
-        // scope because it resubmits the same request with the owner's
-        // refreshed credential, so the account must stay constant too.
+        // wire candidate is retired.
         if effects.retry_scope == super::RetryScope::Wire {
             *preferred_account = Some(identity.account_name.clone());
         } else {

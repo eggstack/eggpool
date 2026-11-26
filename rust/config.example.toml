@@ -503,12 +503,6 @@ enabled = true
 ## client_ca_path = "/etc/eggpool/agent-client-ca.pem"
 ## require_client_cert = true
 
-# Infrastructure-only operator gate for per-user provider OAuth credentials.
-# Defaults to enabled. Disabling blocks OAuth login, routing, and token refresh
-# but retains stored files.
-[oauth]
-enabled = true
-
 # ─── Automatic Backups ────────────────────────────────────────────────
 # EggPool can create automatic daily backups. Archives are
 # restore-compatible .zip files stored under $XDG_BACKUP_HOME/eggpool

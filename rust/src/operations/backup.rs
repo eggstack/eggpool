@@ -6,7 +6,7 @@
 //! target path is touched.
 
 use std::{
-    collections::{BTreeMap, BTreeSet},
+    collections::BTreeSet,
     fs::{self, File, OpenOptions},
     io::{self, Read, Seek, SeekFrom, Write},
     path::{Component, Path, PathBuf},
@@ -19,23 +19,22 @@ use crate::{
     db::{Database, DatabaseError, MigrationRunner},
 };
 
-pub const BACKUP_FORMAT_VERSION: u32 = 1;
+pub const BACKUP_FORMAT_VERSION: u32 = 2;
 pub const CONFIG_BASENAME: &str = "config.toml";
 pub const ENV_BASENAME: &str = ".env";
 pub const DB_BASENAME: &str = "usage.sqlite3";
 pub const META_BASENAME: &str = "META";
-const OAUTH_DIR_BASENAME: &str = ".eggpool-oauth";
-const RESTORE_LOCK_BASENAME: &str = ".eggpool-oauth-restore.lock";
+const RESTORE_LOCK_BASENAME: &str = ".eggpool-restore.lock";
 const OAUTH_MEMBER_PREFIX: &str = ".eggpool-oauth/";
-const MAX_OAUTH_CREDENTIAL_FILES: usize = 4096;
-const MAX_OAUTH_CREDENTIAL_BYTES: u64 = 64 * 1024 * 1024;
-const MAX_OAUTH_CREDENTIAL_FILE_BYTES: u64 = 1024 * 1024;
-const MAX_ARCHIVE_MEMBERS: usize = MAX_OAUTH_CREDENTIAL_FILES + 4;
+const MAX_LEGACY_OAUTH_MEMBERS: usize = 4096;
+const MAX_LEGACY_OAUTH_BYTES: u64 = 64 * 1024 * 1024;
+const MAX_LEGACY_OAUTH_MEMBER_BYTES: u64 = 1024 * 1024;
+const MAX_ARCHIVE_MEMBERS: usize = MAX_LEGACY_OAUTH_MEMBERS + 4;
 const MAX_CONFIG_BYTES: u64 = 8 * 1024 * 1024;
 const MAX_ENV_BYTES: u64 = 8 * 1024 * 1024;
 const MAX_DATABASE_BYTES: u64 = 512 * 1024 * 1024;
 const MAX_ARCHIVE_BYTES: u64 =
-    MAX_DATABASE_BYTES + MAX_CONFIG_BYTES + MAX_ENV_BYTES + MAX_OAUTH_CREDENTIAL_BYTES + 1_048_576;
+    MAX_DATABASE_BYTES + MAX_CONFIG_BYTES + MAX_ENV_BYTES + MAX_LEGACY_OAUTH_BYTES + 1_048_576;
 const BACKUP_TIMEOUT: Duration = Duration::from_secs(60);
 static TEMP_COUNTER: AtomicU64 = AtomicU64::new(1);
 
@@ -92,6 +91,10 @@ pub struct RestoreResult {
     pub config: PathBuf,
     pub database: PathBuf,
     pub env: Option<PathBuf>,
+    /// True for v1 archives or any archive carrying ignored OAuth members.
+    pub legacy_oauth_data_omitted: bool,
+    /// True when the byte-exact restored config still contains legacy OAuth.
+    pub legacy_oauth_config_restored: bool,
 }
 
 #[derive(Debug, Clone)]
@@ -162,16 +165,10 @@ impl BackupService {
             } else {
                 None
             };
-            let oauth_files = read_oauth_credentials(&self.paths.config)?;
             let mut members = vec![CONFIG_BASENAME.to_owned(), DB_BASENAME.to_owned()];
             if env_bytes.is_some() {
                 members.push(ENV_BASENAME.to_owned());
             }
-            members.extend(
-                oauth_files
-                    .keys()
-                    .map(|name| format!("{OAUTH_MEMBER_PREFIX}{name}")),
-            );
             let created = SystemTime::now();
             let metadata = metadata_text(&self.paths, &members, &self.install_method, created);
             let archive = write_archive(
@@ -180,7 +177,6 @@ impl BackupService {
                 &config_bytes,
                 env_bytes.as_deref(),
                 &staged_db,
-                &oauth_files,
                 created,
             )?;
             Ok::<_, BackupError>((archive, members))
@@ -231,7 +227,7 @@ impl BackupService {
         archive: &Path,
         live: Option<&BackupPaths>,
     ) -> Result<PreparedRestore, BackupError> {
-        let prepared = prepare_restore(archive)?;
+        let mut prepared = prepare_restore(archive)?;
         validate_restore_targets(&prepared.targets)?;
         // Allowlist: META-nominated absolute targets must match the live
         // resolved paths. An attacker-controlled archive must not redirect
@@ -239,7 +235,8 @@ impl BackupService {
         if let Some(live) = live {
             Self::validate_restore_targets_against_live(&prepared.targets, live)?;
         }
-        validate_staged_config(&prepared.config_bytes, &prepared.targets.config)?;
+        prepared.legacy_oauth_config_restored =
+            validate_staged_config(&prepared.config_bytes, &prepared.targets.config)?;
         validate_staged_database(&prepared.database_bytes, &prepared.targets.database)?;
         Ok(prepared)
     }
@@ -285,7 +282,8 @@ struct PreparedRestore {
     config_bytes: Vec<u8>,
     database_bytes: Vec<u8>,
     env_bytes: Option<Vec<u8>>,
-    oauth_files: BTreeMap<String, Vec<u8>>,
+    legacy_oauth_data_omitted: bool,
+    legacy_oauth_config_restored: bool,
 }
 
 pub fn default_backup_dir() -> PathBuf {
@@ -351,7 +349,6 @@ fn write_archive(
     config: &[u8],
     env: Option<&[u8]>,
     database: &Path,
-    oauth_files: &BTreeMap<String, Vec<u8>>,
     created: SystemTime,
 ) -> Result<PathBuf, BackupError> {
     let stamp = backup_filename_at(created);
@@ -388,10 +385,6 @@ fn write_archive(
             writer.start_file(DB_BASENAME, options)?;
             let mut db = File::open(database)?;
             io::copy(&mut db, &mut writer)?;
-            for (name, bytes) in oauth_files {
-                writer.start_file(format!("{OAUTH_MEMBER_PREFIX}{name}"), options)?;
-                writer.write_all(bytes)?;
-            }
             let file = writer.finish()?;
             file.sync_all()?;
             match fs::hard_link(&temp, &final_path) {
@@ -418,147 +411,15 @@ fn write_archive(
     ))
 }
 
-fn read_oauth_credentials(config_path: &Path) -> Result<BTreeMap<String, Vec<u8>>, BackupError> {
-    let parent = config_path
-        .parent()
-        .ok_or_else(|| BackupError::InvalidArchive("config target has no parent".to_owned()))?;
-    let _restore_lock = acquire_oauth_restore_lock(parent)?;
-    read_oauth_credentials_locked(config_path)
-}
-
-fn read_oauth_credentials_locked(
-    config_path: &Path,
-) -> Result<BTreeMap<String, Vec<u8>>, BackupError> {
-    let root = crate::oauth::credential_root_for_config(Some(config_path));
-    reject_symlink_ancestors(&root)?;
-    crate::oauth::recover_interrupted_restore_directory_locked(&root)
-        .map_err(|_| BackupError::Source("OAuth credential restore recovery failed".to_owned()))?;
-    let directory = match fs::symlink_metadata(&root) {
-        Ok(metadata) => metadata,
-        Err(error) if error.kind() == io::ErrorKind::NotFound => return Ok(BTreeMap::new()),
-        Err(error) => return Err(error.into()),
-    };
-    verify_private_oauth_metadata(&directory, true)?;
-    let mut files = BTreeMap::new();
-    let mut total_bytes = 0_u64;
-    for entry in fs::read_dir(&root)? {
-        let entry = entry?;
-        let name = entry.file_name();
-        let Some(name) = name.to_str() else {
-            return Err(BackupError::Source(
-                "OAuth credential directory contains an invalid entry".to_owned(),
-            ));
-        };
-        let metadata = fs::symlink_metadata(entry.path())?;
-        verify_private_oauth_metadata(&metadata, false)?;
-        if name.ends_with(".lock")
-            || (name.starts_with(".oauth-")
-                && (name.ends_with(".tmp") || name.ends_with(".rollback")))
-        {
-            continue;
-        }
-        if !is_oauth_credential_filename(name) {
-            return Err(BackupError::Source(
-                "OAuth credential directory contains an unexpected entry".to_owned(),
-            ));
-        }
-        if metadata.len() > MAX_OAUTH_CREDENTIAL_FILE_BYTES {
-            return Err(BackupError::Source(
-                "OAuth credential file exceeds the backup limit".to_owned(),
-            ));
-        }
-        let bytes = stable_read(
-            &entry.path(),
-            MAX_OAUTH_CREDENTIAL_FILE_BYTES,
-            "OAuth credential",
-        )?;
-        validate_oauth_credential_archive_member(name, &bytes)
-            .map_err(|_| BackupError::Source("OAuth credential file is invalid".to_owned()))?;
-        total_bytes = total_bytes.checked_add(bytes.len() as u64).ok_or_else(|| {
-            BackupError::Source("OAuth credential backup size overflow".to_owned())
-        })?;
-        if files.len() >= MAX_OAUTH_CREDENTIAL_FILES || total_bytes > MAX_OAUTH_CREDENTIAL_BYTES {
-            return Err(BackupError::Source(
-                "OAuth credential backup exceeds its size limit".to_owned(),
-            ));
-        }
-        files.insert(name.to_owned(), bytes);
-    }
-    Ok(files)
-}
-
-#[derive(serde::Deserialize)]
-#[serde(deny_unknown_fields)]
-struct ArchivedOAuthCredential {
-    format_version: u32,
-    user_id: String,
-    provider_id: String,
-    account_name: String,
-    credentials: eggpass_auth::Credentials,
-}
-
-fn validate_oauth_credential_archive_member(name: &str, bytes: &[u8]) -> Result<(), BackupError> {
-    if !is_oauth_credential_filename(name) || bytes.len() as u64 > MAX_OAUTH_CREDENTIAL_FILE_BYTES {
-        return Err(BackupError::InvalidArchive(
-            "invalid OAuth credential member".to_owned(),
-        ));
-    }
-    let record: ArchivedOAuthCredential = serde_json::from_slice(bytes)
-        .map_err(|_| BackupError::InvalidArchive("invalid OAuth credential record".to_owned()))?;
-    let identity = crate::oauth::credential_filename(
-        &record.user_id,
-        &record.provider_id,
-        &record.account_name,
-    )
-    .ok_or_else(|| BackupError::InvalidArchive("invalid OAuth credential owner".to_owned()))?;
-    if record.format_version != 1 || identity != name || record.credentials.issuer().is_empty() {
-        return Err(BackupError::InvalidArchive(
-            "OAuth credential owner does not match its file".to_owned(),
-        ));
-    }
-    Ok(())
-}
-
-fn is_oauth_credential_filename(name: &str) -> bool {
-    name.strip_suffix(".json").is_some_and(|stem| {
-        stem.len() == 64
+fn legacy_oauth_member_filename(name: &str) -> Option<&str> {
+    let file_name = name.strip_prefix(OAUTH_MEMBER_PREFIX)?;
+    file_name.strip_suffix(".json").and_then(|stem| {
+        (stem.len() == 64
             && stem
                 .bytes()
-                .all(|byte| byte.is_ascii_digit() || (b'a'..=b'f').contains(&byte))
+                .all(|byte| byte.is_ascii_digit() || (b'a'..=b'f').contains(&byte)))
+        .then_some(file_name)
     })
-}
-
-fn oauth_member_filename(name: &str) -> Option<&str> {
-    let file_name = name.strip_prefix(OAUTH_MEMBER_PREFIX)?;
-    is_oauth_credential_filename(file_name).then_some(file_name)
-}
-
-#[cfg(unix)]
-fn verify_private_oauth_metadata(
-    metadata: &fs::Metadata,
-    directory: bool,
-) -> Result<(), BackupError> {
-    use std::os::unix::fs::{MetadataExt, PermissionsExt};
-    if (directory && !metadata.is_dir())
-        || (!directory && !metadata.is_file())
-        || metadata.uid() != nix::unistd::geteuid().as_raw()
-        || metadata.permissions().mode() & 0o077 != 0
-    {
-        return Err(BackupError::Source(
-            "OAuth credential storage is not owner-private".to_owned(),
-        ));
-    }
-    Ok(())
-}
-
-#[cfg(not(unix))]
-fn verify_private_oauth_metadata(
-    _metadata: &fs::Metadata,
-    _directory: bool,
-) -> Result<(), BackupError> {
-    Err(BackupError::Source(
-        "OAuth credential backup requires Unix permissions".to_owned(),
-    ))
 }
 
 fn prepare_restore(archive_path: &Path) -> Result<PreparedRestore, BackupError> {
@@ -575,8 +436,8 @@ fn prepare_restore(archive_path: &Path) -> Result<PreparedRestore, BackupError> 
     let mut config = None;
     let mut database = None;
     let mut env = None;
-    let mut oauth_files = BTreeMap::new();
-    let mut oauth_total_bytes = 0_u64;
+    let mut legacy_oauth_member_count = 0usize;
+    let mut legacy_oauth_total_bytes = 0_u64;
     for index in 0..archive.len() {
         let mut entry = archive.by_index(index).map_err(BackupError::Archive)?;
         if entry.is_dir() || entry.encrypted() {
@@ -585,10 +446,11 @@ fn prepare_restore(archive_path: &Path) -> Result<PreparedRestore, BackupError> 
             ));
         }
         let name = entry.name().map_err(BackupError::Archive)?.into_owned();
+        let is_legacy_oauth = legacy_oauth_member_filename(&name).is_some();
         if (!matches!(
             name.as_str(),
             META_BASENAME | CONFIG_BASENAME | ENV_BASENAME | DB_BASENAME
-        ) && oauth_member_filename(&name).is_none())
+        ) && !is_legacy_oauth)
             || !names.insert(name.clone())
         {
             return Err(BackupError::InvalidArchive(
@@ -597,10 +459,6 @@ fn prepare_restore(archive_path: &Path) -> Result<PreparedRestore, BackupError> 
         }
         if entry.unix_mode().is_some_and(|mode| {
             let file_type = mode & 0o170000;
-            // Python's stdlib zipfile leaves the Unix file-type bits unset
-            // for ordinary members.  Treat that as a regular file for the
-            // cross-implementation archive contract, while still rejecting
-            // an explicitly encoded directory/device/FIFO/socket type.
             file_type != 0 && file_type != 0o100000
         }) {
             return Err(BackupError::InvalidArchive(
@@ -612,7 +470,7 @@ fn prepare_restore(archive_path: &Path) -> Result<PreparedRestore, BackupError> 
             CONFIG_BASENAME => MAX_CONFIG_BYTES,
             ENV_BASENAME => MAX_ENV_BYTES,
             DB_BASENAME => MAX_DATABASE_BYTES,
-            _ if oauth_member_filename(&name).is_some() => MAX_OAUTH_CREDENTIAL_FILE_BYTES,
+            _ if is_legacy_oauth => MAX_LEGACY_OAUTH_MEMBER_BYTES,
             _ => 0,
         };
         if entry.size() > cap {
@@ -627,23 +485,23 @@ fn prepare_restore(archive_path: &Path) -> Result<PreparedRestore, BackupError> 
             CONFIG_BASENAME => config = Some(bytes),
             ENV_BASENAME => env = Some(bytes),
             DB_BASENAME => database = Some(bytes),
-            _ if let Some(file_name) = oauth_member_filename(&name) => {
-                validate_oauth_credential_archive_member(file_name, &bytes)?;
-                oauth_total_bytes = oauth_total_bytes
+            _ if is_legacy_oauth => {
+                legacy_oauth_member_count += 1;
+                legacy_oauth_total_bytes = legacy_oauth_total_bytes
                     .checked_add(bytes.len() as u64)
                     .ok_or_else(|| {
-                        BackupError::InvalidArchive("OAuth credential size overflow".to_owned())
+                        BackupError::InvalidArchive("legacy member size overflow".to_owned())
                     })?;
-                if oauth_total_bytes > MAX_OAUTH_CREDENTIAL_BYTES {
+                if legacy_oauth_member_count > MAX_LEGACY_OAUTH_MEMBERS
+                    || legacy_oauth_total_bytes > MAX_LEGACY_OAUTH_BYTES
+                {
                     return Err(BackupError::InvalidArchive(
-                        "OAuth credentials exceed the archive limit".to_owned(),
+                        "legacy OAuth members exceed the archive limit".to_owned(),
                     ));
                 }
-                oauth_files.insert(file_name.to_owned(), bytes);
+                // Deliberately discard legacy secret bytes; no token is parsed or restored.
             }
-            _ => {
-                return Err(BackupError::InvalidArchive("unknown member".to_owned()));
-            }
+            _ => return Err(BackupError::InvalidArchive("unknown member".to_owned())),
         }
     }
     let metadata =
@@ -652,13 +510,13 @@ fn prepare_restore(archive_path: &Path) -> Result<PreparedRestore, BackupError> 
         .map_err(|error| BackupError::InvalidArchive(format!("META is not UTF-8: {error}")))?
         .parse()
         .map_err(|error| BackupError::InvalidArchive(format!("META is not valid TOML: {error}")))?;
-    if value
+    let format_version = value
         .get("format_version")
         .and_then(toml::Value::as_integer)
-        != Some(BACKUP_FORMAT_VERSION as i64)
-    {
+        .ok_or_else(|| BackupError::InvalidArchive("unsupported format version".to_owned()))?;
+    if !matches!(format_version, 1 | 2) || (format_version == 2 && legacy_oauth_member_count > 0) {
         return Err(BackupError::InvalidArchive(
-            "unsupported format version".to_owned(),
+            "unsupported format version or member".to_owned(),
         ));
     }
     let members = value
@@ -706,7 +564,8 @@ fn prepare_restore(archive_path: &Path) -> Result<PreparedRestore, BackupError> 
         config_bytes,
         database_bytes,
         env_bytes: env,
-        oauth_files,
+        legacy_oauth_data_omitted: format_version == 1 || legacy_oauth_member_count > 0,
+        legacy_oauth_config_restored: false,
     })
 }
 
@@ -814,9 +673,9 @@ fn reject_duplicate_archive_members(archive_path: &Path) -> Result<(), BackupErr
     Ok(())
 }
 
-fn validate_staged_config(bytes: &[u8], path: &Path) -> Result<(), BackupError> {
-    Config::from_toml_bytes(path, bytes)?;
-    Ok(())
+fn validate_staged_config(bytes: &[u8], path: &Path) -> Result<bool, BackupError> {
+    let (_, legacy_surface) = Config::from_toml_bytes_allowing_legacy_oauth(path, bytes)?;
+    Ok(legacy_surface.is_some())
 }
 
 fn validate_staged_database(bytes: &[u8], path: &Path) -> Result<(), BackupError> {
@@ -915,7 +774,7 @@ fn validate_restore_lock_parent(parent: &Path) -> Result<(), BackupError> {
         || metadata.permissions().mode() & 0o022 != 0
     {
         return Err(BackupError::Source(
-            "OAuth restore lock directory is unsafe".to_owned(),
+            "restore lock directory is unsafe".to_owned(),
         ));
     }
     Ok(())
@@ -924,7 +783,7 @@ fn validate_restore_lock_parent(parent: &Path) -> Result<(), BackupError> {
 #[cfg(not(unix))]
 fn validate_restore_lock_parent(_parent: &Path) -> Result<(), BackupError> {
     Err(BackupError::Source(
-        "safe OAuth restore locking is unavailable on this platform".to_owned(),
+        "safe restore locking is unavailable on this platform".to_owned(),
     ))
 }
 
@@ -945,7 +804,7 @@ fn open_restore_lock_file(path: &Path) -> Result<File, BackupError> {
     let metadata = file.metadata()?;
     if !metadata.is_file() || metadata.uid() != nix::unistd::geteuid().as_raw() {
         return Err(BackupError::Source(
-            "OAuth restore lock file is unsafe".to_owned(),
+            "restore lock file is unsafe".to_owned(),
         ));
     }
     file.set_permissions(fs::Permissions::from_mode(0o600))?;
@@ -969,7 +828,7 @@ fn open_restore_lock_file(path: &Path) -> Result<File, BackupError> {
     let metadata = file.metadata()?;
     if !metadata.is_file() || metadata.uid() != nix::unistd::geteuid().as_raw() {
         return Err(BackupError::Source(
-            "OAuth restore lock file is unsafe".to_owned(),
+            "restore lock file is unsafe".to_owned(),
         ));
     }
     file.set_permissions(fs::Permissions::from_mode(0o600))?;
@@ -979,7 +838,7 @@ fn open_restore_lock_file(path: &Path) -> Result<File, BackupError> {
 #[cfg(not(all(unix, any(target_os = "linux", target_os = "macos"))))]
 fn open_restore_lock_file(_path: &Path) -> Result<File, BackupError> {
     Err(BackupError::Source(
-        "safe OAuth restore locking is unavailable on this platform".to_owned(),
+        "safe restore locking is unavailable on this platform".to_owned(),
     ))
 }
 
@@ -997,7 +856,7 @@ fn verify_restore_lock_file(path: &Path, file: &File) -> Result<(), BackupError>
         || opened.permissions().mode() & 0o077 != 0
     {
         return Err(BackupError::Source(
-            "OAuth restore lock file is unsafe".to_owned(),
+            "restore lock file is unsafe".to_owned(),
         ));
     }
     Ok(())
@@ -1006,11 +865,11 @@ fn verify_restore_lock_file(path: &Path, file: &File) -> Result<(), BackupError>
 #[cfg(not(unix))]
 fn verify_restore_lock_file(_path: &Path, _file: &File) -> Result<(), BackupError> {
     Err(BackupError::Source(
-        "safe OAuth restore locking is unavailable on this platform".to_owned(),
+        "safe restore locking is unavailable on this platform".to_owned(),
     ))
 }
 
-pub(crate) fn acquire_oauth_restore_lock(parent: &Path) -> Result<File, BackupError> {
+pub(crate) fn acquire_restore_lock_parent(parent: &Path) -> Result<File, BackupError> {
     reject_symlink_ancestors(parent)?;
     fs::create_dir_all(parent)?;
     reject_symlink_ancestors(parent)?;
@@ -1029,7 +888,7 @@ fn acquire_restore_lock(config_target: &Path) -> Result<File, BackupError> {
     let parent = config_target
         .parent()
         .ok_or_else(|| BackupError::InvalidArchive("config target has no parent".to_owned()))?;
-    acquire_oauth_restore_lock(parent)
+    acquire_restore_lock_parent(parent)
 }
 
 fn atomic_restore(prepared: PreparedRestore) -> Result<RestoreResult, BackupError> {
@@ -1047,11 +906,10 @@ fn atomic_restore_with_hooks(
     atomic_restore_locked(prepared)
 }
 
-fn atomic_restore_locked(prepared: PreparedRestore) -> Result<RestoreResult, BackupError> {
+fn atomic_restore_locked(mut prepared: PreparedRestore) -> Result<RestoreResult, BackupError> {
     let targets = &prepared.targets;
-    // Validate staged bytes BEFORE touching any live target. `validated_archive`
-    // already validated, but `atomic_restore` must stay safe on its own.
-    validate_staged_config(&prepared.config_bytes, &targets.config)?;
+    prepared.legacy_oauth_config_restored =
+        validate_staged_config(&prepared.config_bytes, &targets.config)?;
     validate_staged_database(&prepared.database_bytes, &targets.database)?;
     let root = targets
         .database
@@ -1060,11 +918,6 @@ fn atomic_restore_locked(prepared: PreparedRestore) -> Result<RestoreResult, Bac
     fs::create_dir_all(root)?;
     set_private_dir(root)?;
     let safety = private_staging_dir(root, "restore")?;
-    let oauth_dir = targets
-        .config
-        .parent()
-        .ok_or_else(|| BackupError::InvalidArchive("config target has no parent".to_owned()))?
-        .join(OAUTH_DIR_BASENAME);
     let files = [
         Some(&targets.config),
         targets.env.as_ref(),
@@ -1080,7 +933,6 @@ fn atomic_restore_locked(prepared: PreparedRestore) -> Result<RestoreResult, Bac
             originals.push((target.clone(), None));
         }
     }
-    let oauth_rollback = replace_oauth_directory_locked(&oauth_dir, &prepared.oauth_files)?;
     let result = (|| {
         write_atomic(&targets.config, &prepared.config_bytes, 0o600)?;
         if let (Some(target), Some(bytes)) = (&targets.env, &prepared.env_bytes) {
@@ -1090,228 +942,37 @@ fn atomic_restore_locked(prepared: PreparedRestore) -> Result<RestoreResult, Bac
         Ok(())
     })();
     if result.is_err() {
-        // Rollback by atomic rename (temp in target parent + rename), not
-        // non-atomic `fs::copy`, to avoid torn state on failure.
-        let rollback = (|| {
-            restore_oauth_directory_locked(&oauth_dir, oauth_rollback.as_deref())?;
-            originals.iter().try_for_each(|(target, saved)| {
-                match saved {
-                    Some(saved) => {
-                        let bytes = fs::read(saved)?;
-                        write_atomic(target, &bytes, 0o600)?;
-                        set_private_file(target)?;
-                    }
-                    None => {
-                        let _ = fs::remove_file(target);
-                    }
+        let rollback = originals.iter().try_for_each(|(target, saved)| {
+            match saved {
+                Some(saved) => {
+                    let bytes = fs::read(saved)?;
+                    write_atomic(target, &bytes, 0o600)?;
+                    set_private_file(target)?;
                 }
-                Ok::<_, BackupError>(())
-            })
-        })();
+                None => {
+                    let _ = fs::remove_file(target);
+                }
+            }
+            Ok::<_, BackupError>(())
+        });
         if rollback.is_err() {
             return Err(BackupError::RestoreRollback);
         }
         let _ = fs::remove_dir_all(&safety);
         let Err(error) = result else {
-            // Checked `is_err` above; an `Ok` here would mean the guard was
-            // removed. The restore already succeeded, so there is no error to
-            // return — surface the rollback-path bug without panicking.
             debug_assert!(false, "restore result was checked as an error");
             return Err(BackupError::RestoreRollback);
         };
         return Err(error);
-    }
-    if let Some(previous) = oauth_rollback {
-        if fs::remove_dir_all(previous).is_err() {
-            tracing::warn!("could not remove prior OAuth credential directory after restore");
-        } else if fsync_parent_dir(oauth_dir.parent().unwrap_or(root)).is_err() {
-            // The replacement was already directory-synced before this cleanup.
-            // Cleanup failure does not undo the committed restore.
-            tracing::warn!("could not sync OAuth credential cleanup after restore");
-        }
     }
     fs::remove_dir_all(&safety)?;
     Ok(RestoreResult {
         config: targets.config.clone(),
         database: targets.database.clone(),
         env: targets.env.clone(),
+        legacy_oauth_data_omitted: prepared.legacy_oauth_data_omitted,
+        legacy_oauth_config_restored: prepared.legacy_oauth_config_restored,
     })
-}
-
-fn reject_unresolved_oauth_restore_rollbacks(target: &Path) -> Result<(), BackupError> {
-    let parent = target.parent().ok_or_else(|| {
-        BackupError::InvalidArchive("OAuth restore target has no parent".to_owned())
-    })?;
-    let target_name = target
-        .file_name()
-        .and_then(|name| name.to_str())
-        .ok_or_else(|| {
-            BackupError::InvalidArchive("OAuth restore target name is invalid".to_owned())
-        })?;
-    let prefix = format!("{target_name}-restore-old-");
-    for entry in fs::read_dir(parent)? {
-        let entry = entry?;
-        if entry
-            .file_name()
-            .to_str()
-            .is_some_and(|name| name.starts_with(&prefix))
-        {
-            return Err(BackupError::Source(
-                "OAuth restore has unresolved prior rollback state".to_owned(),
-            ));
-        }
-    }
-    Ok(())
-}
-
-#[cfg(test)]
-fn replace_oauth_directory(
-    target: &Path,
-    files: &BTreeMap<String, Vec<u8>>,
-) -> Result<Option<PathBuf>, BackupError> {
-    let parent = target.parent().ok_or_else(|| {
-        BackupError::InvalidArchive("OAuth restore target has no parent".to_owned())
-    })?;
-    let _restore_lock = acquire_oauth_restore_lock(parent)?;
-    replace_oauth_directory_locked(target, files)
-}
-
-fn replace_oauth_directory_locked(
-    target: &Path,
-    files: &BTreeMap<String, Vec<u8>>,
-) -> Result<Option<PathBuf>, BackupError> {
-    replace_oauth_directory_locked_with_hook(target, files, || Ok(()))
-}
-
-fn replace_oauth_directory_locked_with_hook(
-    target: &Path,
-    files: &BTreeMap<String, Vec<u8>>,
-    before_publish: impl FnOnce() -> io::Result<()>,
-) -> Result<Option<PathBuf>, BackupError> {
-    let parent = target.parent().ok_or_else(|| {
-        BackupError::InvalidArchive("OAuth restore target has no parent".to_owned())
-    })?;
-    fs::create_dir_all(parent)?;
-    reject_symlink_ancestors(target)?;
-    crate::oauth::recover_interrupted_restore_directory_locked(target)
-        .map_err(|_| BackupError::RestoreRollback)?;
-    reject_unresolved_oauth_restore_rollbacks(target)?;
-    let staging = if files.is_empty() {
-        None
-    } else {
-        let staging = private_staging_dir(parent, "oauth-restore")?;
-        for (name, bytes) in files {
-            validate_oauth_credential_archive_member(name, bytes)?;
-            write_atomic(&staging.join(name), bytes, 0o600)?;
-        }
-        Some(staging)
-    };
-    let previous = match fs::symlink_metadata(target) {
-        Ok(metadata) => {
-            if let Err(error) = verify_private_oauth_metadata(&metadata, true) {
-                if let Some(staging) = &staging {
-                    let _ = fs::remove_dir_all(staging);
-                }
-                return Err(error);
-            }
-            let mut candidate = None;
-            for _ in 0..32 {
-                let path = parent.join(format!(
-                    ".eggpool-oauth-restore-old-{}-{}",
-                    std::process::id(),
-                    TEMP_COUNTER.fetch_add(1, Ordering::Relaxed)
-                ));
-                if fs::symlink_metadata(&path)
-                    .is_err_and(|error| error.kind() == io::ErrorKind::NotFound)
-                {
-                    candidate = Some(path);
-                    break;
-                }
-            }
-            let Some(backup) = candidate else {
-                if let Some(staging) = &staging {
-                    let _ = fs::remove_dir_all(staging);
-                }
-                return Err(BackupError::Source(
-                    "could not allocate OAuth restore rollback path".to_owned(),
-                ));
-            };
-            // Keep this prefix stable: OAuth startup and backup reads recover
-            // this directory if a crash occurs before staging is published.
-            if let Err(error) = fs::rename(target, &backup) {
-                if let Some(staging) = &staging {
-                    let _ = fs::remove_dir_all(staging);
-                }
-                return Err(error.into());
-            }
-            Some(backup)
-        }
-        Err(error) if error.kind() == io::ErrorKind::NotFound => None,
-        Err(error) => return Err(error.into()),
-    };
-    let publish = (|| {
-        before_publish()?;
-        if let Some(staging) = &staging {
-            fs::rename(staging, target)?;
-        }
-        fsync_parent_dir(parent)
-    })();
-    if let Err(error) = publish {
-        let rollback = (|| {
-            remove_oauth_directory_if_present(target)?;
-            if let Some(previous) = &previous {
-                fs::rename(previous, target)?;
-            }
-            if let Some(staging) = &staging {
-                let _ = fs::remove_dir_all(staging);
-            }
-            fsync_parent_dir(parent)
-        })();
-        if rollback.is_err() {
-            return Err(BackupError::RestoreRollback);
-        }
-        return Err(error);
-    }
-    Ok(previous)
-}
-
-#[cfg(test)]
-fn restore_oauth_directory(target: &Path, previous: Option<&Path>) -> Result<(), BackupError> {
-    let parent = target.parent().ok_or_else(|| {
-        BackupError::InvalidArchive("OAuth restore target has no parent".to_owned())
-    })?;
-    let _restore_lock = acquire_oauth_restore_lock(parent)?;
-    restore_oauth_directory_locked(target, previous)
-}
-
-fn restore_oauth_directory_locked(
-    target: &Path,
-    previous: Option<&Path>,
-) -> Result<(), BackupError> {
-    remove_oauth_directory_if_present(target)?;
-    if let Some(previous) = previous {
-        fs::rename(previous, target)?;
-    }
-    if let Some(parent) = target.parent() {
-        fsync_parent_dir(parent)?;
-    }
-    Ok(())
-}
-
-fn remove_oauth_directory_if_present(target: &Path) -> Result<(), BackupError> {
-    match fs::symlink_metadata(target) {
-        Ok(metadata) => {
-            if metadata.file_type().is_symlink() || !metadata.is_dir() {
-                return Err(BackupError::Source(
-                    "OAuth restore target is not a directory".to_owned(),
-                ));
-            }
-            fs::remove_dir_all(target)?;
-        }
-        Err(error) if error.kind() == io::ErrorKind::NotFound => {}
-        Err(error) => return Err(error.into()),
-    }
-    Ok(())
 }
 
 async fn validate_sqlite_snapshot(path: &Path) -> Result<(), BackupError> {
@@ -1693,7 +1354,7 @@ mod tests {
     impl TestDirectory {
         fn new() -> Self {
             let path = std::env::temp_dir().join(format!(
-                "eggpool-backup-oauth-{}-{}",
+                "eggpool-backup-{}-{}",
                 std::process::id(),
                 TEMP_COUNTER.fetch_add(1, Ordering::Relaxed)
             ));
@@ -1735,61 +1396,20 @@ mod tests {
         bytes
     }
 
-    fn credential_record(user_id: &str, account_name: &str) -> (String, Vec<u8>) {
-        let name = crate::oauth::credential_filename(user_id, "xai", account_name).unwrap();
-        let bytes = serde_json::to_vec(&serde_json::json!({
-            "format_version": 1,
-            "user_id": user_id,
-            "provider_id": "xai",
-            "account_name": account_name,
-            "credentials": {
-                "access_token": "access-secret",
-                "refresh_token": "refresh-secret",
-                "id_token": "id-secret",
-                "token_type": "Bearer",
-                "scope": "openid offline_access",
-                "client_id": "test-client",
-                "issuer": "https://auth.x.ai",
-                "expires_at": 4102444800_i64,
-                "obtained_at": 1_i64
-            }
-        }))
-        .unwrap();
-        (name, bytes)
-    }
-
     #[test]
-    fn oauth_credentials_are_backed_up_and_owner_binding_is_validated() {
+    fn v2_archives_exclude_legacy_oauth_members() {
         let directory = TestDirectory::new();
         let config = directory.path().join(CONFIG_BASENAME);
         let database = directory.path().join(DB_BASENAME);
         fs::write(&config, b"config").unwrap();
         fs::write(&database, b"database").unwrap();
-        let oauth_dir = directory.path().join(OAUTH_DIR_BASENAME);
-        fs::create_dir(&oauth_dir).unwrap();
-        set_private_dir(&oauth_dir).unwrap();
-        let (name, bytes) = credential_record("user-a", "account-a");
-        let credential_path = oauth_dir.join(&name);
-        fs::write(&credential_path, &bytes).unwrap();
-        set_private_file(&credential_path).unwrap();
-
-        let collected = read_oauth_credentials(&config).unwrap();
-        assert_eq!(collected.get(&name), Some(&bytes));
-        assert!(validate_oauth_credential_archive_member(&name, &bytes).is_ok());
-        let (other_name, _) = credential_record("user-b", "account-a");
-        assert!(validate_oauth_credential_archive_member(&other_name, &bytes).is_err());
-
         let paths = BackupPaths {
-            config: config.clone(),
+            config,
             database: database.clone(),
             env: None,
             output_dir: directory.path().to_owned(),
         };
-        let members = vec![
-            CONFIG_BASENAME.to_owned(),
-            DB_BASENAME.to_owned(),
-            format!("{OAUTH_MEMBER_PREFIX}{name}"),
-        ];
+        let members = vec![CONFIG_BASENAME.to_owned(), DB_BASENAME.to_owned()];
         let metadata = metadata_text(&paths, &members, "test", UNIX_EPOCH);
         let archive = write_archive(
             directory.path(),
@@ -1797,72 +1417,163 @@ mod tests {
             b"config",
             None,
             &database,
-            &collected,
             UNIX_EPOCH,
         )
         .unwrap();
-        let prepared = prepare_restore(&archive).unwrap();
-        assert_eq!(prepared.oauth_files, collected);
-    }
-
-    #[test]
-    fn restoring_legacy_or_replaced_oauth_files_never_keeps_stale_credentials() {
-        let directory = TestDirectory::new();
-        let target = directory.path().join(OAUTH_DIR_BASENAME);
-        fs::create_dir(&target).unwrap();
-        set_private_dir(&target).unwrap();
-        let (stale_name, stale_bytes) = credential_record("old-user", "account-a");
-        let stale_path = target.join(&stale_name);
-        fs::write(&stale_path, &stale_bytes).unwrap();
-        set_private_file(&stale_path).unwrap();
-
-        let (new_name, new_bytes) = credential_record("new-user", "account-a");
-        let replacement = BTreeMap::from([(new_name.clone(), new_bytes.clone())]);
-        let previous = replace_oauth_directory(&target, &replacement).unwrap();
-        assert!(!target.join(&stale_name).exists());
-        assert_eq!(fs::read(target.join(&new_name)).unwrap(), new_bytes);
-        assert!(previous.as_ref().is_some_and(|path| path.exists()));
-
-        restore_oauth_directory(&target, previous.as_deref()).unwrap();
-        assert!(target.join(&stale_name).exists());
-        assert!(!target.join(&new_name).exists());
-
-        let previous = replace_oauth_directory(&target, &BTreeMap::new()).unwrap();
-        assert!(
-            !target.exists(),
-            "a legacy backup clears newer OAuth credentials"
+        let file = File::open(&archive).unwrap();
+        let mut zip = zip::ZipArchive::new(file).unwrap();
+        let names = (0..zip.len())
+            .map(|index| zip.by_index(index).unwrap().name().unwrap().into_owned())
+            .collect::<BTreeSet<_>>();
+        assert_eq!(
+            names,
+            BTreeSet::from([
+                META_BASENAME.to_owned(),
+                CONFIG_BASENAME.to_owned(),
+                DB_BASENAME.to_owned(),
+            ])
         );
-        restore_oauth_directory(&target, previous.as_deref()).unwrap();
-        assert!(target.join(&stale_name).exists());
+        let prepared = prepare_restore(&archive).unwrap();
+        assert!(!prepared.legacy_oauth_data_omitted);
     }
 
     #[test]
-    fn restore_refuses_to_create_a_second_rollback_beside_an_unresolved_one() {
+    fn v1_oauth_members_are_ignored_and_live_credential_directory_is_preserved() {
         let directory = TestDirectory::new();
-        let target = directory.path().join(OAUTH_DIR_BASENAME);
-        fs::create_dir(&target).unwrap();
-        set_private_dir(&target).unwrap();
-        let (current_name, current_bytes) = credential_record("current-user", "account-a");
-        let current = target.join(&current_name);
-        fs::write(&current, &current_bytes).unwrap();
-        set_private_file(&current).unwrap();
+        let config = directory.path().join(CONFIG_BASENAME);
+        let database = directory.path().join(DB_BASENAME);
+        let mut config_bytes = restore_config_bytes("127.0.0.2");
+        config_bytes.extend_from_slice(b"\n[oauth]\nclient_id = \"legacy-client\"\n");
+        let database_bytes = restore_database_bytes(directory.path(), "legacy");
+        fs::write(&config, &config_bytes).unwrap();
+        fs::write(&database, &database_bytes).unwrap();
 
-        let unresolved = directory.path().join(".eggpool-oauth-restore-old-123-1");
-        fs::create_dir(&unresolved).unwrap();
-        set_private_dir(&unresolved).unwrap();
-        let (old_name, old_bytes) = credential_record("old-user", "account-a");
-        let old = unresolved.join(&old_name);
-        fs::write(&old, &old_bytes).unwrap();
-        set_private_file(&old).unwrap();
+        let oauth_directory = directory.path().join(".eggpool-oauth");
+        fs::create_dir(&oauth_directory).unwrap();
+        let live_credential = oauth_directory.join(format!("{}.json", "a".repeat(64)));
+        fs::write(&live_credential, b"live credential must remain untouched").unwrap();
 
-        let (new_name, new_bytes) = credential_record("new-user", "account-a");
-        let result =
-            replace_oauth_directory(&target, &BTreeMap::from([(new_name.clone(), new_bytes)]));
+        let legacy_member = format!("{OAUTH_MEMBER_PREFIX}{}.json", "b".repeat(64));
+        let metadata = format!(
+            "format_version = 1\ncreated_at = {:?}\ninstall_method = {:?}\nconfig_path = {:?}\ndb_path = {:?}\nmembers = [{:?}, {:?}, {:?}]\n",
+            iso_timestamp(UNIX_EPOCH),
+            "test",
+            config.display().to_string(),
+            database.display().to_string(),
+            CONFIG_BASENAME,
+            DB_BASENAME,
+            legacy_member,
+        );
+        let archive_path = directory.path().join("legacy.zip");
+        let file = File::create(&archive_path).unwrap();
+        let mut writer = zip::ZipWriter::new(file);
+        let options = zip::write::SimpleFileOptions::default()
+            .compression_method(zip::CompressionMethod::Stored)
+            .unix_permissions(0o600);
+        writer.start_file(META_BASENAME, options).unwrap();
+        writer.write_all(metadata.as_bytes()).unwrap();
+        writer.start_file(CONFIG_BASENAME, options).unwrap();
+        writer.write_all(&config_bytes).unwrap();
+        writer.start_file(DB_BASENAME, options).unwrap();
+        writer.write_all(&database_bytes).unwrap();
+        writer.start_file(&legacy_member, options).unwrap();
+        writer
+            .write_all(b"legacy access/refresh token bytes")
+            .unwrap();
+        writer.finish().unwrap();
 
-        assert!(matches!(result, Err(BackupError::Source(_))));
-        assert_eq!(fs::read(target.join(current_name)).unwrap(), current_bytes);
-        assert!(unresolved.join(old_name).exists());
-        assert!(!target.join(new_name).exists());
+        let prepared = prepare_restore(&archive_path).unwrap();
+        assert!(prepared.legacy_oauth_data_omitted);
+        let result = atomic_restore(prepared).unwrap();
+        assert!(result.legacy_oauth_data_omitted);
+        assert!(result.legacy_oauth_config_restored);
+        let restored_config = fs::read(&config).unwrap();
+        assert_eq!(restored_config, config_bytes);
+        let live_error = Config::from_toml_bytes(&config, &restored_config)
+            .expect_err("live config loading must remain fail-closed after restore");
+        assert!(matches!(
+            &live_error,
+            crate::config::ConfigError::LegacyOAuth { surface } if *surface == "[oauth]"
+        ));
+        assert!(
+            live_error
+                .to_string()
+                .contains("eggpool accounts migrate-oauth")
+        );
+        assert_eq!(
+            fs::read(&live_credential).unwrap(),
+            b"live credential must remain untouched"
+        );
+        let archived_credential = oauth_directory.join(format!("{}.json", "b".repeat(64)));
+        assert!(
+            !archived_credential.exists(),
+            "archive OAuth member was extracted"
+        );
+        let credential_names = fs::read_dir(&oauth_directory)
+            .unwrap()
+            .map(|entry| entry.unwrap().file_name().to_string_lossy().into_owned())
+            .collect::<BTreeSet<_>>();
+        assert_eq!(
+            credential_names,
+            BTreeSet::from([format!("{}.json", "a".repeat(64))])
+        );
+        let member_bytes = b"legacy access/refresh token bytes";
+        for path in [&config, &database, &live_credential] {
+            let bytes = fs::read(path).unwrap();
+            assert!(
+                !bytes
+                    .windows(member_bytes.len())
+                    .any(|window| window == member_bytes)
+            );
+        }
+    }
+
+    #[test]
+    fn v1_archive_without_oauth_member_preserves_live_credential_directory() {
+        let directory = TestDirectory::new();
+        let config = directory.path().join(CONFIG_BASENAME);
+        let database = directory.path().join(DB_BASENAME);
+        let config_bytes = restore_config_bytes("127.0.0.3");
+        let database_bytes = restore_database_bytes(directory.path(), "legacy-without-oauth");
+        fs::write(&config, &config_bytes).unwrap();
+        fs::write(&database, &database_bytes).unwrap();
+
+        let oauth_directory = directory.path().join(".eggpool-oauth");
+        fs::create_dir(&oauth_directory).unwrap();
+        let live_credential = oauth_directory.join(format!("{}.json", "d".repeat(64)));
+        fs::write(&live_credential, b"preserve on omitted archive member").unwrap();
+
+        let metadata = format!(
+            "format_version = 1\ncreated_at = {:?}\ninstall_method = {:?}\nconfig_path = {:?}\ndb_path = {:?}\nmembers = [{:?}, {:?}]\n",
+            iso_timestamp(UNIX_EPOCH),
+            "test",
+            config.display().to_string(),
+            database.display().to_string(),
+            CONFIG_BASENAME,
+            DB_BASENAME,
+        );
+        let archive_path = directory.path().join("legacy-without-oauth.zip");
+        let file = File::create(&archive_path).unwrap();
+        let mut writer = zip::ZipWriter::new(file);
+        let options = zip::write::SimpleFileOptions::default()
+            .compression_method(zip::CompressionMethod::Stored)
+            .unix_permissions(0o600);
+        writer.start_file(META_BASENAME, options).unwrap();
+        writer.write_all(metadata.as_bytes()).unwrap();
+        writer.start_file(CONFIG_BASENAME, options).unwrap();
+        writer.write_all(&config_bytes).unwrap();
+        writer.start_file(DB_BASENAME, options).unwrap();
+        writer.write_all(&database_bytes).unwrap();
+        writer.finish().unwrap();
+
+        let prepared = prepare_restore(&archive_path).unwrap();
+        assert!(prepared.legacy_oauth_data_omitted);
+        let result = atomic_restore(prepared).unwrap();
+        assert!(result.legacy_oauth_data_omitted);
+        assert_eq!(
+            fs::read(live_credential).unwrap(),
+            b"preserve on omitted archive member"
+        );
     }
 
     #[test]
@@ -1874,16 +1585,13 @@ mod tests {
         let config = directory.path().join(CONFIG_BASENAME);
         let database = directory.path().join(DB_BASENAME);
         let env = directory.path().join(ENV_BASENAME);
-        let oauth_dir = directory.path().join(OAUTH_DIR_BASENAME);
+        let oauth_directory = directory.path().join(".eggpool-oauth");
         fs::write(&config, b"original config").unwrap();
         fs::write(&database, b"original database").unwrap();
         fs::write(&env, b"ORIGINAL=1\n").unwrap();
-        fs::create_dir(&oauth_dir).unwrap();
-        set_private_dir(&oauth_dir).unwrap();
-        let (old_name, old_bytes) = credential_record("original-user", "account-a");
-        let old_path = oauth_dir.join(old_name);
-        fs::write(&old_path, old_bytes).unwrap();
-        set_private_file(&old_path).unwrap();
+        fs::create_dir(&oauth_directory).unwrap();
+        let live_credential = oauth_directory.join(format!("{}.json", "c".repeat(64)));
+        fs::write(&live_credential, b"preserved across restore").unwrap();
 
         let targets = RestoreTargets {
             config: config.clone(),
@@ -1893,30 +1601,27 @@ mod tests {
         let config_a = restore_config_bytes("127.0.0.2");
         let database_a = restore_database_bytes(directory.path(), "a");
         let env_a = b"RESTORE=A\n".to_vec();
-        let (oauth_a_name, oauth_a) = credential_record("restore-a", "account-a");
         let prepared_a = PreparedRestore {
             targets: targets.clone(),
             config_bytes: config_a.clone(),
             database_bytes: database_a.clone(),
             env_bytes: Some(env_a.clone()),
-            oauth_files: BTreeMap::from([(oauth_a_name.clone(), oauth_a.clone())]),
+            legacy_oauth_data_omitted: false,
+            legacy_oauth_config_restored: false,
         };
-
         let config_b = restore_config_bytes("127.0.0.3");
         let database_b = restore_database_bytes(directory.path(), "b");
         let env_b = b"RESTORE=B\n".to_vec();
-        let (oauth_b_name, oauth_b) = credential_record("restore-b", "account-a");
         let prepared_b = PreparedRestore {
             targets,
             config_bytes: config_b.clone(),
             database_bytes: database_b.clone(),
             env_bytes: Some(env_b.clone()),
-            oauth_files: BTreeMap::from([(oauth_b_name.clone(), oauth_b.clone())]),
+            legacy_oauth_data_omitted: false,
+            legacy_oauth_config_restored: false,
         };
-
         let lock_path = restore_lock_path(&config).unwrap();
         assert_eq!(lock_path, directory.path().join(RESTORE_LOCK_BASENAME));
-        assert_ne!(lock_path, oauth_dir);
 
         let (first_locked_tx, first_locked_rx) = mpsc::sync_channel(0);
         let (release_first_tx, release_first_rx) = mpsc::sync_channel(0);
@@ -1942,8 +1647,7 @@ mod tests {
         let contender_config = config.clone();
         let contender_database = database.clone();
         let contender_env = env.clone();
-        let contender_oauth_dir = oauth_dir.clone();
-        let observed_oauth_a_name = oauth_a_name.clone();
+        let contender_credential = live_credential.clone();
         let contender = thread::spawn(move || {
             atomic_restore_with_hooks(
                 prepared_b,
@@ -1953,10 +1657,8 @@ mod tests {
                         .write(true)
                         .open(contender_lock_path)
                         .unwrap();
-                    let busy = match lock_file.try_lock() {
-                        Err(std::fs::TryLockError::WouldBlock) => true,
-                        Err(std::fs::TryLockError::Error(_)) | Ok(()) => false,
-                    };
+                    let busy =
+                        matches!(lock_file.try_lock(), Err(std::fs::TryLockError::WouldBlock));
                     contender_busy_tx.send(busy).unwrap();
                 },
                 move || {
@@ -1964,7 +1666,7 @@ mod tests {
                         fs::read(contender_config).unwrap(),
                         fs::read(contender_database).unwrap(),
                         fs::read(contender_env).unwrap(),
-                        fs::read(contender_oauth_dir.join(observed_oauth_a_name)).unwrap(),
+                        fs::read(contender_credential).unwrap(),
                     );
                     first_state_tx.send(state).unwrap();
                 },
@@ -1981,12 +1683,22 @@ mod tests {
         assert!(first.join().unwrap().is_ok());
         assert!(contender.join().unwrap().is_ok());
         assert!(contender_was_blocked, "the OS lock must be exclusive");
-        assert_eq!(observed_first_state, (config_a, database_a, env_a, oauth_a));
+        assert_eq!(
+            observed_first_state,
+            (
+                config_a,
+                database_a,
+                env_a,
+                b"preserved across restore".to_vec()
+            )
+        );
         assert_eq!(fs::read(&config).unwrap(), config_b);
         assert_eq!(fs::read(&database).unwrap(), database_b);
         assert_eq!(fs::read(&env).unwrap(), env_b);
-        assert_eq!(fs::read(oauth_dir.join(&oauth_b_name)).unwrap(), oauth_b);
-        assert!(!oauth_dir.join(oauth_a_name).exists());
+        assert_eq!(
+            fs::read(&live_credential).unwrap(),
+            b"preserved across restore"
+        );
         assert!(lock_path.is_file(), "the stable lock file is retained");
         #[cfg(unix)]
         {
@@ -1996,115 +1708,6 @@ mod tests {
                 0o600
             );
         }
-    }
-
-    #[test]
-    fn backup_recovers_an_interrupted_oauth_restore_before_collecting_files() {
-        let directory = TestDirectory::new();
-        let config = directory.path().join("config.toml");
-        let root = crate::oauth::credential_root_for_config(Some(&config));
-        let rollback = directory.path().join(".eggpool-oauth-restore-old-123-1");
-        fs::create_dir(&rollback).unwrap();
-        set_private_dir(&rollback).unwrap();
-        let (name, bytes) = credential_record("recovered-user", "account-a");
-        let previous = rollback.join(&name);
-        fs::write(&previous, &bytes).unwrap();
-        set_private_file(&previous).unwrap();
-
-        let recovered = read_oauth_credentials(&config).unwrap();
-
-        assert_eq!(recovered, BTreeMap::from([(name.clone(), bytes.clone())]));
-        assert_eq!(fs::read(root.join(name)).unwrap(), bytes);
-        assert!(!rollback.exists());
-    }
-
-    #[test]
-    fn oauth_backup_read_waits_until_restore_rollback_finishes() {
-        use std::{sync::mpsc, thread};
-
-        let directory = TestDirectory::new();
-        let config = directory.path().join(CONFIG_BASENAME);
-        let root = crate::oauth::credential_root_for_config(Some(&config));
-        fs::create_dir(&root).unwrap();
-        set_private_dir(&root).unwrap();
-        let (old_name, old_bytes) = credential_record("original-user", "account-a");
-        let old_path = root.join(&old_name);
-        fs::write(&old_path, &old_bytes).unwrap();
-        set_private_file(&old_path).unwrap();
-        let (new_name, new_bytes) = credential_record("replacement-user", "account-a");
-        let replacement = BTreeMap::from([(new_name.clone(), new_bytes)]);
-
-        let restore_parent = directory.path().to_owned();
-        let restore_root = root.clone();
-        let (rollback_window_tx, rollback_window_rx) = mpsc::sync_channel(0);
-        let (continue_rollback_tx, continue_rollback_rx) = mpsc::sync_channel(0);
-        let restore = thread::spawn(move || {
-            let _restore_lock = acquire_oauth_restore_lock(&restore_parent).unwrap();
-            replace_oauth_directory_locked_with_hook(&restore_root, &replacement, || {
-                rollback_window_tx.send(()).unwrap();
-                continue_rollback_rx
-                    .recv_timeout(Duration::from_secs(10))
-                    .expect("continue restore rollback");
-                Err(io::Error::other("injected OAuth publish failure"))
-            })
-        });
-        rollback_window_rx
-            .recv_timeout(Duration::from_secs(10))
-            .expect("restore paused after moving the prior OAuth root");
-        assert!(!root.exists(), "the restore rollback window is open");
-
-        let contender_config = config.clone();
-        let lock_path = directory.path().join(RESTORE_LOCK_BASENAME);
-        let (reader_started_tx, reader_started_rx) = mpsc::sync_channel(0);
-        let (read_result_tx, read_result_rx) = mpsc::sync_channel(0);
-        let reader = thread::spawn(move || {
-            let probe = OpenOptions::new()
-                .read(true)
-                .write(true)
-                .open(lock_path)
-                .unwrap();
-            let restore_lock_is_held =
-                matches!(probe.try_lock(), Err(std::fs::TryLockError::WouldBlock));
-            reader_started_tx.send(restore_lock_is_held).unwrap();
-            let result = read_oauth_credentials(&contender_config);
-            read_result_tx.send(result).unwrap();
-        });
-        assert!(
-            reader_started_rx
-                .recv_timeout(Duration::from_secs(10))
-                .expect("reader probes the restore lock during the rename gap"),
-            "the restore transaction must hold the stable sibling lock"
-        );
-        assert!(
-            matches!(
-                read_result_rx.recv_timeout(Duration::from_secs(1)),
-                Err(mpsc::RecvTimeoutError::Timeout)
-            ),
-            "credential recovery/read must wait for restore rollback"
-        );
-
-        continue_rollback_tx.send(()).unwrap();
-        assert!(matches!(restore.join().unwrap(), Err(BackupError::Io(_))));
-        let snapshot = read_result_rx
-            .recv_timeout(Duration::from_secs(10))
-            .expect("OAuth read continues after rollback")
-            .unwrap();
-        reader.join().unwrap();
-
-        assert_eq!(
-            snapshot,
-            BTreeMap::from([(old_name.clone(), old_bytes.clone())])
-        );
-        assert_eq!(fs::read(root.join(old_name)).unwrap(), old_bytes);
-        assert!(!root.join(new_name).exists());
-        assert!(
-            fs::read_dir(directory.path()).unwrap().all(|entry| !entry
-                .unwrap()
-                .file_name()
-                .to_string_lossy()
-                .starts_with(".eggpool-oauth-restore-old-")),
-            "rollback restores the original directory rather than losing it"
-        );
     }
 
     #[test]

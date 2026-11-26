@@ -439,13 +439,6 @@ impl ProviderHttpClient {
     pub fn base_url(&self) -> &Uri {
         &self.base_url
     }
-
-    /// Clone the same account-scoped Eggfetch client for OAuth exchanges.
-    /// OAuth therefore reuses this account's proxy and transport pool instead
-    /// of constructing a second outbound transport stack.
-    pub(crate) fn oauth_eggfetch_client(&self) -> eggfetch_core::Client {
-        self.client.clone()
-    }
 }
 
 /// One Eggress-owned byte stream adapted to Eggfetch's dialer contract.

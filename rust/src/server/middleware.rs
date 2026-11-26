@@ -184,8 +184,7 @@ pub(super) async fn authenticate(
     );
     let account_surface = account_surface
         || path.starts_with("/account/tokens")
-        || personal_upstream_member_path(&path)
-        || path.starts_with("/api/user/oauth/xai/");
+        || personal_upstream_member_path(&path);
     if principal.role != "admin" && !account_surface {
         // A member is refused an administrative path with a page that names
         // the refusal and points at the member surface the member does have,
@@ -273,8 +272,6 @@ fn personal_credential_allowed(path: &str) -> bool {
     (path.starts_with("/v1/") && path != "/v1/healthz" && path != "/v1/readyz")
         || path == "/api/integrations/v1/profile"
         || path == "/api/user-budget"
-        || path == "/api/user/oauth-credentials"
-        || path == "/api/user/oauth-credentials/hint"
 }
 
 fn requires_browser_session(path: &str) -> bool {
@@ -291,7 +288,6 @@ fn requires_browser_session(path: &str) -> bool {
             | "/profiles"
     ) || path.starts_with("/account/tokens")
         || personal_upstream_member_path(path)
-        || path.starts_with("/api/user/oauth/xai/")
         || path.starts_with("/admin/")
         || path == "/api/admin/audit/export"
 }
@@ -390,7 +386,6 @@ pub(super) fn requires_auth(path: &str, method: &http::Method, server: &ServerSt
             | "/usage"
     ) || path.starts_with("/account/tokens")
         || personal_upstream_member_path(path)
-        || path.starts_with("/api/user/oauth/xai/")
         || path.starts_with("/admin/")
         || path == "/api/admin/audit/export"
         || matches!(path, "/users" | "/profiles")
@@ -907,14 +902,6 @@ mod tests {
                 "/api/integrations/v1/profile",
                 crate::identity::RequiredAgentScope::Integrations,
             ),
-            (
-                "/api/user/oauth-credentials",
-                crate::identity::RequiredAgentScope::OAuthCredentialsWrite,
-            ),
-            (
-                "/api/user/oauth-credentials/hint",
-                crate::identity::RequiredAgentScope::OAuthCredentialsWrite,
-            ),
         ] {
             assert!(personal_credential_allowed(path), "{path}");
             assert_eq!(
@@ -992,32 +979,6 @@ mod tests {
             &http::Method::POST,
             &public
         ));
-    }
-
-    #[test]
-    fn xai_oauth_actions_require_browser_authentication() {
-        let public = ServerState {
-            api_key: Some("test-server-key-12345678".to_owned()),
-            dashboard_enabled: true,
-            dashboard_public: true,
-            dashboard_theme: "default".to_owned(),
-            dashboard_refresh_interval_s: 60,
-            configured_server_threads: 1,
-            database_path: ":memory:".to_owned(),
-            trusted_proxy_ips: Vec::new(),
-            allow_insecure_web_auth: false,
-            started_at: Instant::now(),
-        };
-        for path in [
-            "/api/user/oauth/xai/start",
-            "/api/user/oauth/xai/poll",
-            "/api/user/oauth/xai/cancel",
-            "/api/user/oauth/xai/commit",
-            "/api/user/oauth/xai/status",
-        ] {
-            assert!(requires_auth(path, &http::Method::GET, &public), "{path}");
-            assert!(super::requires_browser_session(path), "{path}");
-        }
     }
 
     #[test]

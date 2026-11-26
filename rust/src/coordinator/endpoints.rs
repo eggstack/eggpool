@@ -361,7 +361,6 @@ pub struct InferenceState {
     router: RoutingRouter,
     catalog_service: Option<Arc<CatalogService>>,
     model_policy: Option<crate::model_policy::ModelPolicyService>,
-    oauth: Option<crate::oauth::OAuthAccountManager>,
 }
 
 impl std::fmt::Debug for InferenceState {
@@ -449,23 +448,7 @@ impl InferenceState {
             router,
             catalog_service,
             model_policy,
-            oauth: None,
         }
-    }
-
-    pub(crate) fn with_oauth_account_manager(
-        mut self,
-        manager: crate::oauth::OAuthAccountManager,
-    ) -> Self {
-        self.oauth = Some(manager);
-        self
-    }
-
-    /// Access the immutable generation's owner-scoped OAuth credential service.
-    /// M002/M003 login surfaces must establish the same personal-upstream owner
-    /// binding before committing credentials through this manager.
-    pub fn oauth_account_manager(&self) -> Option<crate::oauth::OAuthAccountManager> {
-        self.oauth.clone()
     }
 
     pub fn registry(&self) -> &ModelRouterRegistry {
@@ -633,7 +616,7 @@ fn map_finite_error(error: super::FiniteCoordinatorError) -> EndpointError {
         }
         Finite::Publication(error) => map_publication_error(error),
         Finite::Claim(_) => EndpointError::Claim,
-        Finite::Attempt(_) | Finite::OAuth(_) => EndpointError::Attempt,
+        Finite::Attempt(_) => EndpointError::Attempt,
         Finite::Finalization(_) => EndpointError::Finalization,
         Finite::Effects(_) => EndpointError::Internal,
     }
@@ -650,7 +633,7 @@ fn map_stream_error(error: super::StreamingCoordinatorError) -> EndpointError {
         }
         Stream::Publication(error) => map_publication_error(error),
         Stream::Claim(_) => EndpointError::Claim,
-        Stream::Attempt(_) | Stream::OAuth(_) => EndpointError::Attempt,
+        Stream::Attempt(_) => EndpointError::Attempt,
         Stream::Finalization(_) => EndpointError::Finalization,
         Stream::Effects(_) => EndpointError::Internal,
     }
@@ -1529,24 +1512,15 @@ pub(crate) async fn build_inference_state_with_shared_and_accounts(
     let personal_bindings = crate::personal_upstream::load_snapshot(database)
         .await
         .map_err(|error| format!("personal upstream snapshot failed: {error}"))?;
-    let oauth = crate::oauth::OAuthAccountManager::new(
-        config,
-        crate::oauth::credential_root_for_config(config_path),
-        client_pool.clone(),
-        personal_bindings.clone(),
-    );
     let shared_catalog = Arc::new(std::sync::Mutex::new(catalog));
-    let catalog_service = Arc::new(
-        CatalogService::with_shared_cache(
-            config.clone(),
-            registry.clone(),
-            database.clone(),
-            client_pool.clone(),
-            credentials.clone(),
-            Arc::clone(&shared_catalog),
-        )
-        .with_oauth_account_manager(oauth.clone(), personal_bindings.clone()),
-    );
+    let catalog_service = Arc::new(CatalogService::with_shared_cache(
+        config.clone(),
+        registry.clone(),
+        database.clone(),
+        client_pool.clone(),
+        credentials.clone(),
+        Arc::clone(&shared_catalog),
+    ));
     // Durable health state is hydrated before the generation is published, so
     // a restart observes the backoffs and quarantines the previous process
     // decided instead of routing as if nothing had happened. Hydration is
@@ -1607,8 +1581,7 @@ pub(crate) async fn build_inference_state_with_shared_and_accounts(
         credentials.clone(),
         supervisor.clone(),
         retry_policy,
-    )
-    .with_oauth_account_manager(oauth.clone());
+    );
     let streaming = StreamingCoordinator::new(
         router.clone(),
         publication,
@@ -1620,8 +1593,7 @@ pub(crate) async fn build_inference_state_with_shared_and_accounts(
         credentials,
         supervisor,
         retry_policy,
-    )
-    .with_oauth_account_manager(oauth.clone());
+    );
     let known_providers: BTreeSet<String> = config.providers.keys().cloned().collect();
     Ok(InferenceState::from_parts_with_model_policy(
         finite,
@@ -1635,8 +1607,7 @@ pub(crate) async fn build_inference_state_with_shared_and_accounts(
         Some(crate::model_policy::ModelPolicyService::new(
             database.clone(),
         )),
-    )
-    .with_oauth_account_manager(oauth))
+    ))
 }
 
 /// Compile all immutable provider wire candidates before allocating the

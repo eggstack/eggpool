@@ -221,14 +221,12 @@ impl RoutingRouter {
                     &identity.provider_id,
                     &identity.account_name,
                     Some(user_id),
-                ) && (!matches!(
-                    identity.auth_mode,
-                    crate::config::AccountAuthMode::OAuth | crate::config::AccountAuthMode::Agent
-                ) || self.state.personal_bindings.is_active_owner(
-                    &identity.provider_id,
-                    &identity.account_name,
-                    user_id,
-                ))
+                ) && (!matches!(identity.auth_mode, crate::config::AccountAuthMode::Agent)
+                    || self.state.personal_bindings.is_active_owner(
+                        &identity.provider_id,
+                        &identity.account_name,
+                        user_id,
+                    ))
             })
             .map(|identity| identity.account_name.clone())
             .collect::<std::collections::BTreeSet<_>>();

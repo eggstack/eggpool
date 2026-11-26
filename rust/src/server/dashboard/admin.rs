@@ -623,16 +623,14 @@ pub(in crate::server) async fn my_account_page(
         .map(|registry| registry.ids().map(str::to_owned).collect::<Vec<_>>())
         .unwrap_or_default();
     let upstream = render_member_upstream(allowed, &upstreams, &providers, &csrf);
-    let xai_oauth = super::super::oauth_login::account_ui(&state, &session, &csrf).await;
     html_response(account_page_for_role(
         &session.role,
         "My account",
         "my-account",
         theme,
         &format!(
-            "<section class=\"panel\"><h1>My account</h1><p>Signed in as {}</p><p><a href=\"/usage\">My usage</a> · <a href=\"/my-account/models\">My accessible models</a> · <a href=\"/account\">Change password</a></p><section><h2>Personal client credentials</h2>{token_flash}<form method=\"post\" action=\"/account/tokens\"><label>Credential label <input name=\"label\" minlength=\"1\" maxlength=\"80\" required></label><input type=\"hidden\" name=\"csrf\" value=\"{}\"><button type=\"submit\">Create credential</button></form><form method=\"post\" action=\"/account/tokens/oauth\"><label>OAuth upload-only credential label <input name=\"label\" minlength=\"1\" maxlength=\"80\" required></label><input type=\"hidden\" name=\"csrf\" value=\"{}\"><button type=\"submit\">Create OAuth upload-only credential</button></form><p>This credential can upload your own OpenAI or xAI OAuth login and cannot call inference.</p><div class=\"table-scroll\" tabindex=\"0\" role=\"region\" aria-label=\"Personal client credentials\">{DASHBOARD_TABLE_OPEN}<thead><tr><th>Label</th><th>Created</th><th>Last used</th><th>Action</th></tr></thead><tbody>{rows}</tbody></table></div></section>{upstream}{xai_oauth}<form method=\"post\" action=\"/logout\"><input type=\"hidden\" name=\"csrf\" value=\"{}\"><button type=\"submit\">Log out</button></form></section>",
+            "<section class=\"panel\"><h1>My account</h1><p>Signed in as {}</p><p><a href=\"/usage\">My usage</a> · <a href=\"/my-account/models\">My accessible models</a> · <a href=\"/account\">Change password</a></p><section><h2>Personal client credentials</h2>{token_flash}<form method=\"post\" action=\"/account/tokens\"><label>Credential label <input name=\"label\" minlength=\"1\" maxlength=\"80\" required></label><input type=\"hidden\" name=\"csrf\" value=\"{}\"><button type=\"submit\">Create credential</button></form><div class=\"table-scroll\" tabindex=\"0\" role=\"region\" aria-label=\"Personal client credentials\">{DASHBOARD_TABLE_OPEN}<thead><tr><th>Label</th><th>Created</th><th>Last used</th><th>Action</th></tr></thead><tbody>{rows}</tbody></table></div></section>{upstream}<form method=\"post\" action=\"/logout\"><input type=\"hidden\" name=\"csrf\" value=\"{}\"><button type=\"submit\">Log out</button></form></section>",
             html_escape(&session.username),
-            html_escape(&csrf),
             html_escape(&csrf),
             html_escape(&csrf)
         ),
@@ -1254,32 +1252,6 @@ pub(in crate::server) async fn create_personal_token(
             &state.server.dashboard_theme,
         ),
         Err(error) => mutation_error(error, "Could not create credential."),
-    }
-}
-
-pub(in crate::server) async fn create_oauth_credentials_token(
-    State(state): State<AppState>,
-    Extension(session): Extension<crate::web_session::Principal>,
-    headers: HeaderMap,
-    Form(form): Form<TokenCreateForm>,
-) -> Response {
-    if !csrf_valid(&state, &session, &headers, &form.csrf) {
-        return (StatusCode::FORBIDDEN, "Invalid request token.").into_response();
-    }
-    match crate::identity::issue_oauth_credentials_token_from_browser(
-        &state.database,
-        &session,
-        &form.label,
-    )
-    .await
-    {
-        Ok(credential) => one_time_token_page(
-            &credential.token,
-            "/my-account",
-            "This credential can only upload your own OpenAI or xAI OAuth login.",
-            &state.server.dashboard_theme,
-        ),
-        Err(error) => mutation_error(error, "Could not create OAuth credential."),
     }
 }
 

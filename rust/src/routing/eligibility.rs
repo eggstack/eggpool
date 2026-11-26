@@ -259,16 +259,15 @@ pub fn build_eligible_candidates(
             &identity.provider_id,
             &identity.account_name,
             principal_user_id,
-        ) || (matches!(
-            identity.auth_mode,
-            crate::config::AccountAuthMode::OAuth | crate::config::AccountAuthMode::Agent
-        ) && !principal_user_id.is_some_and(|user_id| {
-            personal_bindings.is_active_owner(
-                &identity.provider_id,
-                &identity.account_name,
-                user_id,
-            )
-        })) {
+        ) || (matches!(identity.auth_mode, crate::config::AccountAuthMode::Agent)
+            && !principal_user_id.is_some_and(|user_id| {
+                personal_bindings.is_active_owner(
+                    &identity.provider_id,
+                    &identity.account_name,
+                    user_id,
+                )
+            }))
+        {
             exclusions.push(RoutingExclusion {
                 account_name: identity.account_name.clone(),
                 reason_code: "personal_upstream".into(),

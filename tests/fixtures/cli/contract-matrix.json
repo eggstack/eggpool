@@ -1,10 +1,11 @@
 {
   "schema_version": 1,
   "plan": "O001",
-  "command_count": 74,
+  "command_count": 75,
   "commands": [
     {"path": "accounts", "owner": "O007", "options": []},
     {"path": "accounts explain", "owner": "O007", "options": ["--model", "--provider", "--protocol", "--scores", "--gates"]},
+    {"path": "accounts migrate-oauth", "owner": "M004", "options": ["--allow-live-server", "--json", "--yes"]},
     {"path": "accounts list", "owner": "O007", "options": []},
     {"path": "accounts status", "owner": "O007", "options": []},
     {"path": "backup", "owner": "O006", "options": ["--output-dir"]},

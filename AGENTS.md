@@ -24,8 +24,9 @@ providers/transport → `deep-dive-providers.md`; reload/restart →
 ## Layout
 
 - Runtime (authority): `rust/src/` — `main.rs`/`cli.rs`/`lib.rs` entry,
-  `runtime.rs` CLI adapter, `config.rs` + `secret.rs` +
-  `config_reload_policy.rs` typed config and reload classification, `error.rs` exit codes, `version.rs`
+  `runtime.rs` CLI adapter, `config.rs` typed config (legacy OAuth surfaces
+  fail to load) + `secret.rs` + `config_reload_policy.rs` reload classification,
+  `error.rs` exit codes, `version.rs`
   package version, `server/` thin HTTP adapters, `coordinator/` +
   `coordinator/streaming/` (`coordinator.rs`, `execution.rs`, `terminal.rs`,
   `timeout.rs`, `types.rs`, `diagnostics.rs` behind `mod.rs`) request lifecycle,
@@ -33,8 +34,8 @@ providers/transport → `deep-dive-providers.md`; reload/restart →
   `wire/` protocol codecs, `routing/` + `accounts/` +
   `catalog/` + `quota/` + `health/` selection, `model_router.rs` affinity,
   `identity.rs` + `web_session.rs` + `user_budget.rs` + `instance_budget.rs` +
-  `model_policy.rs` + `personal_upstream.rs` + `oauth.rs` (owner-bound provider
-  credential storage/refresh) on-prem user access, `providers/` transport,
+  `model_policy.rs` + `personal_upstream.rs` on-prem user access,
+  `providers/` transport, `provider_profile.rs` provider-profile contract,
   `agents/` per-user provider-agent reverse tunnels,
   `runtime_lifecycle/` generations + `reload.rs` +
   `task_supervisor.rs` + `security_events.rs`, `operations/` local lifecycle, `db/` +

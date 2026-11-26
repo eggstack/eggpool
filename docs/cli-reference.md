@@ -28,7 +28,7 @@ Command list verified against `eggpool help` (0.8.3).
 | `eggpool migrate` | Run database migrations |
 | `eggpool models refresh` | Refresh the model catalog |
 | `eggpool accounts list` | List configured provider accounts |
-| `eggpool accounts oauth-login --provider {openai,xai} --account ACCOUNT [--token-stdin]` | Sign in to the selected account through desktop loopback PKCE; without `--token-stdin`, reads the self-only credential from a hidden TTY prompt |
+| `eggpool accounts migrate-oauth [--yes] [--json] [--allow-live-server]` | Review and explicitly remove legacy provider OAuth config entries and credential files |
 | `eggpool accounts status` | Show account status (provider, priority, weight, enabled) |
 | `eggpool accounts explain` | Show per-account routing eligibility for a model |
 | `eggpool modelinfo show` | Show enriched model metadata |
@@ -37,7 +37,25 @@ Command list verified against `eggpool help` (0.8.3).
 | `eggpool modelinfo aliases` | Show model aliases |
 | `eggpool modelinfo repair` | Repair legacy canonical model-info detail blocks |
 
-`accounts oauth-login` supports only configured OpenAI and xAI OAuth accounts. It binds an ephemeral callback listener to `127.0.0.1` and never opens a public callback. In an interactive terminal it also accepts a pasted callback URL from a browser on another machine, and a standalone authorization code for xAI, a fixed-client-ID provider; both are validated against the same pending transaction before the code is exchanged. The user's OAuth-write credential is issued through the authenticated Web UI and is not accepted in argv or environment variables. A failed, canceled, or timed-out login does not replace the previous credential. Local tests do not verify provider registration, live behavior, or provider terms.
+## Legacy provider OAuth migration
+
+`eggpool accounts migrate-oauth` reports each legacy OAuth account and its
+owner without secret material, together with a recommendation to back up the
+configuration and credential directory first. Use `--yes` to confirm removal; if
+EggPool detects a live server, it refuses unless `--allow-live-server` is
+explicitly provided after coordination. `--json` emits a bounded machine-readable
+summary — the backup recommendation is carried inside that summary, so stdout
+stays exactly one JSON document — and the command also writes
+`.eggpool-oauth-migration.json` beside the config.
+The migration removes only legacy OAuth account/config entries and files in the
+config-adjacent `.eggpool-oauth/` directory. It never converts a grant into an
+Agent credential or changes unrelated files. It is safe to repeat: after a
+successful migration, a subsequent run reports nothing to do.
+
+Legacy `[oauth]` configuration or an account with `auth_mode = "oauth"` fails
+configuration loading with a typed, secret-free error that points to this
+command. A pre-existing `.eggpool-oauth/` directory is reported at startup and
+preserved until the operator explicitly migrates it.
 
 ## Stats & insight
 

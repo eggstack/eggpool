@@ -220,14 +220,9 @@ pub struct FailureEffects {
     pub downstream_started: bool,
 }
 
-/// Make a classified OAuth 401 terminal without changing the classifier's
-/// static-key retry policy or its provider/account health evidence.
-///
-/// The owner-scoped credential-refresh retry is decided by the coordinator,
-/// which reaches this only when the credential could not be refreshed: the
-/// refresh failed, the operator disabled OAuth, or the refreshed credential
-/// was rejected again.
-pub(crate) fn terminalize_oauth_401(effects: &mut FailureEffects) {
+/// Make a classified Agent 401 terminal without changing static-key retry
+/// policy or the provider/account health evidence.
+pub(crate) fn terminalize_agent_401(effects: &mut FailureEffects) {
     effects.retry_scope = RetryScope::None;
     effects.action = NextAction::Complete;
     effects.retry = false;

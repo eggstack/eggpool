@@ -47,6 +47,10 @@ pub enum ConfigError {
     Parse { path: String, detail: String },
     #[error("Configuration validation failed: {detail}")]
     Validation { detail: String },
+    #[error(
+        "legacy {surface} configuration was removed; run `eggpool accounts migrate-oauth` to review and remove OAuth configuration and credential files explicitly"
+    )]
+    LegacyOAuth { surface: &'static str },
     #[error("Cannot read configuration file: {path}: {detail}")]
     Read { path: String, detail: String },
 }
@@ -507,7 +511,6 @@ pub struct ProxyConfig {
 pub enum AccountAuthMode {
     #[default]
     StaticKey,
-    OAuth,
     Agent,
 }
 
@@ -1026,20 +1029,6 @@ impl Default for BackupConfig {
 #[serde(deny_unknown_fields, default)]
 pub struct UpdateCheckerConfig {
     pub enabled: bool,
-}
-
-/// Operator controls for the infrastructure OAuth account service.
-/// OAuth is enabled by default; this setting does not add a login interface.
-#[derive(Debug, Clone, Deserialize, Serialize)]
-#[serde(deny_unknown_fields, default)]
-pub struct OAuthConfig {
-    pub enabled: bool,
-}
-
-impl Default for OAuthConfig {
-    fn default() -> Self {
-        Self { enabled: true }
-    }
 }
 
 /// Process-level gate for agent enrollment and routing. Disabling it retains
@@ -1618,12 +1607,119 @@ pub struct Config {
     pub model_info: ModelInfoConfig,
     pub update_checker: UpdateCheckerConfig,
     pub integrations: IntegrationsConfig,
-    pub oauth: OAuthConfig,
     pub agents: AgentsConfig,
     pub tools: ToolBackendConfig,
 }
 
 pub type AppConfig = Config;
+
+pub(crate) fn is_legacy_oauth_account(account: &toml::Value) -> bool {
+    account.get("auth_mode").and_then(toml::Value::as_str) == Some("oauth")
+}
+
+fn has_legacy_oauth_account(accounts: &toml::Value) -> bool {
+    accounts
+        .as_array()
+        .is_some_and(|accounts| accounts.iter().any(is_legacy_oauth_account))
+}
+
+fn legacy_oauth_surface(value: &toml::Value) -> Option<&'static str> {
+    if value.get("oauth").is_some() {
+        return Some("[oauth]");
+    }
+    if value.get("accounts").is_some_and(has_legacy_oauth_account)
+        || value
+            .get("providers")
+            .and_then(toml::Value::as_table)
+            .is_some_and(|providers| {
+                providers.values().any(|provider| {
+                    provider
+                        .get("accounts")
+                        .is_some_and(has_legacy_oauth_account)
+                })
+            })
+    {
+        return Some("account auth_mode = \"oauth\"");
+    }
+    None
+}
+
+/// Remove every removed-OAuth surface from a parsed configuration value.
+///
+/// Returns the number of OAuth accounts removed. The OAuth table is removed
+/// when present. Detection and removal share the same account predicate so
+/// legacy shapes cannot be recognized by only one path.
+pub(crate) fn strip_legacy_oauth_surfaces(value: &mut toml::Value) -> usize {
+    let Some(table) = value.as_table_mut() else {
+        return 0;
+    };
+    table.remove("oauth");
+    let mut removed = table
+        .get_mut("accounts")
+        .map(strip_legacy_oauth_account_array)
+        .unwrap_or_default();
+    if let Some(providers) = table
+        .get_mut("providers")
+        .and_then(toml::Value::as_table_mut)
+    {
+        for (_, provider) in providers.iter_mut() {
+            if let Some(accounts) = provider.get_mut("accounts") {
+                removed += strip_legacy_oauth_account_array(accounts);
+            }
+        }
+    }
+    removed
+}
+
+fn strip_legacy_oauth_account_array(value: &mut toml::Value) -> usize {
+    let Some(accounts) = value.as_array_mut() else {
+        return 0;
+    };
+    let original = accounts.len();
+    accounts.retain(|account| !is_legacy_oauth_account(account));
+    original - accounts.len()
+}
+
+fn parse_config_toml_value(path: &Path, content: &[u8]) -> Result<toml::Value, ConfigError> {
+    let content = std::str::from_utf8(content).map_err(|error| ConfigError::Parse {
+        path: path.display().to_string(),
+        detail: format!(
+            "content is not valid UTF-8 (valid up to byte {})",
+            error.valid_up_to()
+        ),
+    })?;
+    content
+        .parse()
+        .map_err(|error: toml::de::Error| ConfigError::Parse {
+            path: path.display().to_string(),
+            detail: error.to_string(),
+        })
+}
+
+fn config_from_toml_value(value: toml::Value) -> Result<Config, ConfigError> {
+    let mut config: Config = value.try_into().map_err(|error: toml::de::Error| {
+        ConfigError::validation(format!(
+            "configuration contains an unsupported field, type, or value: {error}"
+        ))
+    })?;
+    config.validate()?;
+    if config.server.port == 0 {
+        return Err(ConfigError::validation(
+            "server.port must be between 1 and 65535 in production configuration",
+        ));
+    }
+    Ok(config)
+}
+
+/// Return the legacy credential directory adjacent to a config file only when
+/// it is a real directory. It is observed but never removed during startup.
+pub fn legacy_oauth_directory(config_path: &Path) -> Option<PathBuf> {
+    let directory = config_path.parent()?.join(".eggpool-oauth");
+    fs::symlink_metadata(&directory)
+        .ok()
+        .filter(|metadata| metadata.file_type().is_dir())
+        .map(|_| directory)
+}
 
 impl Config {
     /// Compile the optional virtual-router registry before publishing a
@@ -1708,40 +1804,46 @@ impl Config {
             path: path.display().to_string(),
             detail: error.kind().to_string(),
         })?;
-        Self::from_toml_bytes(path, content.as_bytes())
+        let config = Self::from_toml_bytes(path, content.as_bytes())?;
+        if legacy_oauth_directory(path).is_some() {
+            eprintln!(
+                "Legacy `.eggpool-oauth/` credential directory detected and preserved; run `eggpool accounts migrate-oauth` to review and remove it explicitly."
+            );
+        }
+        Ok(config)
     }
 
     /// Parse and validate already-read TOML while retaining the canonical
-    /// path in secret-free diagnostics.  Reload callers use this to avoid a
+    /// path in secret-free diagnostics. Reload callers use this to avoid a
     /// second read between digest verification and candidate construction.
     pub fn from_toml_bytes(path: impl AsRef<Path>, content: &[u8]) -> Result<Self, ConfigError> {
         let path = path.as_ref();
-        let content = std::str::from_utf8(content).map_err(|error| ConfigError::Parse {
-            path: path.display().to_string(),
-            detail: format!(
-                "content is not valid UTF-8 (valid up to byte {})",
-                error.valid_up_to()
-            ),
-        })?;
-        let value: toml::Value =
-            content
-                .parse()
-                .map_err(|error: toml::de::Error| ConfigError::Parse {
-                    path: path.display().to_string(),
-                    detail: error.to_string(),
-                })?;
-        let mut config: Self = value.try_into().map_err(|error: toml::de::Error| {
-            ConfigError::validation(format!(
-                "configuration contains an unsupported field, type, or value: {error}"
-            ))
-        })?;
-        config.validate()?;
-        if config.server.port == 0 {
-            return Err(ConfigError::validation(
-                "server.port must be between 1 and 65535 in production configuration",
-            ));
+        let value = parse_config_toml_value(path, content)?;
+        if let Some(surface) = legacy_oauth_surface(&value) {
+            return Err(ConfigError::LegacyOAuth { surface });
         }
-        Ok(config)
+        config_from_toml_value(value)
+    }
+
+    /// Parse an archived configuration, tolerating the removed OAuth surfaces
+    /// a pre-removal archive may legitimately carry.
+    ///
+    /// The live loader rejects those surfaces so EggPool fails closed on a
+    /// legacy installation. A restore is a fidelity operation: the archived
+    /// configuration is restored byte-exact and the operator is told to run
+    /// the migration, so validation parses a view with the legacy surfaces
+    /// removed while every other field is validated normally. Returns the
+    /// legacy surface that was present, if any.
+    pub fn from_toml_bytes_allowing_legacy_oauth(
+        path: impl AsRef<Path>,
+        content: &[u8],
+    ) -> Result<(Self, Option<&'static str>), ConfigError> {
+        let path = path.as_ref();
+        let mut value = parse_config_toml_value(path, content)?;
+        let legacy_surface = legacy_oauth_surface(&value);
+        strip_legacy_oauth_surfaces(&mut value);
+        let config = config_from_toml_value(value)?;
+        Ok((config, legacy_surface))
     }
 
     pub fn validate(&mut self) -> Result<(), ConfigError> {
@@ -1851,7 +1953,6 @@ impl Config {
                 &mut agent_binds,
                 &wire_registry,
             )?;
-            validate_oauth_accounts(provider_id, provider)?;
         }
         validate_model_routers(&self.model_routers)?;
         for override_config in self.model_overrides.values() {
@@ -2135,7 +2236,7 @@ impl Config {
                 continue;
             }
             for account in &provider.accounts {
-                if !account.enabled || account.auth_mode == AccountAuthMode::OAuth {
+                if !account.enabled {
                     continue;
                 }
                 let value = account
@@ -2797,64 +2898,6 @@ fn valid_agent_base_url(value: &str, external_bind: SocketAddr) -> bool {
             .is_none_or(|path| !path.as_str().contains('?'))
 }
 
-fn validate_oauth_accounts(
-    provider_id: &str,
-    provider: &ProviderConfig,
-) -> Result<(), ConfigError> {
-    let expected_origin = match provider_id {
-        "openai" => Some("https://api.openai.com/v1"),
-        "xai" => Some("https://api.x.ai/v1"),
-        _ => None,
-    };
-    for account in provider
-        .accounts
-        .iter()
-        .filter(|account| account.auth_mode == AccountAuthMode::OAuth)
-    {
-        let Some(expected_origin) = expected_origin else {
-            return Err(ConfigError::validation(
-                "OAuth accounts are supported only for the reviewed OpenAI and xAI providers",
-            ));
-        };
-        if provider.base_url != expected_origin {
-            return Err(ConfigError::validation(
-                "OAuth account provider base_url must match its reviewed canonical origin",
-            ));
-        }
-        if account.api_key.is_some() || !account.api_key_env.is_empty() {
-            return Err(ConfigError::validation(
-                "OAuth accounts must not configure a static API key or key environment variable",
-            ));
-        }
-        let bearer_auth = |auth: &ProviderAuthConfig| {
-            auth.mode == "bearer"
-                && auth.header.eq_ignore_ascii_case("Authorization")
-                && auth.scheme.eq_ignore_ascii_case("Bearer")
-                && auth.additional.is_empty()
-        };
-        if !bearer_auth(&provider.auth)
-            || provider
-                .wire_surfaces
-                .values()
-                .any(|surface| surface.auth.as_ref().is_some_and(|auth| !bearer_auth(auth)))
-        {
-            return Err(ConfigError::validation(
-                "OAuth accounts require a single Bearer Authorization header",
-            ));
-        }
-        if provider
-            .protocols
-            .iter()
-            .any(|protocol| protocol != "openai")
-        {
-            return Err(ConfigError::validation(
-                "OAuth accounts may use only OpenAI-compatible provider protocols",
-            ));
-        }
-    }
-    Ok(())
-}
-
 fn validate_model_limits(
     context: Option<u64>,
     input: Option<u64>,
@@ -3168,6 +3211,24 @@ mod tests {
             crate::config_reload_policy::semantic_digest(&loaded)
                 .expect("round-trip semantic digest")
         );
+    }
+
+    #[test]
+    fn archived_config_parser_tolerates_legacy_oauth_while_live_loader_fails_closed() {
+        let archived = r#"[server]
+host = "127.0.0.1"
+port = 11300
+[oauth]
+enabled = true
+"#;
+        let (_, surface) =
+            Config::from_toml_bytes_allowing_legacy_oauth("archived.toml", archived.as_bytes())
+                .expect("archived config validates after removing its legacy view");
+        assert_eq!(surface, Some("[oauth]"));
+        assert!(matches!(
+            Config::from_toml_bytes("live.toml", archived.as_bytes()),
+            Err(ConfigError::LegacyOAuth { surface }) if surface == "[oauth]"
+        ));
     }
 
     #[test]

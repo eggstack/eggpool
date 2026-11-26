@@ -451,15 +451,22 @@ forward the browser locally with `ssh -L 11300:127.0.0.1:11300 operator@host`
 and open `http://127.0.0.1:11300/login`; remote teams should use the trusted
 HTTPS proxy path above.
 
-### Desktop OAuth loopback callback
+### Legacy provider OAuth data
 
-OpenAI authorization-code/PKCE is completed by the desktop CLI through a
-short-lived callback listener bound to `127.0.0.1`. The browser must run on
-the same machine as the CLI; the provider callback does not reach EggPool's
-listener. xAI remains available through the authenticated Web UI device-code
-flow as well as the desktop CLI flow. There is no server-side OpenAI callback
-origin setting to configure or register. Do not expose a loopback callback to
-a remote browser.
+EggPool no longer accepts server-held provider OAuth configuration: a legacy
+`[oauth]` section or account with `auth_mode = "oauth"` fails configuration
+loading with a typed, secret-free error naming the removed surface and
+`eggpool accounts migrate-oauth`. An existing config-adjacent
+`.eggpool-oauth/` directory is reported in a bounded startup diagnostic and
+preserved; startup does not delete it.
+
+Use `eggpool accounts migrate-oauth` to review account owners without secrets
+and explicitly remove only legacy OAuth config entries and files in that
+directory. It requires `--yes`, refuses a detected live server unless
+`--allow-live-server` is explicitly opted into after coordination, emits a
+bounded summary with `--json` and writes `.eggpool-oauth-migration.json` beside
+the config. It is idempotent and never converts OAuth grants into Agent
+credentials.
 
 Optional background features that remain explicit: set `[backup].enabled = true`
 for in-process archives or `[update_checker].enabled = true` for the periodic

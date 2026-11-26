@@ -13,18 +13,15 @@ history.
 
 ## Ownership boundary
 
-The subsystem is five flat runtime modules plus two HTTP adapter surfaces.
-EggPool does not execute tools. Client-executed tool calls stay in the
-wire codecs, and the content-free gateway audit export is a read of the
+This subsystem spans the on-prem runtime modules and their HTTP adapter
+surfaces. EggPool does not execute tools. Client-executed tool calls stay in
+the wire codecs, and the content-free gateway audit export is a read of the
 existing administration and request tables.
 
 | Path | Owns |
 |---|---|
 | `rust/src/identity.rs` | Local user records, password hashes, personal API credentials, the administrative audit trail, request attribution, and the content-free gateway audit export |
-| `rust/src/oauth.rs` | Owner-bound upstream OAuth credential files and proactive token resolution |
-| `rust/src/server/oauth_login.rs` | Authenticated, session-bound Web UI device-code and PKCE transactions on the existing listener |
-| `rust/src/server/oauth_credentials.rs` | Dedicated OAuth-write scope, verified-principal ownership, and atomic credential upload |
-| `rust/src/operations/oauth_login.rs` | Desktop PKCE, ephemeral loopback callback, and upload with the user's self-only OAuth-write credential |
+| `rust/src/operations/account_migration.rs` | Explicit, secret-free migration report and removal of legacy provider OAuth configuration and files |
 | `rust/src/web_session.rs` | Opaque browser sessions, the CSRF digest, and bounded local login throttling |
 | `rust/src/security_events.rs` | Closed-vocabulary authentication/authorization events, bounded aggregation, retention, and the non-blocking sink |
 | `rust/src/runtime_lifecycle/process.rs` + `rust/src/task_supervisor.rs` | Process-owned event sink/writer wiring, supervised draining, and bounded shutdown flush |
@@ -52,11 +49,11 @@ The boundary is deliberately narrow:
 - `rust/src/operations/` and `rust/src/runtime.rs` own the local CLI surface
   (`eggpool users …`), which renders and dispatches only.
 
-There is no provider-secret web editor, no public signup, no organization or
-tenant identifier, and no external IAM. Static-key provider credentials remain
-operator-owned and are never exposed to downstream users. OAuth credentials are
-strictly bound to one managed user/provider/account and are not shared with
-other users.
+There is no provider-secret web editor, public signup, organization or tenant
+identifier, or external IAM. Static-key provider credentials remain
+operator-owned and are never exposed to downstream users. Per-user Agent
+accounts remain supported through the reverse TLS tunnel; the Agent retains its
+provider credentials. EggPool's direct provider OAuth custody is retired.
 
 ## Identity and credential model
 
@@ -81,27 +78,24 @@ are 1–80 bytes, and the default scope set is
 `inference,discovery,integrations`. The plaintext token is shown exactly
 once at issue time and is never recoverable afterwards.
 
-### Upstream provider OAuth credentials (M001)
+### Retiring legacy provider OAuth custody
 
-OAuth provider credentials are separate from local EggPool API credentials.
-`rust/src/oauth.rs` stores the complete access/refresh/ID-token set outside
-SQLite in the config-adjacent `.eggpool-oauth/` directory. Every file is bound
-to one managed user, provider, and configured account; the filename hash and
-embedded identity must agree. Files and directory are owner-only (0600/0700).
-The service coordinates expiry-aware refresh across processes with an OS lock,
-atomically commits rotated credentials before returning an access token, and
-returns a redacted `SecretString`. It resolves the selected owner's token
-before owned upstream attempt preparation; it does not add a shared credential
-or account fallback.
+EggPool no longer stores server-held provider OAuth credentials. Provider
+account auth modes are `StaticKey` and `Agent`; legacy `[oauth]` configuration
+or an account with `auth_mode = "oauth"` fails to load with a typed,
+secret-free error naming the removed surface and `eggpool accounts
+migrate-oauth`.
 
-The operator `[oauth].enabled` gate defaults on. Disabling it blocks OAuth
-login, routing, and refresh but retains files; re-enabling only makes the bound
-owner's stored set eligible again. M001 owns custody and refresh. M002 owns the
-authenticated Web UI flows (xAI device-code and OpenAI PKCE on the existing
-listener); M003 owns desktop PKCE through a loopback-only callback and the
-self-only `oauth_credentials_write` upload route. No token enters the identity
-database, audit projection, or provider profiles. Pending login state is
-memory-only and is never backed up.
+A config-adjacent legacy `.eggpool-oauth/` directory is reported at startup in
+a bounded diagnostic and preserved. `eggpool accounts migrate-oauth` reports
+every legacy OAuth account and owner without secret material. Applying changes
+requires `--yes`; a detected live server blocks migration unless the operator
+explicitly opts in with `--allow-live-server` after coordination. `--json`
+emits a bounded machine-readable summary, also written as
+`.eggpool-oauth-migration.json` beside the config. The operation is idempotent
+and removes only legacy OAuth configuration entries and files in that
+directory. It does not touch unrelated files or convert a legacy OAuth grant
+into an Agent credential.
 
 The access-state singleton in `user_access_state` has exactly four states:
 

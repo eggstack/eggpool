@@ -26,7 +26,7 @@
       "path": "config/config.example.toml",
       "category": "configuration-template",
       "source": "rust/config.example.toml",
-      "sha256": "e449961e2e4eb5d743e8e072347d5472c8759da9dde36bce4266b8ab3830d408",
+      "sha256": "c7a458e2c01f1586053c3f982e08d63defc892f362b32d3427696718ebe86418",
       "identity": "exact"
     },
     {
