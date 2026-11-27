@@ -412,9 +412,17 @@ fn unix_now() -> i64 {
 }
 
 fn saturating_increment(counter: &AtomicU64, amount: u64) {
-    let _ = counter.fetch_update(Ordering::Relaxed, Ordering::Relaxed, |value| {
-        Some(value.saturating_add(amount))
-    });
+    // A compare-exchange loop keeps this call site valid on every supported
+    // toolchain: fetch_update is deprecated on recent Rust releases and
+    // try_update does not exist on the 1.89 release toolchain.
+    let mut current = counter.load(Ordering::Relaxed);
+    loop {
+        let next = current.saturating_add(amount);
+        match counter.compare_exchange_weak(current, next, Ordering::Relaxed, Ordering::Relaxed) {
+            Ok(_) => return,
+            Err(observed) => current = observed,
+        }
+    }
 }
 
 #[cfg(test)]
