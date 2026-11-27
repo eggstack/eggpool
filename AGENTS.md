@@ -151,7 +151,7 @@ dir, then `serve` (it daemonizes), curl, `stop`.
   first-party evidence plus a runtime guarantee both exist.
 - `deny.toml` + `cargo deny` is the license/advisory/source policy; `Cargo.toml`/`Cargo.lock`
   changes also need the locked release build + serial suite above.
-- Provider transport is exact-pinned to `eggfetch-core =0.2.2` with
+- Provider transport is exact-pinned to `eggfetch-core =0.4.0` with
   `native-http1,tls-rustls` (not the `http1` alias or `standard-http1`),
   excluding high-level URL/retry/redirect/Basic-auth, built-in proxy, and
   HTTP/2/3. EggPool maps Eggfetch's typed `TransportFailureKind` after its

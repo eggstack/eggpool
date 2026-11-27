@@ -89,7 +89,7 @@ resolved graph is the native dependency authority. Exact pins
 (`rust/Cargo.toml:58-74`):
 `eggserve-server =0.4.0` (`tower` feature), the Eggress `1.0.11` family
 (normal path via `eggress-outbound` directly), and
-`eggfetch-core =0.2.2` (`native-http1`, `tls-rustls`). Direct
+`eggfetch-core =0.4.0` (`native-http1`, `tls-rustls`). Direct
 `hyper`/`hyper-util`/`hyper-rustls` (`rust/Cargo.toml:81-92`) serve only the
 separate `operations/update.rs` HTTPS client
 (`rust/src/operations/update.rs:22-27`); `rust/src/server/mod.rs:55` imports

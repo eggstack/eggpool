@@ -6,7 +6,7 @@
 //!
 //! Direct and proxied provider requests share Eggfetch's HTTP/1.1, origin TLS,
 //! pooling, physical admission, and transport-I/O machinery through
-//! `eggfetch-core` 0.2.2 native `Client::execute_http_body`. Proxied routes
+//! `eggfetch-core` 0.4.0 native `Client::execute_http_body`. Proxied routes
 //! supply the physical byte stream through a thin `EggressDialer` adapter that
 //! implements Eggfetch's general custom `Dialer` interface over the
 //! listener-free `eggress-outbound` 1.0.12 `OutboundConnector` route API.

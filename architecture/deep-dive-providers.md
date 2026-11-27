@@ -146,7 +146,7 @@ request, and successful client reuse rather than an incidental handshake count.
 
 ## Native dependency boundaries
 
-Direct provider transport uses exact-pinned `eggfetch-core =0.2.2` with
+Direct provider transport uses exact-pinned `eggfetch-core =0.4.0` with
 `native-http1` + `tls-rustls` through the native
 `Client::execute_http_body` API. `native-http1` expands to
 `transport-http1`, `standard-route`, and `advanced-routing`: it supplies the
@@ -166,25 +166,35 @@ after its more-specific physical-admission, timeout, request/target, proxy,
 and custom Eggress dialer mappings; `DialErrorKind::Connection` remains
 `ProxyConnect`.
 
-Do not replace `native-http1` with Eggfetch's `http1` compatibility alias:
-that alias also enables `high-level-url`, logical retry, redirects, and
-Basic-auth policy. `standard-http1` is also wrong because it omits
-`advanced-routing`, which proxied accounts need for Eggpool's custom Eggress
+Eggfetch 0.4.0 narrows its own `proxy` feature to `native-http1`; EggPool
+still explicitly selects only `native-http1` and `tls-rustls`. Do not
+replace `native-http1` with Eggfetch's `http1` compatibility alias: that
+alias still enables `high-level-url`, logical retry, redirects, and Basic-auth
+policy. `standard-http1` is also wrong because it omits
+`advanced-routing`, which proxied accounts need for EggPool's custom Eggress
 `Dialer`. The provider profile leaves built-in proxy, HTTP/2/3, compression,
-native roots, JSON, cookies, and multipart features disabled. Eggpool does not
-configure Eggfetch `Timeout.total`; connect and established read/write
-inactivity remain the separate Eggpool-owned timeout layers described below.
+native roots, JSON, cookies, and multipart features disabled. EggPool does
+not configure Eggfetch `Timeout.total`; connect and established read/write
+inactivity remain the separate EggPool-owned timeout layers described below.
 
-Eggfetch 0.2.2 derives native origin facts directly from Eggpool's parsed
-`http::Uri`; the provider path does not serialize through `url::Url` or add
-IDNA conversion. `join_provider_target()` remains the boundary that validates
-the configured authority and rejects unsafe absolute or authority-form
-relative targets before dispatch. The updater's bounded Hyper/Rustls client
-in `operations/update.rs` remains a separate owner and is not being migrated
-to Eggfetch by this adoption. Downstream HTTP/1 is the separate exact-pinned
-`eggserve-server =0.4.0` with `tower` owner; direct `hyper`/`hyper-util`/
-`hyper-rustls`/`rustls`/`webpki-roots` dependencies remain only for that
-updater owner plus the `test-support` route-TLS seam.
+`eggpass-auth 0.1.1` now depends on the same Eggfetch 0.4.0 pair
+(`native-http1`, `tls-rustls`), so adopting that OAuth library would unify
+with EggPool's transport version without widening Eggfetch's feature profile.
+This solves the dependency/transport obstacle, not the separate account
+credential lifecycle and subscription-seat policy questions.
+
+Eggfetch 0.4.0 exposes URL-free `Client::get_uri`, `Client::post_uri`, and
+`Client::request_uri` builders in every profile. EggPool continues to use
+`Client::execute_http_body`; its provider path builds parsed `http::Uri`
+targets and does not serialize through `url::Url` or add IDNA conversion.
+`join_provider_target()` remains the boundary that validates the configured
+authority and rejects unsafe absolute or authority-form relative targets
+before dispatch. The updater's bounded Hyper/Rustls client in
+`operations/update.rs` remains a separate owner and is not being migrated to
+Eggfetch. Downstream HTTP/1 is the separate exact-pinned
+`eggserve-server =0.4.0` with `tower` owner; direct
+`hyper`/`hyper-util`/`hyper-rustls`/`rustls`/`webpki-roots` dependencies
+remain only for that updater owner plus the `test-support` route-TLS seam.
 
 Direct and proxied provider routes share one Eggfetch HTTP/1.1 engine with
 the same physical admission, idle-pool, connect/I/O timeout, and WebPKI plus

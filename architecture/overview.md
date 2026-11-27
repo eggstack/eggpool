@@ -297,7 +297,7 @@ direct Eggfetch client). The root `ssh` capability forwards to
 (pproxy-style SSH needs both);
 `--no-default-features` keeps direct/non-SSH proxy paths and rejects SSH proxy
 config as `TransportError::ProxyConfiguration` before dialing. Provider
-underlying HTTP is Eggfetch (`eggfetch-core` 0.2.2 with
+underlying HTTP is Eggfetch (`eggfetch-core` 0.4.0 with
 `native-http1` + `tls-rustls`: HTTP/1.1, `ring`, TLS 1.2,
 WebPKI roots, bounded pooling, standard and advanced routing; direct
 Hyper/Hyper-util/Hyper-Rustls dependencies remain only for the separate
@@ -560,7 +560,7 @@ routes; see [On-prem user access](deep-dive-on-prem-user-access.md).
 ### 15. Native dependencies and feature gates
 
 `rust/Cargo.toml` authority: Tokio, Hyper/Hyper-util/Hyper-Rustls/Rustls,
-Eggfetch (`eggfetch-core` 0.2.2 `native-http1` + `tls-rustls`, provider
+Eggfetch (`eggfetch-core` 0.4.0 `native-http1` + `tls-rustls`, provider
 transport),
 Axum/Tower, Clap, Serde/TOML/JSON, SHA-2, `tokio-rusqlite` (bundled/backup),
 Nix, Zip, Tracing, Eggress 1.0.11 (optional SSH capability), plus the path
