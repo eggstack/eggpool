@@ -24,6 +24,16 @@ ignore = [
     # change and no later than 2026-12-31; remove this exception when a safe
     # upgrade or supported Eggress release is available.
     { id = "RUSTSEC-2023-0071", reason = "No safe rsa upgrade is available; the affected rsa 0.10.0-rc.18 is transitive through the pinned Eggress 1.0.12 SSH transport. Re-review on any Eggress/russh/ssh-key change and by 2026-12-31." },
+    # Two russh advisories affect the 0.62.7 line that the pinned Eggress
+    # 1.0.12 SSH transport resolves: RUSTSEC-2026-0492 (client Handler
+    # callbacks for channels the client never opened, fixed in 0.63.1) and
+    # RUSTSEC-2026-0495 (SSH-agent "confirm" keys used without confirmation,
+    # fixed in 0.65.0). Eggress 1.0.12 is still the newest published release
+    # and resolves russh 0.62, so no supported upgrade exists. Re-review on any
+    # Eggress/russh/ssh-key change and no later than 2026-12-31; remove these
+    # when Eggress ships a russh line that clears both advisories.
+    { id = "RUSTSEC-2026-0492", reason = "Fixed in russh 0.63.1, but the pinned Eggress 1.0.12 SSH transport resolves russh 0.62.7 and no newer Eggress is published. Re-review on any Eggress/russh/ssh-key change and by 2026-12-31." },
+    { id = "RUSTSEC-2026-0495", reason = "Fixed in russh 0.65.0, but the pinned Eggress 1.0.12 SSH transport resolves russh 0.62.7 and no newer Eggress is published. Re-review on any Eggress/russh/ssh-key change and by 2026-12-31." },
 ]
 
 [licenses]
